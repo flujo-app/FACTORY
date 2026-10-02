@@ -51,7 +51,7 @@ def active_profile():
 
 def verify_input(payload):
     operation = payload.get("operation")
-    if operation not in MUTATIONS | {"prepare", "inspect", "meter"}:
+    if operation not in MUTATIONS | {"prepare", "inspect", "meter", "reconcile-stop-app"}:
         raise ValueError("Unknown operation.")
     if payload.get("environment") != "main":
         raise ValueError("Only the selected main Environment is admitted.")
@@ -101,12 +101,12 @@ def checkpoint(payload, changes=None):
     return value
 
 
-def cli(payload, arguments):
+def cli(payload, arguments, *, timeout_seconds=120):
     child_environment = os.environ.copy()
     child_environment["PYTHONUTF8"] = "1"
     child_environment["PYTHONIOENCODING"] = "utf-8"
     result = subprocess.run([sys.executable, "-m", "modal", *arguments, "--env", payload["environment"], "--profile", payload["profile"]],
-                            env=child_environment, capture_output=True, text=True, encoding="utf-8", timeout=120, check=False)
+                            env=child_environment, capture_output=True, text=True, encoding="utf-8", timeout=timeout_seconds, check=False)
     # Output can contain other account resources; it stays in private artifacts.
     stem = Path(payload["runDirectory"]) / f"cli-{payload['operation']}-{uuid.uuid4().hex}"
     stem.with_suffix(".stdout.private.txt").write_text(result.stdout, encoding="utf-8")
@@ -116,8 +116,8 @@ def cli(payload, arguments):
     return result.stdout
 
 
-def app_inventory(payload):
-    rows = json.loads(cli(payload, ["app", "list", "--json"]))
+def app_inventory(payload, *, timeout_seconds=120):
+    rows = json.loads(cli(payload, ["app", "list", "--json"], timeout_seconds=timeout_seconds))
     resources = checkpoint(payload)
     matched = [item for item in rows if item.get("app_id") == resources.get("appId")
                or item.get("App ID") == resources.get("appId")]
@@ -152,6 +152,46 @@ def app_inventory(payload):
         raise ValueError("Recorded App inventory has invalid container evidence.")
     return {"appId": app_id, "state": state, "runningContainers": count,
             "observedAt": int(time.time() * 1000)}
+
+
+def wait_for_stopped_app(payload, *, timeout_seconds=45, poll_seconds=1):
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("Recorded App terminal state is not confirmed.")
+        observed = app_inventory(payload, timeout_seconds=remaining)
+        if observed.get("state") == "stopped" and observed.get("runningContainers") == 0:
+            return observed
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("Recorded App terminal state is not confirmed.")
+        time.sleep(min(poll_seconds, remaining))
+
+
+def require_stop_reconciliation(payload, resources):
+    if payload.get("originalKey") != "stop-app" or not re.fullmatch(r"[a-f0-9]{64}", payload.get("originalRequestDigest", "")):
+        raise ValueError("Only the original owned stop intent can be inspected for reconciliation.")
+    filename = Path(payload["runDirectory"]) / "modal.sqlite"
+    connection = sqlite3.connect(f"file:{filename.as_posix()}?mode=ro", uri=True)
+    try:
+        row = connection.execute("SELECT operation,request_digest,request_json,state,result_json FROM modal_operations WHERE key=?", (payload["originalKey"],)).fetchone()
+    finally:
+        connection.close()
+    if not row or row[0] != "stop-app" or row[1] != payload["originalRequestDigest"]:
+        raise ValueError("Original stop intent identity differs from reconciliation.")
+    original = json.loads(row[2])
+    encoded = json.dumps(original, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    if hashlib.sha256(encoded).hexdigest() != row[1] or original.get("operation") != "stop-app":
+        raise ValueError("Original stop request digest is not confirmed.")
+    for key in ("runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory"):
+        if original.get(key) != payload.get(key):
+            raise ValueError("Original stop ownership differs from reconciliation.")
+    previous = json.loads(row[4]) if row[4] else {}
+    if row[3] != "unknown" and not (row[3] == "succeeded" and previous.get("reconciled") is True and previous.get("appId") == resources.get("appId")):
+        raise ValueError("Only an unknown original stop or its confirmed checkpoint repair is admitted.")
+    if not resources.get("appDeployed") or not resources.get("appId") or payload.get("recordedAppId") != resources["appId"] or payload.get("recordedVolumeId") != resources.get("volumeId"):
+        raise ValueError("Recorded resource identity differs from reconciliation.")
 
 
 def operate(payload):
@@ -235,6 +275,14 @@ def operate(payload):
         return {"state": "proxy-token-created", "tokenStoredPrivately": True}
     if operation == "inspect":
         return app_inventory(payload)
+    if operation == "reconcile-stop-app":
+        require_stop_reconciliation(payload, resources)
+        observed = app_inventory(payload, timeout_seconds=30)
+        if observed.get("appId") != resources["appId"] or observed.get("state") != "stopped" or observed.get("runningContainers") != 0:
+            raise ValueError("A fresh exact owned App terminal observation is required.")
+        return {**observed, "originalKey": payload["originalKey"], "originalRequestDigest": payload["originalRequestDigest"],
+                **{key: payload[key] for key in ("runId", "appName", "volumeName", "environment", "profile", "workspaceName")},
+                "volumeId": resources.get("volumeId")}
     if operation == "stop-app":
         if not resources.get("appDeployed") or not resources.get("appId"):
             raise ValueError("No recorded owned App is available for retirement.")
@@ -249,7 +297,7 @@ def operate(payload):
             checkpoint(payload, {"appStopped": True})
             return {"state": "stopped", "appId": resources["appId"], "alreadyStopped": True}
         cli(payload, ["app", "stop", resources["appId"], "--yes"])
-        observed = app_inventory(payload)
+        observed = wait_for_stopped_app(payload)
         if observed["state"] != "stopped" or observed.get("appId") != resources["appId"] or observed.get("runningContainers") != 0:
             raise ValueError("Recorded App terminal state is not confirmed.")
         checkpoint(payload, {"appStopped": True})

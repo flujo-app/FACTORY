@@ -20,12 +20,12 @@ function fixture(t) {
   });
   return { ledger, path, dir, advance() { now++; }, reopen() { const reopened = new SpendingLedger(path, { clock: () => now }); connections.push(reopened); return reopened; } };
 }
-function synchronizedChild(path, input) {
+function synchronizedChild(path, input, operation = 'reserve') {
   const moduleUrl = new URL('../src/spending.mjs', import.meta.url).href;
   const code = `import {SpendingLedger} from ${JSON.stringify(moduleUrl)};
     const ledger=new SpendingLedger(${JSON.stringify(path)});
     process.send({ready:true});
-    process.once('message',()=>{try{process.send({result:ledger.reserve(${JSON.stringify(input)})});}
+    process.once('message',()=>{try{process.send({result:ledger[${JSON.stringify(operation)}](${JSON.stringify(input)})});}
       catch(error){process.send({result:{code:error.code}});}finally{ledger.close();process.disconnect();}});`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', code], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   let stderr = '', answer;
@@ -194,4 +194,89 @@ test('schema refuses another controller database; policy initialization and star
   const foreignPath = join(dir, 'control.sqlite'), database = new DatabaseSync(foreignPath);
   database.exec('CREATE TABLE control(id INTEGER PRIMARY KEY); PRAGMA user_version=1;'); database.close();
   assert.throws(() => new SpendingLedger(foreignPath), error => error.code === 'SCHEMA');
+});
+
+test('durable pause fences fresh and replayed admissions across connections and preserves existing O markers', t => {
+  const { ledger, reopen } = fixture(t), other = reopen();
+  const pending = { reservationId: 'pending', provider: 'fly', ceilingCents: 1000 };
+  const active = { reservationId: 'active', provider: 'modal', ceilingCents: 3000 };
+  ledger.reserve(pending); ledger.reserve(active); ledger.start('active');
+  other.transaction(() => other.event('admission_paused', null, { source: 'existing-O-marker' }));
+  const markers = other.db.prepare("SELECT * FROM spending_events WHERE type LIKE 'admission_%' ORDER BY seq").all();
+  assert.deepEqual(ledger.pauseAdmission(), { admissionPaused: true });
+  assert.deepEqual(other.db.prepare("SELECT * FROM spending_events WHERE type LIKE 'admission_%' ORDER BY seq").all(), markers);
+  const before = JSON.stringify(ledger.rows()), count = ledger.db.prepare('SELECT count(*) n FROM spending_events').get().n;
+  for (const connection of [ledger, other, reopen()]) {
+    for (const admission of [
+      () => connection.reserve({ reservationId: 'fresh', provider: 'fly', ceilingCents: 100 }),
+      () => connection.reserve(pending), () => connection.reserve(active),
+      () => connection.start('pending'), () => connection.start('active'),
+    ]) assert.throws(admission, error => error.code === 'PAUSED' && error.message === 'Paid admission is paused.');
+  }
+  assert.equal(JSON.stringify(ledger.rows()), before);
+  assert.equal(ledger.db.prepare('SELECT count(*) n FROM spending_events').get().n, count);
+  assert.deepEqual(other.resumeAdmission(), { admissionPaused: false });
+  const afterResume = other.db.prepare('SELECT count(*) n FROM spending_events').get().n;
+  assert.deepEqual(ledger.resumeAdmission(), { admissionPaused: false });
+  assert.equal(other.db.prepare('SELECT count(*) n FROM spending_events').get().n, afterResume);
+  assert.equal(ledger.start('pending').state, 'started');
+  assert.equal(ledger.start('active').state, 'started');
+  assert.equal(ledger.status().limitCents, 10000);
+  assert.equal(ledger.status().committedCents, 4000);
+  ledger.pauseAdmission(); other.event('unrelated-observation', null, {});
+  assert.throws(() => other.start('active'), error => error.code === 'PAUSED');
+});
+
+test('paused accounting and cleanup retain billing holds; resume never replenishes caps or revives terminal reservations', t => {
+  const { ledger, reopen, advance } = fixture(t), other = reopen();
+  ledger.reserve({ reservationId: 'exhausted', provider: 'modal', ceilingCents: 3000 }); ledger.start('exhausted');
+  ledger.observe('exhausted', { chargedCents: 3000, observedAt: 1000, evidenceDigest: PROOF });
+  ledger.reserve({ reservationId: 'cleanup', provider: 'fly', ceilingCents: 1000 }); ledger.start('cleanup');
+  ledger.reserve({ reservationId: 'never-started', provider: 'fly', ceilingCents: 500 });
+  const originalPolicy = ledger.policy(); other.pauseAdmission(); advance();
+  ledger.observe('cleanup', { chargedCents: 250, observedAt: 1001, evidenceDigest: PROOF });
+  ledger.retire('cleanup', { evidenceDigest: PROOF });
+  assert.equal(ledger.status().committedCents, 4500);
+  assert.equal(ledger.status().meteredSpendCents, null);
+  ledger.settle('cleanup', { finalCents: 300, evidenceDigest: FINAL_PROOF });
+  ledger.cancel('never-started');
+  assert.equal(ledger.status().committedCents, 3300);
+  assert.throws(() => ledger.start('exhausted'), error => error.code === 'PAUSED');
+  other.resumeAdmission();
+  assert.throws(() => ledger.start('exhausted'), error => error.code === 'BUDGET');
+  assert.throws(() => ledger.start('cleanup'), error => error.code === 'STATE');
+  assert.throws(() => ledger.start('never-started'), error => error.code === 'STATE');
+  assert.throws(() => ledger.reserve({ reservationId: 'too-much', provider: 'fly', ceilingCents: 6701 }), error => error.code === 'BUDGET');
+  ledger.reserve({ reservationId: 'remaining', provider: 'fly', ceilingCents: 6700 }); ledger.start('remaining');
+  assert.equal(ledger.status().committedCents, 10000);
+  assert.deepEqual(ledger.policy(), originalPolicy);
+});
+
+test('concurrent process pause and resume transitions append one compatible marker each without resetting shared policy', async t => {
+  const { ledger, path } = fixture(t);
+  ledger.reserve({ reservationId: 'unchanged', provider: 'fly', ceilingCents: 1000 });
+  const before = ledger.status();
+  for (const [operation, type, admissionPaused] of [
+    ['pauseAdmission', 'admission_paused', true], ['resumeAdmission', 'admission_resumed', false],
+  ]) {
+    const children = [synchronizedChild(path, undefined, operation), synchronizedChild(path, undefined, operation)];
+    await Promise.all(children.map(child => child.ready)); children.forEach(child => child.run());
+    assert.deepEqual(await Promise.all(children.map(child => child.result)), [{ admissionPaused }, { admissionPaused }]);
+    assert.equal(ledger.db.prepare('SELECT count(*) n FROM spending_events WHERE type=?').get(type).n, 1);
+    assert.deepEqual(ledger.status(), before);
+  }
+});
+
+test('an admission pause can protect an uninitialized ledger and survives later fixed-policy initialization', t => {
+  const { dir } = fixture(t), ledger = new SpendingLedger(join(dir, 'not-initialized.sqlite'));
+  try {
+    assert.deepEqual(ledger.pauseAdmission(), { admissionPaused: true });
+    assert.equal(ledger.db.prepare('SELECT count(*) n FROM spending_policy').get().n, 0);
+    assert.equal(ledger.db.prepare('SELECT count(*) n FROM spending_reservations').get().n, 0);
+    ledger.initialize({ limitCents: 999, currency: 'USD' });
+    assert.throws(() => ledger.reserve({ reservationId: 'paid', provider: 'fly', ceilingCents: 1000 }), error => error.code === 'PAUSED');
+    ledger.resumeAdmission();
+    assert.throws(() => ledger.reserve({ reservationId: 'paid', provider: 'fly', ceilingCents: 1000 }), error => error.code === 'BUDGET');
+    assert.equal(ledger.status().limitCents, 999);
+  } finally { ledger.close(); }
 });

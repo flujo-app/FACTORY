@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { ModalJournal, prepareModalPilot, runModalPilot } from '../scripts/modal-pilot.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
 
@@ -23,7 +23,8 @@ async function fixture(t, settings = {}) {
   const driver = async payload => {
     calls.push(payload.operation);
     if (payload.operation === 'prepare') return { state: 'prepared', profile: 'fake-profile', workspaceName: 'factory-account', environment: 'main', credentialsAccepted: true, appAbsent: true, volumeAbsent: true };
-    if (payload.operation === settings.sdkFailure) throw new Error('private raw token diagnostic');
+    if (payload.operation === settings.sdkFailure || settings.sdkFailures?.includes(payload.operation)) throw new Error('private raw token diagnostic');
+    resourceState = { ...resourceState, ...await readFile(path.join(runDirectory, 'resources.private.json'), 'utf8').then(JSON.parse).catch(() => ({})) };
     resourceState = { ...resourceState, runId: payload.runId, appName: payload.appName, volumeName: payload.volumeName,
       environment: payload.environment, profile: payload.profile, workspaceName: payload.workspaceName };
     switch (payload.operation) {
@@ -35,6 +36,9 @@ async function fixture(t, settings = {}) {
         await writeFile(path.join(runDirectory, 'proxy-token.private.json'), JSON.stringify({ runId: payload.runId, profile: payload.profile, tokenId: 'wk-fake', tokenSecret: 'ws-private-proxy-token', bearer: 'wk-fake.ws-private-proxy-token' }));
         return { state: 'proxy-token-created', tokenStoredPrivately: true };
       case 'stop-app': resourceState.appStopped = true; await persist(); return { state: 'stopped', appId: 'ap-owned', runningContainers: 0 };
+      case 'reconcile-stop-app': return { ...resourceState, state: settings.reconcileState ?? 'stopped',
+        appId: settings.reconcileAppId ?? 'ap-owned', runningContainers: settings.reconcileContainers ?? 0,
+        originalKey: payload.originalKey, originalRequestDigest: payload.originalRequestDigest, observedAt: Date.now() };
       case 'delete-volume': resourceState.volumeDeleted = true; await persist(); return { state: 'volume-deleted', volumeId: 'vo-owned' };
       case 'delete-proxy-token': resourceState.proxyTokenDeleted = true; await persist(); return { state: 'proxy-token-deleted' };
       case 'meter': return { state: 'billing-unavailable', knownMeteredCents: 0, observedAt: Date.now(), resourceRows: 0, final: false };
@@ -103,6 +107,20 @@ test('prepare stays read-only and inventories the owned source without creating 
   assert.equal(f.protections.length, 0);
   assert.equal(f.httpCalls.length, 0);
   await assert.rejects(readFile(path.join(f.options.runDirectory, 'modal.sqlite')), { code: 'ENOENT' });
+});
+
+test('fresh run defaults isolate storage and reservation while explicit identities remain supported', async t => {
+  const f = await fixture(t), { runDirectory, ...input } = f.options;
+  const fresh = await prepareModalPilot({ ...input, runId: 'modal-next-attempt' }, f.dependencies);
+  assert.equal(path.basename(fresh.options.runDirectory), 'modal-next-attempt');
+  assert.equal(fresh.options.reservationId, 'modal-next-attempt');
+  const explicit = await prepareModalPilot({ ...input, runId: 'modal-next-attempt', runDirectory, reservationId: 'modal-separate-envelope' }, f.dependencies);
+  assert.equal(explicit.options.runDirectory, runDirectory);
+  assert.equal(explicit.options.reservationId, 'modal-separate-envelope');
+  const defaults = await prepareModalPilot({ ...input, runId: undefined }, f.dependencies);
+  assert.equal(path.basename(defaults.options.runDirectory), 'modal-20261002');
+  assert.equal(defaults.options.reservationId, 'modal-20261002');
+  assert.equal(f.httpCalls.length, 0);
 });
 
 test('direct and actual FLUJO Flow complete before independently verified fixture/provider retirement', async t => {
@@ -196,13 +214,72 @@ test('cleanup-only observation preserves original report/retirement proof and ne
   assert.ok(!observed.cleanup.some(item => item.operation === 'spending-retire' && item.state === 'unknown'));
 });
 
+test('owned fresh stop reconciliation permits only undispatched volume cleanup and preserves original unknown work', async t => {
+  const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
+  await runModalPilot(f.options, f.dependencies);
+  const reportPath = path.join(f.options.runDirectory, 'report.private.json'), retirementPath = path.join(f.options.runDirectory, 'retirement.private.json');
+  const originalReport = await readFile(reportPath, 'utf8'), originalRetirement = await readFile(retirementPath, 'utf8');
+  settings.sdkFailures = ['prefetch'];
+  const report = await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  assert.equal(journal.get('stop-app').state, 'succeeded');
+  assert.equal(journal.get('stop-app').result.reconciled, true);
+  assert.match(journal.get('stop-app').result.reconciliationProofDigest, /^[a-f0-9]{64}$/);
+  assert.equal(journal.get('prefetch').state, 'unknown');
+  assert.equal(journal.get('delete-volume').state, 'succeeded');
+  assert.equal(f.calls.filter(item => item === 'stop-app').length, 1);
+  assert.equal(f.calls.filter(item => item === 'prefetch').length, 1);
+  assert.equal(f.calls.filter(item => item === 'reconcile-stop-app').length, 1);
+  assert.equal(f.calls.filter(item => item === 'delete-volume').length, 1);
+  assert.equal(report.state, 'requires-reconciliation');
+  assert.equal(await readFile(reportPath, 'utf8'), originalReport);
+  assert.equal(await readFile(retirementPath, 'utf8'), originalRetirement);
+  const proofNames = (await readdir(f.options.runDirectory)).filter(name => /^stop-reconciliation-.*\.private\.json$/.test(name));
+  assert.equal(proofNames.length, 1);
+  const proof = JSON.parse(await readFile(path.join(f.options.runDirectory, proofNames[0]), 'utf8'));
+  assert.equal(proof.originalKey, 'stop-app');
+  assert.equal(proof.originalRequestDigest, journal.get('stop-app').request_digest);
+  const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+  assert.equal(ledger.status().reservations[0].state, 'retired-meter-pending');
+  assert.equal(ledger.status().committedCents, 3000);
+});
+
+test('fabricated or live stop proof cannot settle the original intent or unlock volume deletion', async t => {
+  for (const badProof of [{ reconcileAppId: 'ap-other' }, { reconcileState: 'stopping...' }, { reconcileContainers: 1 }, { reconcileContainers: false }]) {
+    const settings = { sdkFailures: ['prefetch', 'stop-app'], ...badProof }, f = await fixture(t, settings);
+    await runModalPilot(f.options, f.dependencies);
+    settings.sdkFailures = ['prefetch'];
+    await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+    const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+    assert.equal(journal.get('stop-app').state, 'unknown');
+    assert.equal(journal.get('prefetch').state, 'unknown');
+    assert.equal(journal.get('delete-volume'), null);
+    assert.equal(f.calls.filter(item => item === 'stop-app').length, 1);
+    assert.equal(f.calls.filter(item => item === 'delete-volume').length, 0);
+    journal.close();
+  }
+});
+
+test('changed original stop digest rejects reconciliation before any fresh provider inspection', async t => {
+  const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
+  await runModalPilot(f.options, f.dependencies);
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+  journal.db.prepare("UPDATE modal_operations SET request_digest=? WHERE key='stop-app'").run('b'.repeat(64));
+  journal.close();
+  settings.sdkFailures = ['prefetch'];
+  await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+  assert.equal(f.calls.filter(item => item === 'reconcile-stop-app').length, 0);
+  assert.equal(f.calls.filter(item => item === 'stop-app').length, 1);
+  assert.equal(f.calls.filter(item => item === 'delete-volume').length, 0);
+});
+
 test('a started common budget over ceiling blocks a fresh provider dispatch while preserving conservative reservation', async t => {
   const f = await fixture(t);
   const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
   ledger.initialize({ limitCents: 10000, currency: 'USD' });
-  ledger.reserve({ reservationId: 'modal-20261002', provider: 'modal', ceilingCents: 3000 });
-  ledger.start('modal-20261002');
-  ledger.observe('modal-20261002', { chargedCents: 3000, observedAt: Date.now(), evidenceDigest: 'a'.repeat(64) });
+  ledger.reserve({ reservationId: f.options.runId, provider: 'modal', ceilingCents: 3000 });
+  ledger.start(f.options.runId);
+  ledger.observe(f.options.runId, { chargedCents: 3000, observedAt: Date.now(), evidenceDigest: 'a'.repeat(64) });
   const report = await runModalPilot(f.options, { ...f.dependencies, spending: ledger });
   assert.equal(report.state, 'requires-reconciliation');
   assert.equal(f.calls.filter(item => item !== 'prepare' && item !== 'meter').length, 0);

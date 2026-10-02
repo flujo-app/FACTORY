@@ -38,6 +38,15 @@ function held(row) {
   if (row.state === 'settled') return row.final_cents;
   return Math.max(row.ceiling_cents, row.charged_cents ?? 0);
 }
+function admissionMarker(database) {
+  return database.prepare("SELECT type FROM spending_events WHERE type IN ('admission_paused','admission_resumed') ORDER BY seq DESC LIMIT 1").get();
+}
+function changeAdmission(ledger, type) {
+  return ledger.transaction(() => {
+    if (admissionMarker(ledger.db)?.type !== type) ledger.event(type, null, {});
+    return { admissionPaused: type === 'admission_paused' };
+  });
+}
 
 /** Trusted-local accounting, separate from cell allocations and provider operation journals. */
 export class SpendingLedger {
@@ -75,6 +84,12 @@ export class SpendingLedger {
     try { const value = operation(); this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
+  // O_ADMISSION_GATE_V1: O's durable off switch also gates previously reserved paid work.
+  assertAdmission() {
+    if (admissionMarker(this.db)?.type === 'admission_paused') fail('PAUSED', 'Paid admission is paused.');
+  }
+  pauseAdmission() { return changeAdmission(this, 'admission_paused'); }
+  resumeAdmission() { return changeAdmission(this, 'admission_resumed'); }
   now() { return integer(this.clock(), 'clock'); }
   policy() {
     const row = this.db.prepare('SELECT * FROM spending_policy WHERE id=1').get();
@@ -110,6 +125,7 @@ export class SpendingLedger {
     identifier(reservationId); integer(ceilingCents, 'ceilingCents');
     if (typeof provider !== 'string' || !PROVIDER.test(provider)) fail('INVALID', 'Provider must be a lowercase identifier.');
     return this.transaction(() => {
+      this.assertAdmission();
       const policy = this.policy();
       const previous = this.db.prepare('SELECT * FROM spending_reservations WHERE id=?').get(reservationId);
       if (previous) {
@@ -126,6 +142,7 @@ export class SpendingLedger {
   start(reservationId) {
     identifier(reservationId);
     return this.transaction(() => {
+      this.assertAdmission();
       const policy = this.policy(), row = this.row(reservationId);
       if (!['reserved', 'started'].includes(row.state)) fail('STATE', 'Only a reserved or started reservation can authorize paid work.');
       if (row.ceiling_cents === 0 || (row.charged_cents !== null && row.charged_cents >= row.ceiling_cents)) fail('BUDGET', 'This reservation has exhausted its paid allowance.');

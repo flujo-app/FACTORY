@@ -75,8 +75,8 @@ class BridgeTests(unittest.TestCase):
         payload = {**request, "request": request, "effectKey": operation, "journalPath": str(self.root / "modal.sqlite")}
         encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         connection = sqlite3.connect(payload["journalPath"])
-        connection.execute("CREATE TABLE IF NOT EXISTS modal_operations(key TEXT PRIMARY KEY, operation TEXT, request_digest TEXT, state TEXT)")
-        connection.execute("INSERT OR REPLACE INTO modal_operations VALUES(?,?,?,?)", (operation, operation, hashlib.sha256(encoded).hexdigest(), state))
+        connection.execute("CREATE TABLE IF NOT EXISTS modal_operations(key TEXT PRIMARY KEY, operation TEXT, request_digest TEXT, state TEXT, request_json TEXT, result_json TEXT)")
+        connection.execute("INSERT OR REPLACE INTO modal_operations VALUES(?,?,?,?,?,NULL)", (operation, operation, hashlib.sha256(encoded).hexdigest(), state, json.dumps(request)))
         connection.commit()
         connection.close()
         return payload
@@ -158,12 +158,12 @@ class BridgeTests(unittest.TestCase):
     def test_stopped_label_with_live_container_is_not_terminal_proof(self):
         request = self.payload("stop-app")
         self.resource(request, appDeployed=True, appId="ap-owned")
-        def fake_cli(payload, arguments):
+        def fake_cli(payload, arguments, **kwargs):
             if arguments[:2] == ["app", "stop"]:
                 self.calls.append("app-stop")
                 return ""
             return json.dumps([{"App ID": "ap-owned", "Description": request["appName"], "State": "stopped", "Tasks": "1"}])
-        with patch.object(pilot, "cli", fake_cli), self.assertRaises(ValueError):
+        with patch.object(pilot, "cli", fake_cli), patch.object(pilot.time, "monotonic", side_effect=[0, 0, 46]), self.assertRaises(ValueError):
             pilot.operate(request)
         self.assertEqual(self.calls, ["app-stop"])
         self.assertNotIn("appStopped", json.loads((self.root / "resources.private.json").read_text()))
@@ -171,7 +171,7 @@ class BridgeTests(unittest.TestCase):
     def test_actual_sdk_snake_case_inventory_proves_stopped_zero_containers(self):
         request = self.payload("stop-app")
         self.resource(request, appDeployed=True, appId="ap-owned")
-        def fake_cli(payload, arguments):
+        def fake_cli(payload, arguments, **kwargs):
             if arguments[:2] == ["app", "stop"]:
                 self.calls.append("app-stop")
                 return ""
@@ -182,6 +182,58 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result["state"], "stopped")
         self.assertEqual(result["runningContainers"], 0)
         self.assertTrue(json.loads((self.root / "resources.private.json").read_text())["appStopped"])
+
+    def test_stop_waits_for_transition_without_reissuing_stop(self):
+        request = self.payload("stop-app")
+        self.resource(request, appDeployed=True, appId="ap-owned")
+        states = iter([("stopping...", "1"), ("stopped", "0")])
+        def fake_cli(payload, arguments, **kwargs):
+            if arguments[:2] == ["app", "stop"]:
+                self.calls.append("app-stop")
+                return ""
+            self.assertGreater(kwargs["timeout_seconds"], 0)
+            self.assertLessEqual(kwargs["timeout_seconds"], 45)
+            state, tasks = next(states)
+            return json.dumps([{"app_id": "ap-owned", "description": request["appName"], "state": state, "tasks": tasks}])
+        with patch.object(pilot, "cli", fake_cli), patch.object(pilot.time, "sleep") as sleep:
+            result = pilot.operate(request)
+        self.assertEqual(self.calls, ["app-stop"])
+        self.assertEqual(result["state"], "stopped")
+        sleep.assert_called_once()
+
+    def reconciliation(self):
+        original = self.payload("stop-app", state="unknown")
+        self.resource(original, appDeployed=True, appId="ap-owned", volumeId="vo-owned", volumeCreated=True)
+        encoded = json.dumps(original["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        return {**original, "operation": "reconcile-stop-app", "originalKey": "stop-app",
+                "originalRequestDigest": hashlib.sha256(encoded).hexdigest(), "recordedAppId": "ap-owned", "recordedVolumeId": "vo-owned"}
+
+    def test_owned_stop_reconciliation_only_reads_live_terminal_inventory(self):
+        request = self.reconciliation()
+        row = {"app_id": "ap-owned", "description": request["appName"], "state": "stopped", "tasks": "0"}
+        with patch.object(pilot, "cli", return_value=json.dumps([row])) as cli:
+            result = pilot.operate(request)
+        self.assertEqual(result["originalKey"], "stop-app")
+        self.assertEqual(result["originalRequestDigest"], request["originalRequestDigest"])
+        self.assertEqual(result["runningContainers"], 0)
+        self.assertEqual(cli.call_args.args[1], ["app", "list", "--json"])
+        self.assertEqual(self.calls, [])
+        self.assertNotIn("appStopped", json.loads((self.root / "resources.private.json").read_text()))
+
+    def test_fabricated_stop_identity_or_digest_blocks_reconciliation_before_inventory(self):
+        request = self.reconciliation()
+        for changes in ({"recordedAppId": "ap-other"}, {"originalRequestDigest": "a" * 64}, {"originalKey": "prefetch"}):
+            with self.subTest(changes=changes), patch.object(pilot, "cli") as cli, self.assertRaises(ValueError):
+                pilot.operate({**request, **changes})
+            cli.assert_not_called()
+
+    def test_stop_reconciliation_rejects_live_or_absent_terminal_guess(self):
+        request = self.reconciliation()
+        base = {"app_id": "ap-owned", "description": request["appName"], "state": "stopped", "tasks": "0"}
+        for rows in ([{**base, "state": "stopping...", "tasks": "1"}], [{**base, "tasks": "1"}], [{**base, "tasks": False}], [{key: value for key, value in base.items() if key != "tasks"}], []):
+            with self.subTest(rows=rows), patch.object(pilot, "cli", return_value=json.dumps(rows)), self.assertRaises(ValueError):
+                pilot.operate(request)
+        self.assertNotIn("appStopped", json.loads((self.root / "resources.private.json").read_text()))
 
     def test_conflicting_inventory_representations_are_not_terminal_proof(self):
         request = self.payload("stop-app")

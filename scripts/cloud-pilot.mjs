@@ -60,7 +60,7 @@ export function createFlySpendingGate({ ledgerPath, reservationId, clock = Date.
   return {
     paidAdmission() {
       ledger ??= new SpendingLedger(ledgerPath, { clock });
-      ledger.initialize({ limitCents: 10000, currency: 'USD' });
+      if (!ledger.db.prepare('SELECT id FROM spending_policy WHERE id=1').get()) ledger.initialize({ limitCents: 10000, currency: 'USD' });
       ledger.reserve({ reservationId, provider: 'fly', ceilingCents: FLY_PAID_CEILING_CENTS });
       return ledger.start(reservationId);
     },

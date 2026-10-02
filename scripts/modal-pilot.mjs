@@ -80,13 +80,14 @@ function optionsFor(input = {}) {
   if (source.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(source.hostname)
       || source.username || source.password || source.pathname !== '/' || source.search || source.hash) fail('LOOPBACK_SOURCE_REQUIRED');
   const result = { runId, source: source.origin, environment: 'main', workspace: WORKSPACE,
-    runDirectory: input.runDirectory ?? path.join(ROOT, '.factory', 'modal-20261002'),
+    runDirectory: input.runDirectory ?? path.join(ROOT, '.factory', runId),
     modulePath: input.modulePath ?? 'C:/Users/Moe/Documents/GitHub/flujo-cloud/lib/managed.mjs',
     sourceEvidencePath: input.sourceEvidencePath ?? path.join(ROOT, '.factory', 'federation-20261002', 'source-evidence.json'),
     spendingPath: input.spendingPath ?? path.join(ROOT, '.factory', 'spending.sqlite'),
     pythonPath: input.pythonPath ?? path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
     through: input.through ?? 'flow', cleanupOnly: input.cleanupOnly === true,
-    reservationId: input.reservationId ?? 'modal-20261002', ceilingCents: 3000 };
+    reservationId: input.reservationId ?? runId, ceilingCents: 3000 };
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(result.reservationId)) fail('STABLE_RESERVATION_ID_REQUIRED');
   for (const key of ['runDirectory', 'modulePath', 'sourceEvidencePath', 'spendingPath', 'pythonPath']) if (!path.isAbsolute(result[key])) fail('ABSOLUTE_PATHS_REQUIRED');
   if (!['infra', 'direct', 'connect', 'flow'].includes(result.through)) fail('INVALID_STAGE');
   const prefix = `factory-${sha(runId).slice(0, 12)}`;
@@ -139,7 +140,7 @@ async function contextFor(options, dependencies) {
 
 function pythonDriver(options) {
   return async payload => {
-    const mutating = !['prepare', 'inspect', 'meter'].includes(payload.operation);
+    const mutating = !['prepare', 'inspect', 'meter', 'reconcile-stop-app'].includes(payload.operation);
     const args = ['-B', path.join(ROOT, 'modal', 'run_pilot.py'), ...(mutating ? ['--execute'] : [])];
     return new Promise((resolve, reject) => {
       const childEnvironment = { ...process.env };
@@ -271,6 +272,46 @@ export async function runModalPilot(input = {}, dependencies = {}) {
   };
   const sdk = (key, operation, paid = false) => perform(key, operation, {}, (request, effectKey) => context.driver({ ...request, request,
     effectKey, journalPath: path.join(options.runDirectory, 'modal.sqlite') }), { paid });
+  const reconcileOwnedStop = async () => {
+    const original = journal.get('stop-app'), owned = await resources();
+    if (!original || original.operation !== 'stop-app' || !owned.appDeployed || !owned.appId) return;
+    const repairingCheckpoint = original.state === 'succeeded' && original.result?.reconciled === true && !owned.appStopped;
+    if (original.state !== 'unknown' && !repairingCheckpoint) return;
+    const request = requestFor('stop-app');
+    if (original.request_digest !== digest(request) || digest(JSON.parse(original.request_json)) !== original.request_digest
+        || !['runId', 'appName', 'volumeName', 'environment', 'profile', 'workspaceName'].every(key => owned[key] === request[key])) fail('STOP_RECONCILIATION_OWNERSHIP_CONFLICT');
+    const observed = await context.driver({ ...requestFor('reconcile-stop-app'), originalKey: original.key,
+      originalRequestDigest: original.request_digest, recordedAppId: owned.appId, recordedVolumeId: owned.volumeId });
+    if (observed.state !== 'stopped' || observed.runningContainers !== 0 || observed.appId !== owned.appId
+        || observed.volumeId !== owned.volumeId || observed.originalKey !== original.key
+        || observed.originalRequestDigest !== original.request_digest || !Number.isSafeInteger(observed.observedAt)
+        || !['runId', 'appName', 'volumeName', 'environment', 'profile', 'workspaceName'].every(key => observed[key] === request[key])) fail('STOP_RECONCILIATION_PROOF_REJECTED');
+    const proof = { format: 'factory-modal-owned-stop-reconciliation', version: 1,
+      originalKey: original.key, originalRequestDigest: original.request_digest, originalState: original.state,
+      observed, purpose: repairingCheckpoint ? 'repair-confirmed-local-checkpoint' : 'settle-original-unknown-stop' };
+    const proofPath = path.join(options.runDirectory, `stop-reconciliation-${randomUUID()}.private.json`);
+    const proofHandle = await open(proofPath, 'wx', 0o600);
+    try {
+      await proofHandle.writeFile(`${JSON.stringify(proof, null, 2)}\n`);
+      await proofHandle.sync();
+    } finally { await proofHandle.close(); }
+    const proofDigest = digest(proof);
+    journal.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = journal.get(original.key);
+      if (current?.operation !== 'stop-app' || current.request_digest !== original.request_digest || current.state !== original.state) fail('STOP_RECONCILIATION_RACE');
+      if (!repairingCheckpoint) {
+        const settled = { ...select(observed), reconciled: true, reconciliationProofDigest: proofDigest,
+          reconciliationProofFile: path.basename(proofPath) };
+        const changed = journal.db.prepare("UPDATE modal_operations SET state='succeeded',result_json=?,updated=? WHERE key=? AND operation='stop-app' AND request_digest=? AND state='unknown'")
+          .run(JSON.stringify(settled), context.clock(), original.key, original.request_digest);
+        if (changed.changes !== 1) fail('STOP_RECONCILIATION_RACE');
+      }
+      journal.db.exec('COMMIT');
+    } catch (error) { journal.db.exec('ROLLBACK'); throw error; }
+    await privateJson(path.join(options.runDirectory, 'resources.private.json'), { ...owned, appStopped: true });
+    await notify('reconcile-stop-app', observed);
+  };
   const sourceRequest = async (method, endpoint, body, responseName) => {
     // Recheck the registered instance immediately before each local mutation/call.
     const current = await context.managed.source({ source: options.source });
@@ -303,6 +344,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
       journal = new ModalJournal(path.join(options.runDirectory, 'modal.sqlite'), { clock: context.clock });
       spending = dependencies.spending ?? new SpendingLedger(options.spendingPath, { clock: context.clock });
       ownsSpending = !dependencies.spending;
+      await reconcileOwnedStop();
       failure = 'CLEANUP_ONLY_ORIGINAL_WORK_RESULTS_PRESERVED';
       fail('CLEANUP_ONLY_ORIGINAL_WORK_RESULTS_PRESERVED');
     }
@@ -320,7 +362,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     journal = new ModalJournal(path.join(options.runDirectory, 'modal.sqlite'), { clock: context.clock });
     spending = dependencies.spending ?? new SpendingLedger(options.spendingPath, { clock: context.clock });
     ownsSpending = !dependencies.spending;
-    spending.initialize({ limitCents: 10000, currency: 'USD' });
+    if (!spending.db || !spending.db.prepare('SELECT id FROM spending_policy WHERE id=1').get()) spending.initialize({ limitCents: 10000, currency: 'USD' });
     spending.reserve({ reservationId: options.reservationId, provider: 'modal', ceilingCents: 3000 });
     await sdk('create-volume', 'create-volume', true);
     await sdk('deploy', 'deploy', true);
@@ -484,7 +526,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
 
 function cliOptions(argv) {
   const input = {}, names = { '--run-id': 'runId', '--out': 'runDirectory', '--module-path': 'modulePath', '--source-evidence': 'sourceEvidencePath',
-    '--source': 'source', '--python': 'pythonPath', '--spending': 'spendingPath', '--through': 'through' };
+    '--source': 'source', '--python': 'pythonPath', '--spending': 'spendingPath', '--through': 'through', '--reservation-id': 'reservationId' };
   let execute = false;
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] === '--execute') execute = true;
