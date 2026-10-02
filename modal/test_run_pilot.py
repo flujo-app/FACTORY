@@ -152,6 +152,38 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.calls, ["app-stop"])
         self.assertNotIn("appStopped", json.loads((self.root / "resources.private.json").read_text()))
 
+    def test_actual_sdk_snake_case_inventory_proves_stopped_zero_containers(self):
+        request = self.payload("stop-app")
+        self.resource(request, appDeployed=True, appId="ap-owned")
+        def fake_cli(payload, arguments):
+            if arguments[:2] == ["app", "stop"]:
+                self.calls.append("app-stop")
+                return ""
+            return json.dumps([{"app_id": "ap-owned", "description": request["appName"], "state": "stopped", "tasks": "0"}])
+        with patch.object(pilot, "cli", fake_cli):
+            result = pilot.operate(request)
+        self.assertEqual(result["appId"], "ap-owned")
+        self.assertEqual(result["state"], "stopped")
+        self.assertEqual(result["runningContainers"], 0)
+        self.assertTrue(json.loads((self.root / "resources.private.json").read_text())["appStopped"])
+
+    def test_conflicting_inventory_representations_are_not_terminal_proof(self):
+        request = self.payload("stop-app")
+        self.resource(request, appDeployed=True, appId="ap-owned")
+        base = {"app_id": "ap-owned", "description": request["appName"], "state": "stopped", "tasks": "0"}
+        for changes in ({"App ID": "ap-other"}, {"Description": "another-app"}, {"State": "deployed"}, {"Tasks": "1"}):
+            with self.subTest(changes=changes), patch.object(pilot, "cli", return_value=json.dumps([{**base, **changes}])), self.assertRaises(ValueError):
+                pilot.app_inventory(request)
+        self.assertNotIn("appStopped", json.loads((self.root / "resources.private.json").read_text()))
+
+    def test_missing_or_duplicate_container_evidence_is_unknown(self):
+        request = self.payload("stop-app")
+        self.resource(request, appDeployed=True, appId="ap-owned")
+        base = {"app_id": "ap-owned", "description": request["appName"], "state": "stopped"}
+        for rows in ([base], [{**base, "tasks": "0"}, {**base, "tasks": "0"}]):
+            with self.subTest(rows=rows), patch.object(pilot, "cli", return_value=json.dumps(rows)), self.assertRaises(ValueError):
+                pilot.app_inventory(request)
+
     def test_deployment_checkpoints_app_before_function_lookup_failure(self):
         request = self.payload("deploy")
         self.resource(request, volumeCreated=True, volumeId="vo-owned")

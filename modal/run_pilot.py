@@ -116,13 +116,39 @@ def cli(payload, arguments):
 def app_inventory(payload):
     rows = json.loads(cli(payload, ["app", "list", "--json"]))
     resources = checkpoint(payload)
-    row = next((item for item in rows if item.get("App ID") == resources.get("appId")), None)
-    if row is None:
+    matched = [item for item in rows if item.get("app_id") == resources.get("appId")
+               or item.get("App ID") == resources.get("appId")]
+    if not matched:
         return {"state": "not-observed", "appId": resources.get("appId")}
-    if row.get("Description") != payload["appName"]:
+    if len(matched) != 1:
+        raise ValueError("Recorded App inventory is ambiguous.")
+    row = matched[0]
+
+    def field(canonical, legacy):
+        if canonical in row and legacy in row:
+            if type(row[canonical]) is not type(row[legacy]) or row[canonical] != row[legacy]:
+                raise ValueError("Recorded App inventory has conflicting fields.")
+        if canonical in row:
+            return row[canonical]
+        if legacy in row:
+            return row[legacy]
+        raise ValueError("Recorded App inventory lacks terminal-state evidence.")
+
+    app_id = field("app_id", "App ID")
+    description = field("description", "Description")
+    state = field("state", "State")
+    tasks = field("tasks", "Tasks")
+    if app_id != resources.get("appId") or description != payload["appName"]:
         raise ValueError("Recorded App does not match its ownership name.")
-    return {"appId": resources["appId"], "state": str(row.get("State", "unknown")),
-            "runningContainers": int(row.get("Tasks", 0)), "observedAt": int(time.time() * 1000)}
+    if not isinstance(state, str) or not state or type(tasks) not in (int, str):
+        raise ValueError("Recorded App inventory has invalid lifecycle fields.")
+    if isinstance(tasks, str) and not re.fullmatch(r"[0-9]+", tasks):
+        raise ValueError("Recorded App inventory has invalid container evidence.")
+    count = int(tasks)
+    if count < 0:
+        raise ValueError("Recorded App inventory has invalid container evidence.")
+    return {"appId": app_id, "state": state, "runningContainers": count,
+            "observedAt": int(time.time() * 1000)}
 
 
 def operate(payload):
