@@ -17,7 +17,7 @@
   "scaledownWindowSeconds": 60,
   "requestTimeoutSeconds": 120,
   "startupTimeoutSeconds": 600,
-  "prefetchTimeoutSeconds": 900,
+  "prefetchTimeoutSeconds": 3600,
   "maxModelLength": 4096,
   "maxOutputTokens": 1024,
   "maxRequestBytes": 65536,

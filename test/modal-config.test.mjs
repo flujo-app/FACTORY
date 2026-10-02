@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { modalBridgeTimeoutMs } from '../scripts/modal-pilot.mjs';
 
 const modalDir = fileURLToPath(new URL('../modal/', import.meta.url));
 const config = JSON.parse(readFileSync(join(modalDir, 'config.json'), 'utf8'));
@@ -33,6 +34,19 @@ test('compute projection covers one bounded L4 pool and is explicitly an estimat
   assert.ok(Math.abs(rate * 3600 - 1.021392) < 0.000001);
   assert.equal(config.pricing.isEstimate, true);
   assert.equal(config.experimentAllocationUsd, 30);
+});
+
+test('CPU prefetch bridge allows configured startup margin and rejects unbounded or malformed deadlines', () => {
+  assert.equal(config.prefetchTimeoutSeconds, 3600);
+  assert.equal(modalBridgeTimeoutMs('prefetch', config), 4_200_000);
+  assert.ok(modalBridgeTimeoutMs('prefetch', config) > config.prefetchTimeoutSeconds * 1000);
+  assert.equal(modalBridgeTimeoutMs('stop-app', config), 180_000);
+  for (const value of [NaN, Infinity, '3600', 3600.5, 0, 3601]) {
+    assert.throws(() => modalBridgeTimeoutMs('prefetch', { ...config, prefetchTimeoutSeconds: value }), { code: 'INVALID_PREFETCH_RUNTIME_BOUNDS' });
+  }
+  for (const value of [NaN, Infinity, '600', 0, 1201]) {
+    assert.throws(() => modalBridgeTimeoutMs('prefetch', { ...config, startupTimeoutSeconds: value }), { code: 'INVALID_PREFETCH_RUNTIME_BOUNDS' });
+  }
 });
 
 test('pinned source metadata and anonymous import are offline', () => {

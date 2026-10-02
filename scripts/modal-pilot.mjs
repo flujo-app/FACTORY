@@ -135,11 +135,22 @@ async function contextFor(options, dependencies) {
     managed ??= new loaded.ManagedCloud({ progress: () => {} });
   }
   return { config, managed, privateFiles, fetchImpl: dependencies.fetchImpl ?? fetch,
-    clock: dependencies.clock ?? Date.now, driver: dependencies.driver ?? pythonDriver(options) };
+    clock: dependencies.clock ?? Date.now, driver: dependencies.driver ?? pythonDriver(options, config) };
 }
 
-function pythonDriver(options) {
+export function modalBridgeTimeoutMs(operation, config) {
+  if (operation === 'prefetch') {
+    const download = config?.prefetchTimeoutSeconds, margin = config?.startupTimeoutSeconds;
+    if (!Number.isSafeInteger(download) || download < 60 || download > 3600
+        || !Number.isSafeInteger(margin) || margin < 1 || margin > 1200) fail('INVALID_PREFETCH_RUNTIME_BOUNDS');
+    return (download + margin) * 1000;
+  }
+  return operation === 'deploy' ? 1_800_000 : 180_000;
+}
+
+function pythonDriver(options, config) {
   return async payload => {
+    const timeoutMs = modalBridgeTimeoutMs(payload.operation, config);
     const mutating = !['prepare', 'inspect', 'meter', 'reconcile-stop-app'].includes(payload.operation);
     const args = ['-B', path.join(ROOT, 'modal', 'run_pilot.py'), ...(mutating ? ['--execute'] : [])];
     return new Promise((resolve, reject) => {
@@ -147,7 +158,7 @@ function pythonDriver(options) {
       for (const name of ['MODAL_TOKEN_ID', 'MODAL_TOKEN_SECRET', 'MODAL_SERVER_URL']) delete childEnvironment[name];
       const child = spawn(options.pythonPath, args, { windowsHide: true, env: childEnvironment, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '', stderr = '', oversized = false;
-      const timer = setTimeout(() => child.kill(), payload.operation === 'prefetch' ? 1_080_000 : payload.operation === 'deploy' ? 1_800_000 : 180_000);
+      const timer = setTimeout(() => child.kill(), timeoutMs);
       const capture = target => data => {
         if ((stdout.length + stderr.length + data.length) > 4 * 1024 * 1024) { oversized = true; child.kill(); return; }
         if (target === 'stdout') stdout += data; else stderr += data;
@@ -202,6 +213,7 @@ async function sourceContext(options, context, { allowOwn = false, resources = {
 
 export async function prepareModalPilot(input = {}, dependencies = {}) {
   const options = optionsFor(input), context = await contextFor(options, dependencies);
+  modalBridgeTimeoutMs('prefetch', context.config);
   const local = await sourceContext(options, context);
   const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']) });
   if (modal.state !== 'prepared' || !modal.credentialsAccepted || modal.environment !== 'main' || !modal.profile || !modal.workspaceName) fail('MODAL_PROFILE_UNVERIFIED');
