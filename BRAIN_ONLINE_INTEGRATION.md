@@ -106,8 +106,8 @@ controller filesystem paths into public URLs.
 ## Run status
 
 The read-only server is running at `http://127.0.0.1:4343`, factory ID
-`factory-live-pilot`, build `3c5686254dfb27ab6731fbb494b44432a7e74fc1`.
-The live check at 2026-10-02T23:15:51Z confirmed unauthenticated 401,
+`factory-live-pilot`, build `6fcd718592ebf86b2d546f0eaab2cb5b159a4140`.
+The live check at 2026-10-02T23:21:24Z confirmed unauthenticated 401,
 authenticated snapshot/events 200, and write 405. This is a local process;
 automatic restart and a remotely accessible service are separate work.
 
@@ -121,7 +121,7 @@ ACLs and file identity. No credential value appears in this contract.
 The verified launch command from the FACTORY directory is:
 
 ```powershell
-& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --port 4343 --build-revision 3c5686254dfb27ab6731fbb494b44432a7e74fc1
+& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --spending-ledger 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/spending.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --port 4343 --build-revision 6fcd718592ebf86b2d546f0eaab2cb5b159a4140
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
