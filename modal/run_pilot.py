@@ -102,8 +102,11 @@ def checkpoint(payload, changes=None):
 
 
 def cli(payload, arguments):
+    child_environment = os.environ.copy()
+    child_environment["PYTHONUTF8"] = "1"
+    child_environment["PYTHONIOENCODING"] = "utf-8"
     result = subprocess.run([sys.executable, "-m", "modal", *arguments, "--env", payload["environment"], "--profile", payload["profile"]],
-                            capture_output=True, text=True, timeout=120, check=False)
+                            env=child_environment, capture_output=True, text=True, encoding="utf-8", timeout=120, check=False)
     # Output can contain other account resources; it stays in private artifacts.
     stem = Path(payload["runDirectory"]) / f"cli-{payload['operation']}-{uuid.uuid4().hex}"
     stem.with_suffix(".stdout.private.txt").write_text(result.stdout, encoding="utf-8")

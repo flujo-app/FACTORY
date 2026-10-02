@@ -97,6 +97,22 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result["workspaceName"], "factory-account")
         self.assertEqual(self.calls, [])
 
+    def test_cli_unicode_capture_pins_child_utf8_without_changing_parent(self):
+        request = self.payload("inspect")
+        output = SimpleNamespace(returncode=0, stdout="stopped \u2192 0 containers", stderr="")
+        with patch.dict(os.environ, {"PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252"}), patch.object(pilot.subprocess, "run", return_value=output) as process:
+            self.assertEqual(pilot.cli(request, ["app", "list", "--json"]), output.stdout)
+            self.assertEqual(os.environ["PYTHONUTF8"], "0")
+            self.assertEqual(os.environ["PYTHONIOENCODING"], "cp1252")
+        arguments, options = process.call_args
+        self.assertEqual(arguments[0][-4:], ["--env", "main", "--profile", "fake-profile"])
+        self.assertEqual(options["env"]["PYTHONUTF8"], "1")
+        self.assertEqual(options["env"]["PYTHONIOENCODING"], "utf-8")
+        self.assertEqual(options["encoding"], "utf-8")
+        self.assertTrue(options["capture_output"])
+        self.assertEqual(len(list(self.root.glob("cli-inspect-*.stdout.private.txt"))), 1)
+        self.assertEqual(next(self.root.glob("cli-inspect-*.stdout.private.txt")).read_text(encoding="utf-8"), output.stdout)
+
     def test_unknown_or_unbound_intent_cannot_dispatch(self):
         request = self.payload("create-volume", state="unknown")
         with self.assertRaises(ValueError):
