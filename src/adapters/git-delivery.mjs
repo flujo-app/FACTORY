@@ -6,6 +6,22 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const FULL_SHA = /^[a-fA-F0-9]{40}$/;
+const casRefusals = new WeakMap();
+
+function provenRefusal(binding, resolvedRepository, observedHead, phase, cause) {
+  const error = failure('CAS_CONFLICT', 'The completed Git executor refused the expected integration head.', cause);
+  casRefusals.set(error, Object.freeze({ ...binding, resolvedRepository, observedHead, phase }));
+  return error;
+}
+
+/** In-process provenance only: a code, stderr string, copied object or serialized error is insufficient. */
+export function takeGitCasRefusal(error, binding) {
+  const record = casRefusals.get(error);
+  if (!record || !binding || ['repository', 'ref', 'expectedHead', 'candidateHead']
+    .some(key => record[key] !== binding[key])) return null;
+  casRefusals.delete(error);
+  return record;
+}
 
 function failure(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
@@ -113,12 +129,13 @@ export async function updateIntegrationRef({
   validateInput({ repository, ref, gitPath });
   const previousHead = commitId(expectedHead, 'expectedHead');
   const head = commitId(candidateHead, 'candidateHead');
+  const binding = Object.freeze({ repository, ref, expectedHead: previousHead, candidateHead: head });
   const resolved = await checkedRepository(repository, gitPath);
   const currentHead = await checkedRef(resolved, ref, gitPath);
   await checkedCommit(resolved, previousHead, 'expectedHead', gitPath);
   await checkedCommit(resolved, head, 'candidateHead', gitPath);
   if (currentHead !== previousHead) {
-    throw failure('CAS_CONFLICT', 'The integration branch no longer matches expectedHead.');
+    throw provenRefusal(binding, resolved, currentHead, 'preflight-head-mismatch');
   }
   try {
     // Git checks the old head while holding its ref lock. The prior read is only
@@ -126,9 +143,15 @@ export async function updateIntegrationRef({
     // --no-deref also prevents a changed symbolic ref from redirecting the write.
     await git(resolved, gitPath, ['update-ref', '--no-deref', ref, head, previousHead]);
   } catch (cause) {
-    const expectedMismatch = /cannot lock ref[^\r\n]*is at [a-f0-9]{40} but expected [a-f0-9]{40}/i
-      .test(cause.stderr || '');
-    throw failure(expectedMismatch ? 'CAS_CONFLICT' : 'DELIVERY_UNCERTAIN',
+    const completedFailure = Number.isInteger(cause.code) && cause.code > 0 && cause.code <= 255
+      && cause.killed === false && cause.signal === null;
+    const escapedRef = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const mismatch = completedFailure && new RegExp(`cannot lock ref '${escapedRef}': is at ([a-f0-9]{40}) but expected ${previousHead}(?:\\s|$)`, 'i')
+      .exec(typeof cause.stderr === 'string' ? cause.stderr : '');
+    if (mismatch && mismatch[1].toLowerCase() !== previousHead) {
+      throw provenRefusal(binding, resolved, mismatch[1].toLowerCase(), 'atomic-cas-refusal', cause);
+    }
+    throw failure('DELIVERY_UNCERTAIN',
       'The atomic integration update did not confirm success; inspect the reference before retrying.', cause);
   }
   return { ref, previousHead, head };

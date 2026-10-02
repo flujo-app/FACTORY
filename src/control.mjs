@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { safeReceipt } from './receipts.mjs';
+import { consumeGitRefusalProof } from './git-effect.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -226,6 +227,19 @@ export class FactoryControl {
     });
   }
   reconcileEffect(key, { applied, evidencePath }) { if(typeof applied!=='boolean') fail('INVALID','Reconciliation outcome is required.'); const proof=evidence(evidencePath); return this.settleEffect(key,applied?'succeeded':'not_applied',{...proof,reconciled:true}); }
+  /** A completed local Git CAS refusal is distinct from observing that a remote effect has not applied yet. */
+  settleGitRefusal(key, proof) {
+    return this.transaction(() => {
+      const row=this.effect(key);
+      if(row.kind!=='delivery' || row.scope!=='project' || !['running','unknown'].includes(row.state)) fail('GIT_REFUSAL_STATE','A started unsettled Git delivery is required.');
+      const receipt=consumeGitRefusalProof(proof,this,row);
+      if(!receipt) fail('GIT_REFUSAL_PROOF','A bound in-process Git refusal proof is required.');
+      const metadata=safeReceipt(receipt);
+      this.db.prepare('UPDATE effects SET state=?,receipt=?,updated=? WHERE key=?').run('not_applied',canonical(metadata),this.clock(),key);
+      this.event('effect_settled',key,{state:'not_applied',receipt:metadata});
+      return this.effect(key);
+    });
+  }
   deliverTask(taskId,key) {
     return this.transaction(() => {
       const task=this.task(taskId), effect=this.effect(key);
