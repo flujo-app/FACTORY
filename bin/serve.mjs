@@ -7,9 +7,9 @@ try {
   const options = {}, args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     const key = args[i], value = args[++i];
-    if (!value || !['--database', '--factory-id', '--token-file', '--port', '--host', '--build-revision'].includes(key)) throw new Error('Invalid arguments.');
+    if (!value || !['--database', '--spending-ledger', '--factory-id', '--token-file', '--port', '--host', '--build-revision'].includes(key)) throw new Error('Invalid arguments.');
     const mapping = { '--database': 'databasePath', '--factory-id': 'factoryId', '--token-file': 'tokenFile',
-      '--port': 'port', '--host': 'host', '--build-revision': 'buildRevision' };
+      '--spending-ledger': 'spendingLedgerPath', '--port': 'port', '--host': 'host', '--build-revision': 'buildRevision' };
     options[mapping[key]] = key === '--port' ? Number(value) : ['--database', '--token-file'].includes(key) ? path.resolve(value) : value;
   }
   const token = await loadViewerToken({ tokenFile: options.tokenFile });

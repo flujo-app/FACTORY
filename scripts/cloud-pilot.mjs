@@ -1,9 +1,10 @@
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile, rename, stat, lstat, open, unlink } from 'node:fs/promises';
 import { FactoryControl, digest } from '../src/control.mjs';
+import { SpendingLedger } from '../src/spending.mjs';
 import { executeEffect } from '../src/gateway.mjs';
 import { executeOwnedRetirement } from '../src/retirement.mjs';
 import { createManagedCloudAdapter } from '../src/adapters/managed-cloud.mjs';
@@ -16,6 +17,7 @@ export const NORMALIZATION_CASES = Object.freeze([
 const WORKSPACE = 'factory-pilot', FLOW = 'factory-pilot-flow', MODEL = 'factory-pilot-model';
 const TUPLE = { name: 'gpt-6-astra', provider: 'codex', adapter: 'codex-cli' };
 const SPEC = 'normalizeCheckpoint(value): trim and lowercase string values; return "unknown" for every non-string value. Never coerce non-strings.';
+const FLY_PAID_CEILING_CENTS = 1000;
 const PICK = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]));
 const hash = value => createHash('sha256').update(value).digest('hex');
 const exists = async filename => { try { await stat(filename); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
@@ -39,9 +41,36 @@ function optionsFor(input) {
     outputDirectory: path.resolve(input.outputDirectory), apps: { parent: `${prefix}-parent`, child: `${prefix}-child` } };
 }
 
+/** The native API's same-origin guard applies to snapshot writes as well as fixture writes. */
+export function sourceOriginFetch(fetchImpl, sourceOrigin) {
+  return (url, init = {}) => {
+    const target = new URL(typeof url === 'string' || url instanceof URL ? url : url.url);
+    if (target.origin !== sourceOrigin) return fetchImpl(url, init);
+    const headers = new Headers(init.headers ?? (url instanceof Request ? url.headers : undefined));
+    headers.set('Origin', sourceOrigin);
+    return fetchImpl(url, { ...init, headers });
+  };
+}
+
+/** Lazy opening keeps prepare and observe-only runs from changing the paid ledger. */
+export function createFlySpendingGate({ ledgerPath, reservationId, clock = Date.now }) {
+  if (typeof ledgerPath !== 'string' || !path.isAbsolute(ledgerPath)) throw new Error('Execution requires an absolute shared spending-ledger path.');
+  if (typeof reservationId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(reservationId)) throw new Error('A stable paid reservation identity is required.');
+  let ledger;
+  return {
+    paidAdmission() {
+      ledger ??= new SpendingLedger(ledgerPath, { clock });
+      ledger.initialize({ limitCents: 10000, currency: 'USD' });
+      ledger.reserve({ reservationId, provider: 'fly', ceilingCents: FLY_PAID_CEILING_CENTS });
+      return ledger.start(reservationId);
+    },
+    close() { if (ledger) { ledger.close(); ledger = undefined; } },
+  };
+}
+
 async function contextFor(options, dependencies, deadline) {
   let managed = dependencies.managed, protectDirectory = dependencies.protectDirectory;
-  let fetchImpl = dependencies.fetchImpl ?? fetch;
+  let fetchImpl = sourceOriginFetch(dependencies.fetchImpl ?? fetch, options.source);
   if (!managed) {
     const lib = path.dirname(options.modulePath);
     const [{ ManagedCloud }, { createFlyRunner }, privateFiles] = await Promise.all([
@@ -100,7 +129,7 @@ export async function prepareCloudPilot(input, dependencies = {}) {
   const { evidence } = await sourceEvidence(context, options);
   return { mode: 'prepare-read-only', runId: options.runId, ...evidence, apps: options.apps,
     limits: PILOT_LIMITS, executionRequiresFlag: '--execute',
-    spendingEnforcement: 'Delegated budget accounting only; provider/infrastructure charges are not metered or hard-capped here.',
+    spendingEnforcement: 'Execution requires shared USD paid-spend admission before each provision or model call; it does not establish provider metering or a provider hard cap.',
     peerAutonomy: 'Child creation is a coordinator-mediated delegation; cloud workers do not gain native peer autonomy.' };
 }
 
@@ -146,39 +175,157 @@ export function validateChildReview(value, candidate) {
     method: 'Independent generated review plus local exact source grammar and static acceptance table; generated code was never executed.' };
 }
 
-async function createFixture(context, options, source, directory) {
-  await privateJson(path.join(directory, 'fixture-intent.json'), { workspace: WORKSPACE, modelId: MODEL, flowId: FLOW, state: 'accepted' }, { exclusive: true });
+const fixtureModel = () => ({ id: MODEL, ...TUPLE, displayName: 'Factory Pilot Work Model', ApiKey: '' });
+function noAttachments(value) {
+  if (!value || typeof value !== 'object') return true;
+  return Object.entries(value).every(([key, field]) => {
+    if (/^(?:attachments|tools|attachedTools|MCPServers|mcpServerIds|mcpAttachments)$/i.test(key)) {
+      if (field !== null && field !== undefined && field !== '' && field !== false
+          && !(Array.isArray(field) && field.length === 0)
+          && !(typeof field === 'object' && Object.keys(field).length === 0)) return false;
+    }
+    return typeof field !== 'object' || noAttachments(field);
+  });
+}
+async function fixtureInventory(context, source) {
+  const read = endpoint => {
+    const url = new URL(endpoint, source.source); url.searchParams.set('workspace', WORKSPACE);
+    return context.managed.json(url, { token: source.token, workspace: WORKSPACE, label: 'Owned fixture inventory' });
+  };
+  const [models, flows] = await Promise.all([read('/api/model'), read('/api/flow')]);
+  if (!Array.isArray(models) || !Array.isArray(flows) || models.length > 1 || flows.length > 1) throw new Error('Owned fixture contains unexpected configuration.');
+  if (models.length && (models[0].id !== MODEL || Object.keys(TUPLE).some(key => models[0][key] !== TUPLE[key])
+      || models[0].ApiKey !== '' || !noAttachments(models[0]))) throw new Error('Existing fixture model does not match the fixed empty-key tuple.');
+  if (flows.length && (!noAttachments(flows[0]) || digest(PICK(flows[0], ['id', 'name', 'nodes', 'edges'])) !== digest(minimalFlow()))) throw new Error('Existing fixture Flow differs from the fixed no-attachment Flow.');
+  return { missingModel: models.length === 0, missingFlow: flows.length === 0 };
+}
+
+async function createFixture(context, options, source, directory, recovery = null) {
+  if (!recovery) await privateJson(path.join(directory, 'fixture-intent.json'), { workspace: WORKSPACE, modelId: MODEL, flowId: FLOW, state: 'accepted' }, { exclusive: true });
   const post = async (endpoint, value, workspace) => {
     const url = new URL(endpoint, source.source);
     const response = await context.fetchImpl(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(30_000),
-      headers: { Authorization: `Bearer ${source.token}`, 'Content-Type': 'application/json', ...(workspace ? { 'x-flujo-workspace': workspace } : {}) }, body: JSON.stringify(value) });
+      headers: { Authorization: `Bearer ${source.token}`, Origin: source.source, 'Content-Type': 'application/json', ...(workspace ? { 'x-flujo-workspace': workspace } : {}) }, body: JSON.stringify(value) });
+    const tag = endpoint.slice('/api/'.length);
+    await privateJson(path.join(directory, `fixture-http-${tag}${recovery ? `-resumed-${recovery.attempt}` : ''}.json`),
+      { endpoint, status: response.status, runId: options.runId, sourceInstanceId: source.instanceId, workspace: WORKSPACE }, { exclusive: true });
     if (response.status !== 201) { await response.body?.cancel().catch(() => {}); throw new Error('Fixture creation requires reconciliation.'); }
     // Do not persist or print response configurations, credentials or error bodies.
     await response.body?.cancel().catch(() => {});
   };
-  await post('/api/workspaces', { name: WORKSPACE });
-  await post('/api/model', { id: MODEL, ...TUPLE, displayName: 'Factory Pilot Work Model', ApiKey: '' }, WORKSPACE);
-  await post('/api/flow', minimalFlow(), WORKSPACE);
-  await privateJson(path.join(directory, 'fixture-created.json'), { workspace: WORKSPACE, modelId: MODEL, flowId: FLOW, modelTuple: TUPLE, noAttachments: true });
+  if (!recovery) await post('/api/workspaces', { name: WORKSPACE });
+  const inventory = recovery ? recovery.inventory : { missingModel: true, missingFlow: true };
+  if (inventory.missingModel) await post('/api/model', fixtureModel(), WORKSPACE);
+  if (inventory.missingFlow) await post('/api/flow', minimalFlow(), WORKSPACE);
+  await privateJson(path.join(directory, recovery ? `fixture-created-resumed-${recovery.attempt}.json` : 'fixture-created.json'),
+    { workspace: WORKSPACE, modelId: MODEL, flowId: FLOW, modelTuple: TUPLE, noAttachments: true }, { exclusive: true });
+}
+
+async function privateBytes(filename, limit = 1024 * 1024) {
+  const info = await lstat(filename);
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > limit) throw new Error('Recovery requires regular private evidence files.');
+  return readFile(filename);
+}
+const privateRecord = async filename => JSON.parse((await privateBytes(filename, 128 * 1024)).toString('utf8'));
+
+async function resumeOwnedFixture(context, options, fresh, deadline, clock) {
+  const directory = options.outputDirectory, manifestPath = path.join(directory, 'manifest.json');
+  const manifest = await privateRecord(manifestPath);
+  const databasePath = path.join(directory, 'control.sqlite');
+  const expectedWorkers = [
+    { cellId: 'parent-worker', worker: options.apps.parent, parentId: 'root', depth: 1 },
+    { cellId: 'child-worker', worker: options.apps.child, parentId: 'parent-worker', depth: 2 },
+  ];
+  if (manifest.format !== 'factory-cloud-pilot' || manifest.version !== 1 || manifest.runId !== options.runId
+      || manifest.databasePath !== databasePath || manifest.managedDirectory !== path.join(directory, 'managed-cloud')
+      || manifest.managedModulePath !== options.modulePath || manifest.org !== options.org
+      || manifest.workspace !== WORKSPACE || manifest.flowId !== FLOW || manifest.desiredState !== 'retired'
+      || digest(manifest.workers) !== digest(expectedWorkers) || digest(manifest.source) !== digest(fresh.evidence.source)) throw new Error('Recovery manifest does not identify the original run and source.');
+  const fixtureIntent = await privateRecord(path.join(directory, 'fixture-intent.json'));
+  if (digest(fixtureIntent) !== digest({ workspace: WORKSPACE, modelId: MODEL, flowId: FLOW, state: 'accepted' })) throw new Error('Original fixture intent is missing or changed.');
+  const originalEvidence = await privateRecord(path.join(directory, 'source-evidence.json'));
+  if (originalEvidence.fixtureAlreadyExists !== false || digest(originalEvidence.source) !== digest(fresh.evidence.source)
+      || digest(originalEvidence.image) !== digest(fresh.evidence.image)
+      || digest(originalEvidence.compatibility) !== digest(fresh.evidence.compatibility)
+      || digest(originalEvidence.sourceModel) !== digest(fresh.evidence.sourceModel)) throw new Error('Original source evidence no longer matches the selected source and image.');
+  const originalReport = await privateRecord(path.join(directory, 'report.json'));
+  if (originalReport.runId !== options.runId || originalReport.passed !== false || originalReport.failureStage !== 'fixture-creation'
+      || !Array.isArray(originalReport.outcomes) || originalReport.outcomes.length !== 0) throw new Error('Only an original pre-cloud fixture failure can be resumed.');
+  const proofPath = path.join(directory, 'fixture-reconciliation.json');
+  const proofBytes = await privateBytes(proofPath, 128 * 1024), proof = JSON.parse(proofBytes.toString('utf8'));
+  if (proof.format !== 'factory-fixture-reconciliation' || proof.version !== 1 || proof.runId !== options.runId
+      || proof.sourceInstanceId !== fresh.source.instanceId || proof.workspace !== WORKSPACE
+      || proof.workspaceCreation?.status !== 201 || !/^[a-f0-9]{64}$/.test(proof.workspaceCreation?.sha256 ?? '')
+      || proof.missingModel !== true || proof.missingFlow !== true || !fresh.evidence.fixtureAlreadyExists
+      || typeof proof.workspaceCreation.responsePath !== 'string' || !path.isAbsolute(proof.workspaceCreation.responsePath)) throw new Error('An explicit original-workspace creation proof is required.');
+  const relative = path.relative(directory, proof.workspaceCreation.responsePath);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('Creation response evidence must remain inside the original private run directory.');
+  const responseBytes = await privateBytes(proof.workspaceCreation.responsePath);
+  const workspace = JSON.parse(responseBytes.toString('utf8')).workspace;
+  if (hash(responseBytes) !== proof.workspaceCreation.sha256 || workspace?.name !== WORKSPACE
+      || workspace.isDefault !== false || !Array.isArray(workspace.roots) || workspace.roots.length !== 0) throw new Error('Creation response does not prove the owned empty fixture workspace.');
+  const inventory = await fixtureInventory(context, fresh.source);
+  const control = new FactoryControl(databasePath, { clock });
+  let lock, lockId, didResume = false;
+  const lockPath = path.join(directory, 'fixture-resume.lock');
+  const release = async () => {
+    if (!lock) return;
+    await lock.close(); lock = null;
+    if ((await privateRecord(lockPath)).lockId !== lockId) throw new Error('Recovery lock identity changed.');
+    await unlink(lockPath);
+  };
+  try {
+    if (control.control().status !== 'paused' || control.status().effects.length !== 0) throw new Error('Recovery requires a paused original controller with zero effects.');
+    lockId = randomUUID(); lock = await open(lockPath, 'wx', 0o600);
+    await lock.writeFile(JSON.stringify({ runId: options.runId, lockId, runnerPid: process.pid })); await lock.sync();
+    const attempt = control.db.prepare("SELECT count(*) AS count FROM events WHERE type='fixture_recovery_resumed'").get().count + 1;
+    await privateJson(path.join(directory, `manifest-before-resume-${attempt}.json`), manifest, { exclusive: true });
+    await privateJson(path.join(directory, `source-evidence-resumed-${attempt}.json`), fresh.evidence, { exclusive: true });
+    const resumedAt = clock(); deadline.value = resumedAt + PILOT_LIMITS.durationMs;
+    const priorEpoch = control.control().epoch;
+    const resumed = { attempt, inventory, proofSha256: hash(proofBytes), resumedAt, release };
+    await privateJson(path.join(directory, `fixture-resume-intent-${attempt}.json`),
+      { runId: options.runId, sourceInstanceId: fresh.source.instanceId, proofSha256: resumed.proofSha256, priorEpoch, attempt, resumedAt }, { exclusive: true });
+    control.transaction(() => {
+      if (control.control().status !== 'paused' || control.db.prepare('SELECT count(*) AS count FROM effects').get().count !== 0) throw new Error('Recovery eligibility changed.');
+      control.db.prepare("UPDATE control SET status='active',epoch=epoch+1 WHERE id=1").run();
+      control.event('fixture_recovery_resumed', options.runId, { attempt, proofSha256: resumed.proofSha256, sourceInstanceId: fresh.source.instanceId, priorEpoch, controlEpoch: priorEpoch + 1 });
+    });
+    didResume = true;
+    manifest.originalStartedAt ??= manifest.startedAt; manifest.originalDeadline ??= manifest.deadline;
+    Object.assign(manifest, { startedAt: resumedAt, deadline: deadline.value, resumedAt, resumeAttempt: attempt, runnerPid: process.pid, stage: 'fixture-recovery-validated' });
+    await privateJson(manifestPath, manifest);
+    return { manifest, source: fresh.source, evidence: originalEvidence, control, ...resumed };
+  } catch (error) {
+    try { if (didResume && control.control().status === 'active') control.pause(); } catch {}
+    control.close(); await release(); throw error;
+  }
 }
 
 /** Opt-in live pilot. All cloud changes pass durable admission; unknown effects are never replayed. */
 export async function runCloudPilot(input, dependencies = {}) {
+  if (input?.resumeFixture === true && input?.execute !== true) throw new Error('Fixture recovery requires explicit execution.');
   if (input?.execute !== true) return prepareCloudPilot(input, dependencies);
+  if (typeof dependencies.paidAdmission !== 'function') throw new Error('Execution requires a shared paidAdmission callback.');
   const options = optionsFor(input), clock = dependencies.clock ?? Date.now;
-  const startedAt = clock(), deadline = { value: startedAt + PILOT_LIMITS.durationMs };
+  let startedAt = clock(); const deadline = { value: startedAt + PILOT_LIMITS.durationMs };
   const context = await contextFor(options, dependencies, deadline);
   const manifestPath = path.join(options.outputDirectory, 'manifest.json');
-  if (await exists(manifestPath)) return { mode: 'observe-existing', requiresReconciliation: true,
+  const manifestExists = await exists(manifestPath);
+  if (manifestExists && options.resumeFixture !== true) return { mode: 'observe-existing', requiresReconciliation: true,
     reason: 'A durable pilot intent already exists. No resources, configuration or model calls were replayed.', manifestPath };
-  const { source, evidence } = await sourceEvidence(context, options);
-  if (evidence.fixtureAlreadyExists) throw new Error('An existing factory-pilot workspace must not be adopted or overwritten.');
+  if (options.resumeFixture === true && !manifestExists) throw new Error('Fixture recovery requires the original manifest.');
+  const fresh = await sourceEvidence(context, options);
+  if (fresh.evidence.fixtureAlreadyExists && options.resumeFixture !== true) throw new Error('An existing factory-pilot workspace must not be adopted or overwritten.');
   await context.protectDirectory(options.outputDirectory);
   await context.protectDirectory(path.join(options.outputDirectory, 'responses'));
   await context.protectDirectory(path.join(options.outputDirectory, 'managed-cloud'));
   const databasePath = path.join(options.outputDirectory, 'control.sqlite');
-  if (await exists(databasePath)) throw new Error('An existing control ledger must not be adopted.');
-  const manifest = { format: 'factory-cloud-pilot', version: 1, runId: options.runId, databasePath,
+  if (options.resumeFixture !== true && await exists(databasePath)) throw new Error('An existing control ledger must not be adopted.');
+  const recovery = options.resumeFixture === true ? await resumeOwnedFixture(context, options, fresh, deadline, clock) : null;
+  const source = recovery?.source ?? fresh.source, evidence = recovery?.evidence ?? fresh.evidence;
+  if (recovery) startedAt = recovery.resumedAt;
+  const manifest = recovery?.manifest ?? { format: 'factory-cloud-pilot', version: 1, runId: options.runId, databasePath,
     managedDirectory: path.join(options.outputDirectory, 'managed-cloud'), managedModulePath: options.modulePath,
     org: 'personal', workspace: WORKSPACE, flowId: FLOW, source: evidence.source,
     startedAt, deadline: deadline.value, desiredState: 'retired', stage: 'accepted', runnerPid: process.pid,
@@ -187,9 +334,11 @@ export async function runCloudPilot(input, dependencies = {}) {
       { cellId: 'parent-worker', worker: options.apps.parent, parentId: 'root', depth: 1 },
       { cellId: 'child-worker', worker: options.apps.child, parentId: 'parent-worker', depth: 2 },
     ] };
-  await privateJson(manifestPath, manifest, { exclusive: true });
-  await privateJson(path.join(options.outputDirectory, 'source-evidence.json'), evidence, { exclusive: true });
-  const control = new FactoryControl(databasePath, { clock });
+  if (!recovery) {
+    await privateJson(manifestPath, manifest, { exclusive: true });
+    await privateJson(path.join(options.outputDirectory, 'source-evidence.json'), evidence, { exclusive: true });
+  }
+  const control = recovery?.control ?? new FactoryControl(databasePath, { clock });
   const notifications = dependencies.notify ?? (() => {});
   const stage = async (name, { bestEffort = false } = {}) => {
     manifest.stage = name; manifest.observedAt = clock();
@@ -217,7 +366,8 @@ export async function runCloudPilot(input, dependencies = {}) {
     timer = setInterval(() => {
       try { for (const cell of control.status().cells.filter(cell => cell.status === 'ready' && cell.role !== 'watcher')) control.heartbeat(cell.id); } catch {}
     }, 10_000); timer.unref();
-    remaining(); await stage('fixture-creation'); await createFixture(context, options, source, options.outputDirectory);
+    remaining(); await stage('fixture-creation'); await createFixture(context, options, source, options.outputDirectory, recovery);
+    if (recovery) await fixtureInventory(context, source);
     await stage('source-preflight');
     const deploymentInput = app => ({ source: options.source, workspace: WORKSPACE, flowIds: [FLOW], org: 'personal',
       region: 'iad', app, memoryMb: 2048, volumeGb: 1, timeoutMs: remaining(), maxSnapshotBytes: 32 * 1024 * 1024,
@@ -229,7 +379,10 @@ export async function runCloudPilot(input, dependencies = {}) {
       const request = { cellId, app, source: options.source, workspace: WORKSPACE, image: evidence.image.image };
       await stage(`provision-${slot}`);
       const result = await executeEffect(control, lease, { key: `provision-${slot}`, kind: 'provision', request },
-        () => context.adapter.provision(deploymentInput(app)));
+        async () => {
+          await dependencies.paidAdmission({ runId: options.runId, provider: 'fly', operation: 'provision', worker: app, ceilingCents: FLY_PAID_CEILING_CENTS });
+          return context.adapter.provision(deploymentInput(app));
+        });
       outcomes.push({ key: result.effect.key, state: result.effect.state, receipt: result.effect.receipt });
       if (result.effect.state !== 'succeeded' || result.effect.receipt?.worker !== app || result.effect.receipt?.state !== 'ready') throw new Error('Provisioning is unconfirmed.');
       control.enrollCell(cellId);
@@ -241,7 +394,10 @@ export async function runCloudPilot(input, dependencies = {}) {
       await stage(`call-${slot}`);
       const result = await executeEffect(control, lease, { key: `call-${slot}`, kind: 'flow_call',
         request: { worker: options.apps[slot], flowId: FLOW, conversationId, promptSha256: hash(prompt), timeoutMs: input.timeoutMs } },
-      () => context.adapter.call(options.apps[slot], input), { outputPath });
+      async () => {
+        await dependencies.paidAdmission({ runId: options.runId, provider: 'fly', operation: 'flow_call', worker: options.apps[slot], ceilingCents: FLY_PAID_CEILING_CENTS });
+        return context.adapter.call(options.apps[slot], input);
+      }, { outputPath });
       outcomes.push({ key: result.effect.key, state: result.effect.state, receipt: result.effect.receipt });
       if (result.effect.state !== 'succeeded') throw new Error('Flow call is unconfirmed.');
       return completionObject(await readFile(outputPath, 'utf8'));
@@ -300,6 +456,7 @@ export async function runCloudPilot(input, dependencies = {}) {
   const allRetired = cleanup.length > 0 && cleanup.every(item => item.state === 'succeeded' && item.receipt?.state === 'destroyed');
   const state = control.pause();
   const report = { schemaVersion: 1, mode: 'live-pilot', runId: options.runId, passed: passed && allRetired,
+    ...(recovery ? { resumedFixture: true, resumeAttempt: recovery.attempt, reconciliationProofSha256: recovery.proofSha256 } : {}),
     source: evidence, outcomes, retirement: cleanup, allRecordedWorkersRetired: allRetired,
     candidateVerified: passed, ...(failureStage ? { failureStage } : {}), elapsedMs: clock() - startedAt,
     limits: PILOT_LIMITS, unresolvedEffects: state.unresolvedEffects,
@@ -310,17 +467,19 @@ export async function runCloudPilot(input, dependencies = {}) {
       'No native peer autonomy, cross-host takeover or synchronization is claimed.'],
     directory: options.outputDirectory };
   try {
-    await privateJson(path.join(options.outputDirectory, 'report.json'), report);
+    const reportName = recovery ? recovery.attempt === 1 ? 'report-resumed.json' : `report-resumed-${recovery.attempt}.json` : 'report.json';
+    await privateJson(path.join(options.outputDirectory, reportName), report, { exclusive: !!recovery });
     await stage(allRetired ? 'retired' : 'retirement-unconfirmed', { bestEffort: true });
-  } finally { control.close(); }
+  } finally { control.close(); if (recovery) await recovery.release(); }
   return report;
 }
 
 function parseArguments(values) {
-  const map = { '--run-id': 'runId', '--output': 'outputDirectory', '--module-path': 'modulePath', '--source': 'source' };
+  const map = { '--run-id': 'runId', '--output': 'outputDirectory', '--module-path': 'modulePath', '--source': 'source', '--spending-ledger': 'spendingLedger' };
   const options = {};
   for (let index = 0; index < values.length; index++) {
     if (values[index] === '--execute' && options.execute === undefined) { options.execute = true; continue; }
+    if (values[index] === '--resume-fixture' && options.resumeFixture === undefined) { options.resumeFixture = true; continue; }
     const key = map[values[index]];
     if (!key || options[key] !== undefined || !values[index + 1] || values[index + 1].startsWith('--')) throw new Error('Invalid pilot arguments.');
     options[key] = values[++index];
@@ -329,8 +488,12 @@ function parseArguments(values) {
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  let paidGate;
   try {
-    const report = await runCloudPilot(parseArguments(process.argv.slice(2)), {
+    const options = parseArguments(process.argv.slice(2));
+    if (options.execute) paidGate = createFlySpendingGate({ ledgerPath: options.spendingLedger, reservationId: options.runId });
+    const report = await runCloudPilot(options, {
+      ...(paidGate ? { paidAdmission: paidGate.paidAdmission } : {}),
       notify: value => process.stdout.write(`${JSON.stringify({ type: 'pilot-stage', ...value })}\n`),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -338,5 +501,5 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   } catch {
     process.stderr.write('Cloud pilot could not proceed. Preserve its private ledger and reconcile recorded attempts before retrying.\n');
     process.exitCode = 1;
-  }
+  } finally { paidGate?.close(); }
 }

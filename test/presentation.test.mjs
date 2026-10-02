@@ -7,6 +7,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { FactoryControl } from '../src/control.mjs';
+import { SpendingLedger } from '../src/spending.mjs';
 import { startPresentationServer, encodeCursor, decodeCursor, validateViewerToken, loadViewerToken } from '../src/presentation.mjs';
 
 const runFile = promisify(execFile);
@@ -25,8 +26,9 @@ async function fixture(t, extra = {}) {
   control.reserveCell({ cellId: 'nested-worker', parentId: 'developer-a', budgetCents: 2000, purpose: 'Alternative candidate' });
   control.reserveCell({ cellId: 'verifier', role: 'verifier', budgetCents: 0, purpose: 'Check candidate independently' });
   control.enrollCell('verifier');
+  const configuration = typeof extra === 'function' ? extra({ directory, databasePath }) : extra;
   const server = await startPresentationServer({ databasePath, factoryId: 'flujo', token: TOKEN, port: 0,
-    buildRevision: 'a'.repeat(40), clock: () => now, eventPageSize: 2, ...extra });
+    buildRevision: 'a'.repeat(40), clock: () => now, eventPageSize: 2, ...configuration });
   const origin = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => {
     server.closeAllConnections();
@@ -40,7 +42,8 @@ async function fixture(t, extra = {}) {
     const response = await fetch(new URL(url, origin), { headers: { Authorization: `Bearer ${TOKEN}` }, redirect: 'error', ...options });
     return { response, body: await response.json() };
   }
-  return { directory, databasePath, control, server, origin, request, setNow(value) { now = value; } };
+  return { directory, databasePath, control, server, origin, request, spendingLedgerPath: configuration.spendingLedgerPath,
+    setNow(value) { now = value; } };
 }
 
 test('presentation authenticates reads, rejects commands and exposes no CORS contract', async t => {
@@ -168,6 +171,128 @@ test('heartbeat changes appear even when event revision is unchanged and reads d
   assert.equal(f.control.db.prepare('SELECT count(*) AS n FROM events').get().n, eventCount);
 });
 
+test('optional paid budget stays separate and observes independent ledger writes at unchanged controller revision', async t => {
+  const f = await fixture(t, ({ directory }) => ({ spendingLedgerPath: path.join(directory, 'spending.sqlite') }));
+  const ledger = new SpendingLedger(f.spendingLedgerPath, { clock: () => NOW });
+  try {
+    ledger.initialize({ limitCents: 10000, currency: 'USD' });
+    ledger.reserve({ reservationId: 'fly-run', provider: 'fly', ceilingCents: 1000 });
+    ledger.reserve({ reservationId: 'modal-run', provider: 'modal', ceilingCents: 3000 });
+    ledger.start('fly-run');
+    ledger.observe('fly-run', { chargedCents: 250, observedAt: NOW, evidenceDigest: 'f'.repeat(64) });
+    ledger.retire('fly-run', { evidenceDigest: 'e'.repeat(64) });
+    const first = (await f.request()).body;
+    const firstPaid = first.snapshot.paidBudget;
+    assert.equal(firstPaid.availability, 'available');
+    assert.equal(firstPaid.scope, 'registered-factory-paid-reservations');
+    assert.equal(firstPaid.basis, 'shared-paid-admission-ledger');
+    assert.equal(firstPaid.committedCents, 4000);
+    assert.equal(firstPaid.knownMeteredCents, 250);
+    assert.equal(firstPaid.meteredSpendCents, null);
+    assert.equal(firstPaid.billingIncomplete, true);
+    assert.equal(firstPaid.reservations.find(row => row.reservationId === 'fly-run').state, 'retired-meter-pending');
+    const script = `import { SpendingLedger } from ${JSON.stringify(new URL('../src/spending.mjs', import.meta.url).href)};
+      const ledger=new SpendingLedger(process.argv[1]);
+      try { ledger.settle('fly-run',{finalCents:300,evidenceDigest:'d'.repeat(64)});
+        ledger.start('modal-run'); ledger.observe('modal-run',{chargedCents:4000,observedAt:${NOW + 1},evidenceDigest:'c'.repeat(64)});
+        ledger.db.prepare('INSERT INTO spending_events(type,reservation_id,details,created_at) VALUES(?,?,?,?)')
+          .run('private_record','modal-run',JSON.stringify({body:${JSON.stringify(PRIVATE)},path:process.argv[1]}),${NOW + 1});
+      } finally { ledger.close(); }`;
+    await runFile(process.execPath, ['--input-type=module', '-e', script, f.spendingLedgerPath], { windowsHide: true, timeout: 10_000 });
+    f.setNow(NOW + 2);
+    const next = (await f.request()).body;
+    assert.equal(next.revision, first.revision);
+    assert.equal(next.cursor, first.cursor);
+    assert.deepEqual(next.snapshot.budget, first.snapshot.budget);
+    assert.ok(next.snapshot.paidBudget.revision > firstPaid.revision);
+    assert.notEqual(next.snapshot.paidBudget.observedAt, firstPaid.observedAt);
+    assert.equal(next.snapshot.paidBudget.committedCents, 4300);
+    assert.equal(next.snapshot.paidBudget.knownMeteredCents, 4300);
+    assert.equal(next.snapshot.paidBudget.meteredSpendCents, null);
+    assert.equal(next.snapshot.paidBudget.reservations.find(row => row.reservationId === 'modal-run').overCeilingCents, 1000);
+    for (const value of [PRIVATE, f.spendingLedgerPath, 'f'.repeat(64), 'retirementEvidenceDigest', 'details']) {
+      assert.equal(JSON.stringify(next.snapshot.paidBudget).includes(value), false, value);
+    }
+  } finally { ledger.close(); }
+});
+
+test('unconfigured or unavailable paid ledgers do not fabricate totals or create databases', async t => {
+  const unconfigured = await fixture(t);
+  assert.deepEqual((await unconfigured.request()).body.snapshot.paidBudget,
+    { availability: 'not-configured', scope: 'registered-factory-paid-reservations', observedAt: new Date(NOW).toISOString() });
+  const f = await fixture(t, ({ directory }) => ({ spendingLedgerPath: path.join(directory, 'never-created.sqlite') }));
+  assert.equal((await f.request('/v1/snapshot', { headers: {} })).response.status, 401);
+  const unavailable = await f.request();
+  assert.equal(unavailable.response.status, 200);
+  assert.deepEqual(unavailable.body.snapshot.paidBudget,
+    { availability: 'unavailable', scope: 'registered-factory-paid-reservations', observedAt: new Date(NOW).toISOString() });
+  await assert.rejects(fs.stat(f.spendingLedgerPath), { code: 'ENOENT' });
+  assert.equal((await f.request('/v1/snapshot?spending-ledger=C:/private.sqlite')).response.status, 400);
+  await assert.rejects(startPresentationServer({ databasePath: f.databasePath, spendingLedgerPath: 'relative.sqlite',
+    factoryId: 'flujo', token: TOKEN, port: 0 }), { code: 'PRESENTATION_INPUT_INVALID' });
+});
+
+test('paid figures and their independent revision are atomic during external ledger admission', async t => {
+  const f = await fixture(t, ({ directory }) => ({ spendingLedgerPath: path.join(directory, 'spending.sqlite') }));
+  const ledger = new SpendingLedger(f.spendingLedgerPath);
+  ledger.initialize({ limitCents: 10000, currency: 'USD' });
+  ledger.close();
+  const script = `import { SpendingLedger } from ${JSON.stringify(new URL('../src/spending.mjs', import.meta.url).href)};
+    const ledger=new SpendingLedger(process.argv[1]);
+    try { for(let i=0;i<30;i++) { ledger.reserve({reservationId:'run-'+i,provider:'fly',ceilingCents:10});
+      await new Promise(resolve=>setTimeout(resolve,2)); } } finally { ledger.close(); }`;
+  const writer = runFile(process.execPath, ['--input-type=module', '-e', script, f.spendingLedgerPath], { windowsHide: true, timeout: 10_000 });
+  for (let i = 0; i < 30; i++) {
+    const { response, body } = await f.request();
+    assert.equal(response.status, 200);
+    const paid = body.snapshot.paidBudget;
+    assert.equal(paid.availability, 'available');
+    assert.equal(paid.revision, 1 + paid.reservations.length);
+    assert.equal(paid.committedCents, paid.reservations.length * 10);
+  }
+  await writer;
+  const completed = (await f.request()).body.snapshot.paidBudget;
+  assert.equal(completed.revision, 31);
+  assert.equal(completed.reservations.length, 30);
+});
+
+test('paid projection validates schema and row state, detects revision regressions and writes no ledger data', async t => {
+  const f = await fixture(t, ({ directory }) => ({ spendingLedgerPath: path.join(directory, 'spending.sqlite') }));
+  const ledger = new SpendingLedger(f.spendingLedgerPath, { clock: () => NOW });
+  try {
+    ledger.initialize({ limitCents: 10000, currency: 'USD' });
+    ledger.reserve({ reservationId: 'pending', provider: 'fly', ceilingCents: 1000 });
+    const events = ledger.db.prepare('SELECT * FROM spending_events').all();
+    const reservations = ledger.db.prepare('SELECT * FROM spending_reservations').all();
+    const mainBefore = await fs.readFile(f.spendingLedgerPath), walBefore = await fs.readFile(`${f.spendingLedgerPath}-wal`);
+    const good = await f.request();
+    assert.equal(good.response.status, 200);
+    assert.equal(good.body.snapshot.paidBudget.availability, 'available');
+    assert.deepEqual(ledger.db.prepare('SELECT * FROM spending_events').all(), events);
+    assert.deepEqual(ledger.db.prepare('SELECT * FROM spending_reservations').all(), reservations);
+    assert.deepEqual(await fs.readFile(f.spendingLedgerPath), mainBefore);
+    assert.deepEqual(await fs.readFile(`${f.spendingLedgerPath}-wal`), walBefore);
+    ledger.db.exec('PRAGMA user_version=2');
+    assert.equal((await f.request()).body.snapshot.paidBudget.availability, 'unavailable');
+    ledger.db.exec('PRAGMA user_version=1; CREATE TABLE unexpected(secret TEXT)');
+    assert.equal((await f.request()).body.snapshot.paidBudget.availability, 'unavailable');
+    ledger.db.exec('DROP TABLE unexpected');
+    ledger.db.prepare('UPDATE spending_reservations SET provider=? WHERE id=?').run('C:/private-account', 'pending');
+    const malformed = await f.request();
+    assert.equal(malformed.response.status, 200);
+    assert.equal(malformed.body.snapshot.paidBudget.availability, 'unavailable');
+    assert.equal(JSON.stringify(malformed.body).includes('private-account'), false);
+    ledger.db.prepare('UPDATE spending_reservations SET provider=? WHERE id=?').run('fly', 'pending');
+    ledger.db.prepare('UPDATE spending_reservations SET started_at=? WHERE id=?').run(NOW, 'pending');
+    assert.equal((await f.request()).body.snapshot.paidBudget.availability, 'unavailable');
+    ledger.db.prepare('UPDATE spending_reservations SET started_at=NULL WHERE id=?').run('pending');
+    ledger.db.exec('DELETE FROM spending_events WHERE seq>1');
+    assert.equal((await f.request()).body.snapshot.paidBudget.availability, 'unavailable');
+  } finally { ledger.close(); }
+  const foreign = await fixture(t, ({ databasePath }) => ({ spendingLedgerPath: databasePath }));
+  assert.equal((await foreign.request()).body.snapshot.paidBudget.availability, 'unavailable');
+});
+
 test('missing or unsupported database returns unavailable without creating an empty database', async t => {
   const f = await fixture(t);
   f.control.db.exec('PRAGMA user_version=2');
@@ -247,7 +372,7 @@ test('private token files require owner-only permissions and reject hard links',
 test('CLI listens only on loopback and prints neither credentials nor database paths', async t => {
   const f = await fixture(t);
   const child = spawn(process.execPath, [path.resolve('bin/serve.mjs'), '--database', f.databasePath,
-    '--factory-id', 'flujo', '--port', '0'], { env: { ...process.env, FACTORY_VIEWER_TOKEN: TOKEN }, windowsHide: true,
+    '--spending-ledger', path.join(f.directory, 'missing-paid.sqlite'), '--factory-id', 'flujo', '--port', '0'], { env: { ...process.env, FACTORY_VIEWER_TOKEN: TOKEN }, windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = '';
   child.stdout.on('data', chunk => { stdout += chunk; });
@@ -266,6 +391,7 @@ test('CLI listens only on loopback and prints neither credentials nor database p
     assert.equal(announcement.capabilities.commands, false);
     const response = await fetch(`http://127.0.0.1:${announcement.listening.port}/v1/snapshot`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     assert.equal(response.status, 200);
+    assert.equal((await response.json()).snapshot.paidBudget.availability, 'unavailable');
     assert.equal((stdout + stderr).includes(TOKEN), false);
     assert.equal((stdout + stderr).includes(f.directory), false);
   } finally {

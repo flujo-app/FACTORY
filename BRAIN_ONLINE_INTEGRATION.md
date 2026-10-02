@@ -105,10 +105,52 @@ controller filesystem paths into public URLs.
 
 ## Run status
 
-The read-only server is being implemented in `src/presentation.mjs` and
-`bin/serve.mjs`. Root will record the verified launch command and live endpoint
-here after the tests and actual server check pass. No running HTTP endpoint is
-claimed by this initial contract.
+The read-only server is running at `http://127.0.0.1:4343`, factory ID
+`factory-live-pilot`, build `3c5686254dfb27ab6731fbb494b44432a7e74fc1`.
+The live check at 2026-10-02T23:15:51Z confirmed unauthenticated 401,
+authenticated snapshot/events 200, and write 405. This is a local process;
+automatic restart and a remotely accessible service are separate work.
+
+The private bearer file is
+`C:\Users\Moe\Documents\ChatGPT\FACTORY\.factory\viewer\credential.json`.
+It contains `{ "token": "..." }` under owner-only Windows permissions. Load it
+only into the server-side brain-online adapter; never expose it to its browser,
+Git, logs or process arguments. FACTORY's `loadViewerToken` checks file ownership,
+ACLs and file identity. No credential value appears in this contract.
+
+The verified launch command from the FACTORY directory is:
+
+```powershell
+& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --port 4343 --build-revision 3c5686254dfb27ab6731fbb494b44432a7e74fc1
+```
+
+Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
+and $30 Modal, with $60 unallocated. The current HTTP budget DTO reports controller
+logical allocation only. The optional `snapshot.paidBudget` extension reads the
+separate paid ledger when the server starts with `--spending-ledger ABSOLUTE_PATH`.
+It has its own read transaction, `revision` and `observedAt`; paid writes do not
+change the controller cursor. Refresh it even when the controller revision stays
+the same. No actual provider charges are inferred from reservations.
+
+The available paid DTO exposes `availability: "available"`, `schemaVersion: 1`,
+`scope: "registered-factory-paid-reservations"`,
+`basis: "shared-paid-admission-ledger"`, `currency: "USD"`, `limitCents`,
+`committedCents`, `unallocatedCents`, `overCommittedCents`, `knownMeteredCents`,
+`meteredSpendCents`, `billingIncomplete`, `revision`, `observedAt`, and
+`reservations`. Each reservation exposes `reservationId`, `provider`, `state`,
+`ceilingCents`, `heldCents`, `chargedCents`, `finalCents`, `overCeilingCents`, and
+ISO/null `createdAt`, `startedAt`, `retiredAt`, `settledAt`, `cancelledAt`,
+`observedAt`. No digests, raw invoices, account identifiers or paths are exposed.
+
+`knownMeteredCents` is a lower bound from recorded observations;
+`meteredSpendCents` stays null while a started reservation has incomplete final
+billing. `unallocatedCents` describes admission capacity. These figures cover
+registered factory reservations, not an entire provider account. No App-specific
+provider hard cap is implied. Missing configuration or unreadable paid state
+produces `{availability: "not-configured" | "unavailable", scope, observedAt}`
+without invented totals, while the readable controller snapshot remains usable.
+The first visual PR may ignore this optional extension until its display contract
+is independently qualified.
 
 The first Fly launch stopped during local fixture creation before any cloud
 provisioning or model call. Its ledger is real; the cloud proof remains open.

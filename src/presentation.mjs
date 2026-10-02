@@ -13,6 +13,13 @@ const HASH = /^[a-f0-9]{64}$/;
 const CAPABILITIES = Object.freeze({ snapshot: true, events: true, commands: false });
 const OPEN_EFFECTS = new Set(['accepted', 'running', 'unknown']);
 const ROW_LIMIT = 10_000;
+const PAID_SCOPE = 'registered-factory-paid-reservations';
+const SPENDING_COLUMNS = Object.freeze({
+  spending_policy: ['id', 'limit_cents', 'currency'],
+  spending_reservations: ['id', 'provider', 'ceiling_cents', 'state', 'charged_cents', 'observed_at', 'observation_digest',
+    'retirement_digest', 'final_cents', 'final_digest', 'created_at', 'started_at', 'retired_at', 'settled_at', 'cancelled_at'],
+  spending_events: ['seq', 'type', 'reservation_id', 'details', 'created_at'],
+});
 
 export class PresentationError extends Error {
   constructor(code, status = 503) { super('Factory presentation state is unavailable.'); this.code = code; this.status = status; }
@@ -27,6 +34,13 @@ function hash(value) { requireValue(typeof value === 'string' && HASH.test(value
 function iso(value) { integer(value); const result = new Date(value); requireValue(Number.isFinite(result.getTime())); return result.toISOString(); }
 function optionalJson(value) { if (value === null) return null; const result = JSON.parse(value); requireValue(result && typeof result === 'object' && !Array.isArray(result)); return result; }
 function member(value, allowed) { requireValue(allowed.includes(value)); return value; }
+function sumCents(values) {
+  const total = values.reduce((sum, value) => sum + BigInt(integer(value)), 0n);
+  requireValue(total <= BigInt(Number.MAX_SAFE_INTEGER));
+  return Number(total);
+}
+function nullableInteger(value) { return value === null ? null : integer(value); }
+function nullableIso(value) { return value === null ? null : iso(value); }
 
 export function validateViewerToken(value) {
   requireValue(typeof value === 'string' && /^[A-Za-z0-9_-]{32,256}$/.test(value)
@@ -154,6 +168,63 @@ function readSnapshot(db) {
     unresolvedEffects, effectsDrained: unresolvedEffects === 0, workerQuiescence: 'unverified' };
 }
 
+// This reader deliberately does not import the writable ledger or accept client-selected paths.
+function readPaidBudget(databasePath, observedAt, minimumRevision) {
+  const unavailable = availability => ({ availability, scope: PAID_SCOPE, observedAt });
+  if (databasePath === undefined) return unavailable('not-configured');
+  let db;
+  try {
+    const file = lstatSync(databasePath);
+    requireValue(file.isFile() && !file.isSymbolicLink());
+    db = new DatabaseSync(databasePath, { readOnly: true });
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=2000; BEGIN;');
+    requireValue(db.prepare('PRAGMA user_version').get().user_version === 1);
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    requireValue(tables.length === 3 && tables.every(row => Object.hasOwn(SPENDING_COLUMNS, row.name)));
+    for (const [table, columns] of Object.entries(SPENDING_COLUMNS)) {
+      const actual = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
+      requireValue(actual.length === columns.length && actual.every((name, index) => name === columns[index]));
+    }
+    const policies = db.prepare('SELECT id,limit_cents,currency FROM spending_policy LIMIT 2').all();
+    requireValue(policies.length === 1 && policies[0].id === 1 && policies[0].currency === 'USD');
+    const limitCents = integer(policies[0].limit_cents);
+    const revision = integer(db.prepare('SELECT coalesce(max(seq),0) AS sequence FROM spending_events').get().sequence, 1);
+    requireValue(revision >= minimumRevision);
+    const rows = db.prepare(`SELECT id,provider,ceiling_cents,state,charged_cents,observed_at,final_cents,
+      created_at,started_at,retired_at,settled_at,cancelled_at
+      FROM spending_reservations ORDER BY created_at,id LIMIT ?`).all(ROW_LIMIT + 1);
+    requireValue(rows.length <= ROW_LIMIT);
+    const reservations = rows.map(row => {
+      const state = member(row.state, ['reserved', 'started', 'retired-meter-pending', 'settled', 'cancelled']);
+      const chargedCents = nullableInteger(row.charged_cents), finalCents = nullableInteger(row.final_cents);
+      const ceilingCents = integer(row.ceiling_cents);
+      requireValue(typeof row.provider === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(row.provider));
+      requireValue((chargedCents === null) === (row.observed_at === null));
+      const hasStarted = ['started', 'retired-meter-pending', 'settled'].includes(state);
+      const hasRetired = ['retired-meter-pending', 'settled'].includes(state);
+      requireValue((row.started_at !== null) === hasStarted && (row.retired_at !== null) === hasRetired
+        && (row.settled_at !== null) === (state === 'settled') && (row.cancelled_at !== null) === (state === 'cancelled')
+        && (finalCents !== null) === (state === 'settled'));
+      requireValue(hasStarted || chargedCents === null);
+      requireValue(state !== 'settled' || finalCents >= (chargedCents ?? 0));
+      const heldCents = state === 'cancelled' ? 0 : state === 'settled' ? finalCents : Math.max(ceilingCents, chargedCents ?? 0);
+      return { reservationId: identifier(row.id), provider: row.provider, state, ceilingCents, heldCents, chargedCents, finalCents,
+        overCeilingCents: Math.max(0, (finalCents ?? chargedCents ?? 0) - ceilingCents),
+        createdAt: iso(row.created_at), startedAt: nullableIso(row.started_at), retiredAt: nullableIso(row.retired_at),
+        settledAt: nullableIso(row.settled_at), cancelledAt: nullableIso(row.cancelled_at), observedAt: nullableIso(row.observed_at) };
+    });
+    const committedCents = sumCents(reservations.map(row => row.heldCents));
+    const knownMeteredCents = sumCents(reservations.map(row => row.finalCents ?? row.chargedCents ?? 0));
+    const billingIncomplete = reservations.some(row => ['started', 'retired-meter-pending'].includes(row.state));
+    db.exec('COMMIT');
+    return { availability: 'available', schemaVersion: 1, scope: PAID_SCOPE, basis: 'shared-paid-admission-ledger',
+      currency: 'USD', limitCents, committedCents, unallocatedCents: Math.max(0, limitCents - committedCents),
+      overCommittedCents: Math.max(0, committedCents - limitCents), knownMeteredCents,
+      meteredSpendCents: billingIncomplete ? null : knownMeteredCents, billingIncomplete, revision, observedAt, reservations };
+  } catch { return unavailable('unavailable'); }
+  finally { db?.close(); }
+}
+
 function envelope({ factoryId, observedAt, revision, buildRevision }, payload) {
   return { schemaVersion: 1, factoryId, observedAt, revision, buildRevision, cursor: encodeCursor(revision),
     scope: 'local-coordinator', capabilities: CAPABILITIES, ...payload };
@@ -167,13 +238,15 @@ function jsonResponse(response, status, payload) {
 }
 
 /** Operator-only single-authority projection. No command endpoint, tenancy or customer isolation claim. */
-export function createPresentationServer({ databasePath, factoryId, token, buildRevision = 'unknown', clock = Date.now, eventPageSize = 100 } = {}) {
+export function createPresentationServer({ databasePath, spendingLedgerPath, factoryId, token, buildRevision = 'unknown', clock = Date.now, eventPageSize = 100 } = {}) {
   requireValue(typeof databasePath === 'string' && path.isAbsolute(databasePath), 'PRESENTATION_INPUT_INVALID', 400);
+  requireValue(spendingLedgerPath === undefined || (typeof spendingLedgerPath === 'string' && path.isAbsolute(spendingLedgerPath)), 'PRESENTATION_INPUT_INVALID', 400);
   identifier(factoryId); validateViewerToken(token);
   requireValue(buildRevision === 'unknown' || /^[a-f0-9]{40}$/.test(buildRevision), 'PRESENTATION_INPUT_INVALID', 400);
   requireValue(Number.isSafeInteger(eventPageSize) && eventPageSize >= 1 && eventPageSize <= 500, 'PRESENTATION_INPUT_INVALID', 400);
   const tokenDigest = createHash('sha256').update(token).digest();
   let highestRevision = 0;
+  let highestPaidRevision = 0;
   const server = http.createServer({ maxHeaderSize: 8192 }, (request, response) => {
     try {
       const authorization = request.headers.authorization;
@@ -207,6 +280,11 @@ export function createPresentationServer({ databasePath, factoryId, token, build
         });
         return envelope(common, { events, cursor: encodeCursor(events.at(-1)?.seq ?? after), latestCursor: encodeCursor(revision), hasMore: rows.length > limit });
       });
+      if (operation === 'snapshot') {
+        const paidBudget = readPaidBudget(spendingLedgerPath, iso(clock()), highestPaidRevision);
+        payload.snapshot.paidBudget = paidBudget;
+        if (paidBudget.availability === 'available') highestPaidRevision = Math.max(highestPaidRevision, paidBudget.revision);
+      }
       requireValue(!JSON.stringify(payload).includes(token));
       highestRevision = Math.max(highestRevision, payload.revision);
       jsonResponse(response, 200, payload);

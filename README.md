@@ -154,29 +154,99 @@ evidence, not a running-worker acceptance result.
 
 ## Planned isolated live pilot
 
-The spending intent is **at most US$100**. The local `budgetCents` and child
+The spending intent is **at most US$100 across the paid cloud work**, including
+the Modal/open-weight model path. `src/spending.mjs` conserves one durable USD
+allowance across providers, using integer cents and serialized admission. The
+first experiment reserves $10 for Fly and $30 for Modal, leaving $60 unallocated.
+Each paid dispatch rechecks its reservation; known experiment or global exhaustion
+blocks new paid work. Owned cleanup remains possible. Retirement keeps funds held
+until final billing evidence arrives; it cannot release uncertain charges. The
+ledger covers registered factory spending, not unrelated provider-account costs.
+
+The local `budgetCents` and child
 allocations conserve delegated budget; they do not meter actual compute,
 inference, storage or provider charges and are not a provider-side billing stop.
-The live run needs explicit resource/time limits and observed cleanup as well as
-budget records.
+An experiment needs explicit resource/time limits and observed cleanup as well as
+budget records. Overall factory work has no time limit; the limits below apply to
+this first Fly experiment.
 
 The initial live slice is bounded to **two temporary cloud workers**, delegation
-depth **two**, Flow-call timeout **180 seconds**, and a **15-minute deadline**.
+depth **two**, Flow-call timeout **180 seconds**, and a **15-minute work deadline**.
 It uses a dedicated `factory-pilot` workspace with a minimal Flow and no attached
-MCP tools. The first worker produces a schema-validated child request. The local
-coordinator admits and provisions that child from its parent's allocation. The
-child returns a bounded static JSON candidate that is checked independently.
+MCP tools. The first worker produces a bounded function candidate and a
+schema-validated child request. The local coordinator admits and provisions that
+child from its parent's allocation. The child returns a JSON review, and the local
+verifier checks the candidate's exact pure-function grammar and fixed acceptance
+table. Generated code is preserved as an artifact and is never executed locally.
+
+The work deadline bounds new admission and individual HTTP/Fly commands. It does
+not guarantee a global cancellation or shutdown time. Owned cleanup has a separate
+five-minute command deadline.
+
+The live runner prepares read-only unless `--execute` is supplied:
+
+```powershell
+$cloudPilotDirectory = Join-Path (Get-Location) '.factory\cloud-pilot-01'
+node scripts/cloud-pilot.mjs `
+  --run-id 'cloud-pilot-01' `
+  --output $cloudPilotDirectory `
+  --module-path 'C:\Users\Moe\Documents\GitHub\flujo-cloud\lib\managed.mjs' `
+  --source 'http://127.0.0.1:4200'
+```
+
+Use the registered native source origin. Add `--execute` and
+`--spending-ledger` with the absolute path of the shared `.factory\spending.sqlite`
+to this same invocation
+to run the isolated pilot. The runner refuses to adopt an existing fixture
+workspace. An existing manifest returns `observe-existing` without reprovisioning
+or replaying model calls; inspect its original attempts before further recovery.
+Exit code `2` means the live proof failed or an existing run needs reconciliation.
+An explicit `--resume-fixture` is limited to the original pre-cloud fixture
+failure: original source/image/manifest, empty owned workspace creation proof,
+fixed model/Flow inventory, paused controller and zero historical effects are
+required. Recovery preserves its old report and app identities. It is not a
+general cloud retry.
+The runner verifies that the source's default agent uses the approved
+`gpt-6-astra / codex / codex-cli` model tuple; it does not change that source
+binding. The dedicated source workspace remains available for inspection after
+cloud retirement.
 
 This qualifies gateway-mediated delegation if it succeeds. Native autonomous
 child provisioning, cross-host ownership, mutual monitoring, source branch
 development and fleet learning each still need their own proofs.
 
-Owned retirement belongs in the runner's `finally` path and uses separate root
-cleanup tasks so a failed work task cannot block teardown. `ManagedCloud.down`
-verifies the deployment's journal and cloud ownership before deleting its
-dedicated application. A failed or uncertain retirement must remain visible with
-its original identities and recovery records. Deadline expiry alone is not
-evidence that a resource was retired; recovery must inspect and reconcile it.
+Owned retirement belongs in the runner's `finally` path and uses a narrow trusted
+local cleanup authority. That authority can retire an app while admission is
+paused only when the app is bound to this controller's original provisioning
+intent. It cannot grant a general work lease or resume dispatch. Retirement
+identity validation requires the matching app and a terminal destroyed result;
+uncertain cleanup remains unresolved and cannot be blindly retried under another
+key. Existing unresolved work records remain intact.
+
+`ManagedCloud.down` verifies the deployment's journal and cloud ownership before
+deleting its dedicated application. A failed or uncertain retirement must remain
+visible with its original identities and recovery records. Deadline expiry alone
+is not evidence that a resource was retired; recovery must inspect and reconcile
+it. A separate same-host watcher can record heartbeat, ledger and live provider
+observations; it cannot grant ownership, retire resources or recover from loss of
+the host itself.
+
+For an observation after the manifest and controller ledger exist:
+
+```powershell
+node scripts/watch-pilot.mjs `
+  --manifest (Join-Path $cloudPilotDirectory 'manifest.json') `
+  --module-path 'C:\Users\Moe\Documents\GitHub\flujo-cloud\lib\managed.mjs' `
+  --fly-path 'C:\Users\Moe\.fly\bin\flyctl.exe' `
+  --once
+```
+
+Use the actual absolute Fly executable path. Without `--once`, the watcher runs a
+bounded observation loop. It records provider evidence in
+`watch-observations.jsonl` and can send structured observations to the local root
+inbox. A witness of app absence is stronger than cached inventory; it still does
+not establish metered spend or full worker quiescence. If the coordinator dies,
+the witness can report that condition but cannot perform teardown.
 
 ### Source and image boundaries
 
