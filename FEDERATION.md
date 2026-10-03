@@ -309,3 +309,23 @@ Measure end-to-end delivery time, accepted outcome, compute/inference cost,
 coordination overhead, recovery time and duplicate effects. Compare with a
 single-cell run on comparable tasks. Passing the experiment demonstrates a
 bounded topology, not arbitrary scale or universal unattended reliability.
+
+## Container service qualification
+
+Source `ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` packages a Node 24 coordinator beside a separately pinned
+clean native FLUJO worker. The complete suite passed **416/416**. Actual hardened
+Docker services accepted work after startup, lost one completed response,
+restarted, and recovered the original result with GET while paused. Exactly one
+POST and one synthetic-model call occurred. Full fixture budget refusal left
+the next task ready with no effects; nine test containers and three private
+volumes were removed. Build revision remains part of the immutable worker
+identity. See [the service guide](deploy/factory-service.md). Cloud deployment,
+shared remote authority, browser/MCP tools and paid Modal inference remain open.
+
+One authoritative coordinator owns controller, paid admission and durable
+mission outputs. Its native companion shares loopback networking and has a
+separate workspace volume. Container qualification supplies a runnable local
+service bundle; it does not authorize independent copies of the paid ledger or
+provide a remote authority protocol. Production ManagedCloud source discovery
+still requires its supported desktop identity path. Recursive cloud enrollment,
+independent-host recovery and comparable delivery-speed measurements remain open.

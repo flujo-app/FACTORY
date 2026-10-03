@@ -1,6 +1,39 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
+`ea364d60f9d93dd1d001b7fa71fbf70e22a7612c`. Its isolated Node 24.19.0 suite passed **416/416**,
+actual child 36888, exit 0, with no failed, skipped, cancelled or todo results.
+This adds Node 24 service packaging and support for an actual native worker's
+optional lower-case 40-character build revision, retaining exact identity checks.
+
+Actual Docker qualification used coordinator image
+`sha256:c1848edbf480b70a005e4fd80a06a02ea94e4c1658703b9a6c4ad62f4420d51e`
+and clean FLUJO 3.46.2 image
+`sha256:b672e51d86a025d45e0ce2711ee862f472fa2ce16236ba6650ee414725d1fe20`,
+built from clean source `549792e1839931e862e6a305eb0d9ce2b82ae905`.
+The Node 24 coordinator and Node 22 worker ran with private separate volumes,
+read-only images, dropped capabilities and uid/gid 1000. One original Flow POST
+and one synthetic model call survived loss of response, restart of both services
+and paused GET recovery. The original conversation bytes, request and paid row/
+event history remained unchanged. A fully held 10,000-cent fixture budget left
+the next task ready, unowned and without effects. Both service runs stopped with
+exit 0 and no OOM. All nine owned containers and three volumes were removed.
+The actual harness child 38920 closed with exit 0.
+
+All 114 candidate and 104 prior Root source files and both original accounting/
+controller main files remained unchanged during these checks. Adoption copied
+13 changed files, preserved 101 untouched Root files, and retained all 114 raw
+tested files under `.factory/factory-service-20261003/qualified-source`.
+Runtime content remains LF-equivalent to the qualified source; this does not
+assert identical raw bytes for older Root CRLF files.
+Execution witness SHA-256:
+`2ee0142438c764c5be5eaff5d6c9b7a89a8aabe860788877a02fe8429dc6660c`.
+No real Fly/Modal workload or original ledger mutation occurred. The selected
+Flow does not qualify browser tools, other MCP tools, software acceptance,
+independent-host recovery or deployed federation. The existing API was not
+restarted or freshly health-checked. See [service deployment](deploy/factory-service.md).
+
+Earlier native cell source
 `8ef36348f04d0a4a452acd75c493fb1cffa3c97c`. Its complete isolated Node 24.19.0 combination
 passed **408/408**, exit 0, with no failed, skipped, cancelled or todo results.
 The focused native-cell/mission/client combination passed **50/50**.

@@ -28,6 +28,16 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
+Source `ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` packages a Node 24 coordinator beside a separately pinned
+clean native FLUJO worker. The complete suite passed **416/416**. Actual hardened
+Docker services accepted work after startup, lost one completed response,
+restarted, and recovered the original result with GET while paused. Exactly one
+POST and one synthetic-model call occurred. Full fixture budget refusal left
+the next task ready with no effects; nine test containers and three private
+volumes were removed. Build revision remains part of the immutable worker
+identity. See [the service guide](deploy/factory-service.md). Cloud deployment,
+shared remote authority, browser/MCP tools and paid Modal inference remain open.
+
 Source `8ef36348f04d0a4a452acd75c493fb1cffa3c97c` adds the native cell mission queue. Its complete isolated
 Node 24.19.0 suite passed **408/408**; the focused combination passed **50/50**.
 Separate acceptance used actual daemon and FLUJO processes: new work arrived

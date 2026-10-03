@@ -9,7 +9,11 @@ in the actual SpendingLedger; it is not a physical provider spending limit.
 
 `worker` is exactly `{ workspace, archiveSha256, compatibility }`. Compatibility
 contains `applicationVersion`, `snapshotFormatVersion`, `layoutVersion` and
-`workerProtocolVersion`. Use the child's actual restored snapshot identity;
+`workerProtocolVersion`, plus its own optional `revision` when advertised by the
+worker. A revision is exactly 40 lower-case hexadecimal characters. Both the
+mission contract and authenticated native client retain it in the exact
+compatibility tuple; omitting or changing an advertised revision cannot claim,
+dispatch or recover the assignment. Use the child's actual restored snapshot identity;
 the parent's archive identity is not interchangeable. The controller requires
 the original successful provisioning effect and permanent app/cell bindings.
 

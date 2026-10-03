@@ -66,8 +66,11 @@ this automatic release and a second execution request.
 This runtime belongs beside the authoritative controller/ledger, or on that
 coordinator with a fixed remote native origin. Deploying independent copies of
 the ledger would not preserve the factory's total spending limit. The current
-FLUJO cloud image uses Node 22, and ManagedCloud overrides its command; a cloud
-supervisor, Node 24 packaging and shared authenticated authority remain separate
-deployment work. The native acceptance uses real daemon/FLUJO processes with a
-synthetic loopback model and fixture provisioning. It proves queue execution and
-restart recovery, not actual cloud deployment or paid inference.
+FLUJO cloud image uses Node 22, and ManagedCloud overrides its command.
+[The service package](deploy/factory-service.md) now supplies a separate Node 24
+coordinator and explicit local native companion. Its actual Docker acceptance
+uses private fixture volumes and a synthetic model, including paused recovery
+after both services restart and refusal of fresh work under a fully held budget.
+Cloud deployment and shared authenticated remote authority remain separate work.
+These checks prove selected local queue execution and restart recovery; they
+do not prove paid inference, browser/MCP tools or accepted software delivery.

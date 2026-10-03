@@ -126,3 +126,31 @@ result. Until it succeeds against the qualified coordinator and clean native
 images, this change is source packaging only. It does not prove rented Modal
 inference, accepted software delivery, independent-host federation or fleet
 availability.
+
+## Qualified local execution
+
+Source `ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` passed **416/416** Node 24.19.0 checks and actual
+packaged service acceptance. Qualified local coordinator image is
+`sha256:c1848edbf480b70a005e4fd80a06a02ea94e4c1658703b9a6c4ad62f4420d51e`;
+qualified local native image is
+`sha256:b672e51d86a025d45e0ce2711ee862f472fa2ce16236ba6650ee414725d1fe20`
+from FLUJO `549792e1839931e862e6a305eb0d9ce2b82ae905`. These are local Docker
+image IDs; no registry publication or cloud activation is implied.
+
+The actual Node 24 coordinator and Node 22 worker used the documented hardening,
+private uid/gid 1000 volumes and persistent isolated fixture state. Work arrived
+after startup; one response was lost; both services restarted; original GET
+recovery succeeded while admission was paused. There was exactly one POST and
+one synthetic-model call. The original paid row/history was retained, and the
+fully held fixture budget left a new task ready with no effects. Both service
+runs stopped at exit 0 without OOM; nine containers and three volumes were
+removed. SQLite audits used read-only SQL connections on the writable owned
+fixture authority so sidecars could be created; main database bytes were stable.
+
+The source-pinned native image advertises its build revision. Include that
+exact optional revision in the profile and immutable mission worker tuple.
+Native client observation and mission claim/dispatch retain the full identity.
+The successful selected Flow uses a synthetic model and no browser/MCP tools.
+Real Modal inference, cloud rollout, remote shared authority and software
+acceptance remain open. Original controller and paid ledger main bytes remained
+unchanged, with the full US$100 still held for pending billing.
