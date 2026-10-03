@@ -54,7 +54,7 @@ async function fixture(t, settings = {}) {
       default: throw new Error('unexpected SDK operation');
     }
   };
-  const managed = { source: async () => source, workspaces: async () => ({ workspaces: [{ name: 'factory-pilot' }] }),
+  const managed = { source: async () => { await settings.beforeSourceResolution?.(); return source; }, workspaces: async () => ({ workspaces: [{ name: 'factory-pilot' }] }),
     json: async url => {
       const pathname = new URL(url).pathname;
       if (pathname === '/api/model') return structuredClone(models);
@@ -92,7 +92,7 @@ async function fixture(t, settings = {}) {
   };
   const dependencies = { driver, managed, fetchImpl,
     privateFiles: { ensurePrivateDirectory: async name => { protections.push(name); await mkdir(name, { recursive: true }); } },
-    notify: event => { notifications.push(event); if (settings.notifyFailure) throw new Error('private diagnostic'); },
+    notify: event => { notifications.push(event); settings.onNotify?.(event); if (settings.notifyFailure) throw new Error('private diagnostic'); },
     ...(settings.checkpointFailure ? { writeFixtureOwnership: async () => { throw new Error('private checkpoint failure'); } } : {}) };
   t.after(() => {}); // Preserve tiny offline evidence if a regression fails; no cloud resources exist.
   return { directory, options, dependencies, calls, payloads, httpCalls, notifications, protections, models, flows };
@@ -720,4 +720,112 @@ test('a started common budget over ceiling blocks a fresh provider dispatch whil
   assert.equal(report.state, 'requires-reconciliation');
   assert.equal(f.calls.filter(item => item !== 'prepare' && item !== 'meter').length, 0);
   assert.equal(ledger.status().committedCents, 3000);
+});
+
+for (const operation of ['prefetch', 'direct-generation']) {
+  test(`paid pause during ${operation} running notification prevents dispatch and preserves owned cleanup`, async t => {
+    const settings = {}, f = await fixture(t, settings);
+    // A separate actual ledger connection observes the same durable off marker
+    // as the coordinator, rather than substituting a permissive fake start().
+    const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+    ledger.initialize({ limitCents: 10000, currency: 'USD' });
+    let originalIntent, originalReservation, pauses = 0;
+    settings.onNotify = event => {
+      if (event.operation !== operation || event.state !== 'running') return;
+      const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+      try { originalIntent = journal.get(operation); } finally { journal.close(); }
+      originalReservation = ledger.status().reservations[0];
+      assert.equal(originalIntent.state, 'running');
+      assert.equal(originalReservation.state, 'started');
+      ledger.pauseAdmission(); pauses += 1;
+    };
+    const report = await runModalPilot(f.options, f.dependencies);
+    assert.equal(pauses, 1);
+    assert.equal(report.state, 'requires-reconciliation');
+    assert.equal(f.calls.filter(item => item === 'prefetch').length, operation === 'prefetch' ? 0 : 1);
+    assert.equal(f.httpCalls.filter(item => item.pathname === '/v1/chat/completions').length, 0);
+    for (const cleanup of ['stop-app', 'delete-volume']) assert.equal(f.calls.filter(item => item === cleanup).length, 1);
+    if (operation === 'direct-generation') assert.equal(f.calls.filter(item => item === 'delete-proxy-token').length, 1);
+    const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+    const retained = journal.get(operation), status = ledger.status(), reservation = status.reservations[0];
+    assert.equal(retained.state, 'unknown');
+    assert.equal(retained.request_digest, originalIntent.request_digest);
+    assert.equal(retained.request_json, originalIntent.request_json);
+    assert.equal(journal.list().filter(item => item.operation === operation).length, 1);
+    assert.equal(status.limitCents, 10000); assert.equal(status.committedCents, 3000);
+    assert.equal(reservation.state, 'retired-meter-pending');
+    for (const field of ['reservationId', 'provider', 'ceilingCents', 'chargedCents', 'finalCents', 'startedAt']) {
+      assert.equal(reservation[field], originalReservation[field]);
+    }
+    const events = ledger.db.prepare('SELECT type FROM spending_events ORDER BY seq').all().map(row => row.type);
+    assert.equal(events.filter(type => type === 'started').length, 1);
+    assert.equal(events.filter(type => type === 'admission_paused').length, 1);
+    assert.equal(events.filter(type => type === 'admission_resumed' || type === 'settled' || type === 'cancelled').length, 0);
+    const reportPath = path.join(f.options.runDirectory, 'report.private.json'), originalReport = await readFile(reportPath), calls = f.calls.length;
+    assert.equal((await runModalPilot(f.options, f.dependencies)).state, 'requires-reconciliation');
+    assert.equal(f.calls.length, calls);
+    assert.deepEqual(await readFile(reportPath), originalReport);
+  });
+}
+
+for (const change of ['pause', 'exhaust']) {
+  test(`paid ${change} during awaited native source resolution prevents Flow POST without blocking retirement`, async t => {
+    const settings = {}, f = await fixture(t, settings);
+    const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+    ledger.initialize({ limitCents: 10000, currency: 'USD' });
+    let resolvingFlow = false, changes = 0, originalIntent;
+    settings.onNotify = event => { if (event.operation === 'flujo-generation' && event.state === 'running') resolvingFlow = true; };
+    settings.beforeSourceResolution = async () => {
+      if (!resolvingFlow || changes) return;
+      await Promise.resolve(); // Actual source await after perform's admission recheck.
+      const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+      try { originalIntent = journal.get('flujo-generation'); } finally { journal.close(); }
+      assert.equal(originalIntent.state, 'running');
+      if (change === 'pause') ledger.pauseAdmission();
+      else ledger.observe(f.options.runId, { chargedCents: 3000, observedAt: Date.now(), evidenceDigest: 'e'.repeat(64) });
+      changes += 1;
+    };
+    const report = await runModalPilot(f.options, f.dependencies);
+    assert.equal(changes, 1); assert.equal(report.state, 'requires-reconciliation');
+    assert.equal(f.httpCalls.filter(item => item.origin.includes('modal.run') && item.method === 'POST').length, 1);
+    assert.equal(f.httpCalls.filter(item => item.origin === SOURCE.origin && item.pathname === '/v1/chat/completions').length, 0);
+    assert.equal(f.models.length, 0); assert.equal(f.flows.length, 0);
+    for (const cleanup of ['stop-app', 'delete-volume', 'delete-proxy-token']) assert.equal(f.calls.filter(item => item === cleanup).length, 1);
+    const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+    const intent = journal.get('flujo-generation');
+    assert.equal(intent.state, 'unknown'); assert.equal(intent.request_digest, originalIntent.request_digest);
+    assert.equal(intent.request_json, originalIntent.request_json);
+    assert.equal(journal.list().filter(item => item.operation === 'flujo-generation').length, 1);
+    for (const cleanup of ['disable-flujo-model', 'delete-flujo-flow', 'delete-flujo-model']) assert.equal(journal.get(cleanup).state, 'succeeded');
+    const status = ledger.status();
+    assert.equal(status.limitCents, 10000); assert.equal(status.committedCents, 3000);
+    assert.equal(status.reservations.length, 1); assert.equal(status.reservations[0].state, 'retired-meter-pending');
+    assert.equal(status.reservations[0].finalCents, null);
+    const events = ledger.db.prepare('SELECT type FROM spending_events ORDER BY seq').all().map(row => row.type);
+    assert.equal(events.filter(type => type === 'started').length, 1);
+    assert.equal(events.filter(type => type === 'admission_resumed' || type === 'settled' || type === 'cancelled').length, 0);
+  });
+}
+
+test('paid pause after the original POST permits its result GET and owned cleanup without another generation', async t => {
+  const settings = {}, f = await fixture(t, settings);
+  const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+  ledger.initialize({ limitCents: 10000, currency: 'USD' });
+  settings.modalHttpResponse = ({ init, expectedModel }) => {
+    if (init.method === 'POST') {
+      ledger.pauseAdmission();
+      return new Response('pending original completion', { status: 303, headers: { location: '?__modal_result=fixture' } });
+    }
+    return new Response(safeCompletion(expectedModel), { status: 200 });
+  };
+  const report = await runModalPilot({ ...f.options, through: 'direct' }, f.dependencies);
+  assert.equal(report.state, 'smoke-complete');
+  assert.deepEqual(f.httpCalls.filter(item => item.origin.includes('modal.run')).map(item => item.method), ['POST', 'GET']);
+  for (const cleanup of ['stop-app', 'delete-volume', 'delete-proxy-token']) assert.equal(f.calls.filter(item => item === cleanup).length, 1);
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  assert.equal(journal.get('direct-generation').state, 'succeeded');
+  const status = ledger.status();
+  assert.equal(status.limitCents, 10000); assert.equal(status.committedCents, 3000);
+  assert.equal(status.reservations[0].state, 'retired-meter-pending');
+  assert.equal(ledger.db.prepare("SELECT count(*) AS n FROM spending_events WHERE type='admission_resumed'").get().n, 0);
 });

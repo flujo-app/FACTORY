@@ -327,6 +327,9 @@ export async function runModalPilot(input = {}, dependencies = {}) {
       if (paid) spending.start(options.reservationId);
       journal.running(key);
       await notify(operation, { state: 'running' });
+      // Notification persists evidence asynchronously. Recheck the shared
+      // admission/ceiling after that await, without replacing this intent.
+      if (paid) spending.start(options.reservationId);
       const result = await action(request, key);
       const effect = journal.settle(key, 'succeeded', result);
       await notify(operation, effect.result);
@@ -379,10 +382,13 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     await privateJson(path.join(options.runDirectory, 'resources.private.json'), { ...owned, appStopped: true });
     await notify('reconcile-stop-app', observed);
   };
-  const sourceRequest = async (method, endpoint, body, responseName) => {
+  const sourceRequest = async (method, endpoint, body, responseName, { paid = false } = {}) => {
     // Recheck the registered instance immediately before each local mutation/call.
     const current = await context.managed.source({ source: options.source });
     if (digest(identityOf(current)) !== digest(prepared.source)) fail('SOURCE_IDENTITY_CHANGED');
+    // Source resolution can yield after perform's check. Cleanup uses the
+    // default false; only a new inference dispatch requires paid admission.
+    if (paid) spending.start(options.reservationId);
     const response = await context.fetchImpl(new URL(endpoint, current.source), { method, redirect: 'manual',
       signal: AbortSignal.timeout(endpoint === '/v1/chat/completions' ? 180_000 : 30_000),
       headers: { Authorization: `Bearer ${current.token}`, Origin: current.source, 'x-flujo-workspace': WORKSPACE,
@@ -465,6 +471,9 @@ export async function runModalPilot(input = {}, dependencies = {}) {
         for (let hop = 0; ; hop += 1) {
           signal.throwIfAborted();
           const method = hop === 0 ? 'POST' : 'GET';
+          // Later GETs observe the original request and remain available while
+          // paused. They never authorize another generation POST.
+          if (hop === 0) spending.start(options.reservationId);
           const response = await context.fetchImpl(target, { method, redirect: 'manual', signal,
             headers: { Authorization: `Bearer ${token.bearer}`, ...(hop === 0 ? { 'Content-Type': 'application/json' } : {}) },
             ...(hop === 0 ? { body: JSON.stringify({ model: context.config.servedModel, messages: [{ role: 'user', content: prompt }],
@@ -511,7 +520,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
         await perform('flujo-generation', 'flujo-generation', { flowId: options.flowId, flowDigest: digest(flow), maxTokens: 64, workspace: WORKSPACE }, async () => {
           const began = context.clock();
           const response = await sourceRequest('POST', '/v1/chat/completions', { model: options.flowName, stream: false, max_tokens: 64,
-            metadata: { flujo: 'true', appendMessages: 'true' }, messages: [{ role: 'user', content: prompt }] }, 'flujo-response.private.json');
+            metadata: { flujo: 'true', appendMessages: 'true' }, messages: [{ role: 'user', content: prompt }] }, 'flujo-response.private.json', { paid: true });
           return { ...completionEvidence(response.raw, { flujo: true, expectedModel: options.flowName }), elapsedMs: context.clock() - began, status: response.status };
         }, { paid: true });
       }
