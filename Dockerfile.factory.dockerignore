@@ -1,0 +1,15 @@
+# Positive build-context allowlist. Private state and host dependencies stay out.
+**
+!package.json
+!package-lock.json
+!bin/
+!bin/*.mjs
+!src/
+!src/*.mjs
+!src/adapters/
+!src/adapters/*.mjs
+!scripts/
+!scripts/*.mjs
+!deploy/
+!deploy/private-files.mjs
+!deploy/factory-service.entrypoint.sh

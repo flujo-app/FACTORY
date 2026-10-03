@@ -1,0 +1,20 @@
+FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
+
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts \
+    && npm cache clean --force
+COPY bin/ ./bin/
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY deploy/private-files.mjs deploy/factory-service.entrypoint.sh ./deploy/
+RUN printf '%s\n' '7ae5ba87ec1cd387ee1b914105894d29254e07c0a3644c86f65810f461dcd54d  deploy/private-files.mjs' | sha256sum --check --strict \
+    && test "$(node --version)" = v24.19.0 \
+    && chmod 0555 deploy/factory-service.entrypoint.sh \
+    && install -d -m 0700 -o node -g node /authority /data /fixture
+
+USER 1000:1000
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/app/deploy/factory-service.entrypoint.sh"]
+CMD ["run", "--private-module", "/app/deploy/private-files.mjs", "--profile", "/authority/profile.private.json"]

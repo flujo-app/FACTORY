@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { FactoryControl } from '../src/control.mjs';
+import { FactoryControl,digest } from '../src/control.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
 import { claimNativeMission,runNativeMission,observeNativeMission } from '../src/native-mission.mjs';
 import { nativeMissionRequest,nativeMissionEffectKey } from '../src/native-mission-contract.mjs';
@@ -14,7 +14,7 @@ const compatibility={applicationVersion:'3.46.0',snapshotFormatVersion:2,layoutV
 const privateFiles=process.env.FACTORY_PRIVATE_MODULE?await import(pathToFileURL(process.env.FACTORY_PRIVATE_MODULE).href):{
   ensurePrivateDirectory:async p=>fs.mkdir(p,{recursive:true}),readPrivateJson:async p=>JSON.parse(await fs.readFile(p,'utf8')),
   writePrivateJson:async(p,v)=>fs.writeFile(p,JSON.stringify(v),{flag:'wx',mode:0o600})};
-async function fixture(t){
+async function fixture(t,{workerCompatibility=compatibility,claim=true}={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'factory-native-mission-'));await privateFiles.ensurePrivateDirectory(dir);
   let control=new FactoryControl(path.join(dir,'control.sqlite'));const paid=new SpendingLedger(path.join(dir,'paid.sqlite'));
   t.after(()=>{control.close();paid.close();}); // Retain owned test evidence; no recursive deletion through private overlays.
@@ -23,12 +23,12 @@ async function fixture(t){
   control.createTask({taskId:'launch',projectId:'factory',branch:'codex/launch',specification:{problem:'provision',acceptance:['ready'],baseline:'fixture'}});
   const launcher=control.claimTask('launch','root',600000);control.admitEffect(launcher,{key:'provision',kind:'provision',request:{cellId:'child',app:'factory-child'}});
   control.startEffect(launcher,'provision');control.settleEffect('provision','succeeded',{worker:'factory-child',app:'factory-child',state:'ready'});
-  const worker={workspace:'mission',archiveSha256:'a'.repeat(64),compatibility};
+  const worker={workspace:'mission',archiveSha256:'a'.repeat(64),compatibility:structuredClone(workerCompatibility)};
   const mission={schemaVersion:1,missionId:'b'.repeat(32),cellId:'child',app:'factory-child',provisionKey:'provision',worker,flowId:'flow',flowSha256:'c'.repeat(64),paid:{provider:'fly',ceilingCents:500}};
   control.createTask({taskId:'develop',projectId:'factory',branch:'codex/develop',specification:{problem:'Improve FLUJO',acceptance:['independent review'],baseline:'fixture',nativeMission:mission}});
   let posts=0,observation=null,lose=false,hook=null;
   const client={binding:worker,async prepare(){},async dispatch(input,{admitPost}){hook?.();await admitPost(()=>{posts++;observation={state:'completed',body:JSON.stringify({id:input.conversationId,flowId:input.flowId,status:'completed',messages:[{role:'user',content:input.packet},{role:'assistant',content:'candidate'}]})};return Promise.resolve();});if(lose)throw new Error('lost response');return observation;},async observe(){return observation??{state:'absent',body:null};}};
-  const outputFile=path.join(dir,'output.private.json');const lease=await claimNativeMission({control,taskId:'develop',client,outputFile,ttlMs:600000});
+  const outputFile=path.join(dir,'output.private.json');const lease=claim?await claimNativeMission({control,taskId:'develop',client,outputFile,ttlMs:600000}):null;
   return {dir,paid,client,outputFile,lease,get control(){return control;},get posts(){return posts;},lose:()=>{lose=true;},hook:f=>{hook=f;},pending:()=>{observation={state:'pending',body:null};},
     reopen:()=>{control.close();control=new FactoryControl(path.join(dir,'control.sqlite'));},run:()=>runNativeMission({control,lease,client,paidAdmission:paid,privateFiles,outputFile})};
 }
@@ -81,4 +81,72 @@ test('operation-task retirement fences the same app before mission dispatch',asy
   const f=await fixture(t);f.control.createTask({taskId:'teardown',projectId:'factory',branch:'codex/teardown',specification:{problem:'retire',acceptance:{scope:'recorded-controller-operation-receipts-only'},baseline:'fixture',taskType:'operation',operation:{kind:'retire',cellId:'child',app:'factory-child'}}});
   const lease=f.control.claimTask('teardown','root',600000);f.control.admitEffect(lease,{key:'teardown',kind:'retire',request:{cellId:'child',app:'factory-child',provisionKey:'provision'}});
   await assert.rejects(f.run(),{code:'NATIVE_MISSION_TARGET'});assert.equal(f.posts,0);assert.equal(f.paid.rows().length,0);
+});
+
+test('official worker revision remains bound through claim, lost POST and paused recovery',async t=>{
+  const revision='549792e1839931e862e6a305eb0d9ce2b82ae905';
+  const f=await fixture(t,{workerCompatibility:{...compatibility,revision}});
+  assert.equal(f.control.task('develop').specification.nativeMission.worker.compatibility.revision,revision);
+  f.lose();const first=await f.run();assert.equal(first.effect.state,'unknown');assert.equal(f.posts,1);
+  const admitted=f.control.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted' AND subject=?").get(first.effect.key);
+  const request=JSON.parse(admitted.details).request;
+  assert.equal(request.worker.compatibility.revision,revision);
+  const requestDigest=f.control.effect(first.effect.key).request_digest;
+  assert.match(requestDigest,/^[a-f0-9]{64}$/);assert.equal(requestDigest,digest(request));
+  assert.equal(first.effect.requestDigest,requestDigest);
+  f.reopen();f.control.pause();
+  const repaired=await observeNativeMission({control:f.control,key:first.effect.key,client:f.client,privateFiles});
+  assert.equal(repaired.effect.state,'succeeded');assert.equal(repaired.effect.requestDigest,requestDigest);assert.equal(f.posts,1);
+  assert.equal(f.control.effect(first.effect.key).request_digest,requestDigest);
+  assert.equal(f.control.task('develop').specification.nativeMission.worker.compatibility.revision,revision);
+  assert.equal(f.control.task('develop').status,'running');assert.equal(f.control.task('develop').candidate,null);
+});
+
+test('different or omitted worker revision cannot claim an immutable assignment',async t=>{
+  const revision='549792e1839931e862e6a305eb0d9ce2b82ae905';
+  const f=await fixture(t,{workerCompatibility:{...compatibility,revision},claim:false});
+  const task=f.control.task('develop');
+  for(const proof of [{...compatibility,revision:'f'.repeat(40)},compatibility]){
+    const binding={...f.client.binding,compatibility:structuredClone(proof)};
+    assert.throws(()=>f.control.claimNativeMission({taskId:'develop',expectedSpecDigest:task.spec_digest,
+      expectedFactoryEpoch:f.control.control().epoch,workerProof:binding,ttlMs:600000}),{code:'STALE'});
+    await assert.rejects(claimNativeMission({control:f.control,taskId:'develop',client:{...f.client,binding},
+      outputFile:f.outputFile,ttlMs:600000}),{code:'NATIVE_MISSION_BINDING'});
+    assert.equal(f.control.task('develop').status,'ready');assert.equal(f.control.task('develop').owner,null);
+    assert.equal(f.posts,0);assert.equal(f.paid.rows().length,0);
+  }
+  const lease=await claimNativeMission({control:f.control,taskId:'develop',client:f.client,outputFile:f.outputFile,ttlMs:600000});
+  assert.equal(lease.cellId,'child');assert.equal(f.control.task('develop').owner,'child');assert.equal(f.posts,0);
+});
+
+test('worker revision mismatch fences dispatch and unknown-outcome recovery without a new POST',async t=>{
+  const revision='549792e1839931e862e6a305eb0d9ce2b82ae905';
+  const f=await fixture(t,{workerCompatibility:{...compatibility,revision}});
+  const wrong={...f.client,binding:{...f.client.binding,compatibility:{...compatibility,revision:'f'.repeat(40)}}};
+  await assert.rejects(runNativeMission({control:f.control,lease:f.lease,client:wrong,paidAdmission:f.paid,privateFiles,
+    outputFile:f.outputFile}),{code:'NATIVE_MISSION_BINDING'});
+  assert.equal(f.posts,0);assert.equal(f.paid.rows().length,0);
+  assert.equal(f.control.db.prepare("SELECT count(*) n FROM effects WHERE kind='flow_call'").get().n,0);
+  f.lose();const first=await f.run();assert.equal(first.effect.state,'unknown');assert.equal(f.posts,1);
+  f.reopen();
+  await assert.rejects(observeNativeMission({control:f.control,key:first.effect.key,client:wrong,privateFiles}),{code:'NATIVE_MISSION_BINDING'});
+  assert.equal(f.control.effect(first.effect.key).state,'unknown');assert.equal(f.posts,1);
+  const repaired=await observeNativeMission({control:f.control,key:first.effect.key,client:f.client,privateFiles});
+  assert.equal(repaired.effect.state,'succeeded');assert.equal(f.posts,1);
+});
+
+test('malformed revision and unknown compatibility fields refuse immutable task admission',async t=>{
+  const f=await fixture(t);
+  const invalid=[{...compatibility,revision:'A'.repeat(40)},{...compatibility,revision:'a'.repeat(39)},
+    {...compatibility,revision:null},{...compatibility,revision:undefined},{...compatibility,revision:['a'.repeat(40)]},
+    {...compatibility,revision:'a'.repeat(40),extra:true},{...compatibility,extra:true},
+    {applicationVersion:compatibility.applicationVersion,snapshotFormatVersion:2,layoutVersion:2,revision:'a'.repeat(40)}];
+  for(const [index,proof]of invalid.entries()){
+    const specification=structuredClone(f.control.task('develop').specification);
+    specification.nativeMission.missionId=(index+1).toString(16).padStart(32,'0');
+    specification.nativeMission.worker.compatibility=proof;
+    assert.throws(()=>f.control.createTask({taskId:'invalid-'+index,projectId:'factory',branch:'codex/invalid-'+index,
+      specification}),{code:'NATIVE_MISSION_BINDING'});
+  }
+  assert.equal(f.control.status().tasks.length,2);assert.equal(f.posts,0);assert.equal(f.paid.rows().length,0);
 });

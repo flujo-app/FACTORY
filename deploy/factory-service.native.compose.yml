@@ -1,0 +1,34 @@
+# Optional local native companion; use together with factory-service.compose.yml.
+services:
+  native:
+    image: ${FACTORY_NATIVE_IMAGE:?Set a separately qualified clean native worker image digest}
+    user: "1000:1000"
+    command: [node, /app/scripts/launch-next.mjs, start, -p, "4200", -H, "127.0.0.1"]
+    network_mode: service:coordinator
+    depends_on:
+      coordinator:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    env_file:
+      - ${FACTORY_NATIVE_ENVIRONMENT:?Set an absolute private worker environment file}
+    environment:
+      FLUJO_WORKER_MODE: "1"
+      FLUJO_DATA_DIR: /data
+      FLUJO_EXPOSURE_MODE: localhost
+      FLUJO_BASE_URL: http://127.0.0.1:4200
+      FLUJO_PORT: "4200"
+      HOSTNAME: "127.0.0.1"
+      PORT: "4200"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /home/node:rw,nosuid,nodev,size=256m,mode=0700,uid=1000,gid=1000
+    volumes:
+      - type: bind
+        source: ${FACTORY_NATIVE_DATA_DIRECTORY:?Set the separate private native data directory}
+        target: /data
+        bind:
+          create_host_path: false

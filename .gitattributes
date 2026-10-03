@@ -1,2 +1,4 @@
 modal/model-artifacts.json text eol=lf
 modal/model_artifacts.py text eol=lf
+deploy/private-files.mjs text eol=lf
+deploy/factory-service.entrypoint.sh text eol=lf

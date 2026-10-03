@@ -16,8 +16,10 @@ export function validateNativeMission(value) {
   check(/^[a-z][a-z0-9-]{2,62}$/.test(value.app??'') && id(value.flowId) && /^[a-f0-9]{64}$/.test(value.flowSha256??''));
   closed(value.worker,['workspace','archiveSha256','compatibility']);
   check(id(value.worker.workspace) && /^[a-f0-9]{64}$/.test(value.worker.archiveSha256??''));
-  closed(value.worker.compatibility,['applicationVersion','snapshotFormatVersion','layoutVersion','workerProtocolVersion']);
   const c=value.worker.compatibility;
+  closed(c,['applicationVersion','snapshotFormatVersion','layoutVersion','workerProtocolVersion',
+    ...(c && Object.hasOwn(c,'revision')?['revision']:[])]);
+  check(!Object.hasOwn(c,'revision') || typeof c.revision==='string' && /^[a-f0-9]{40}$/.test(c.revision));
   check(typeof c.applicationVersion==='string' && /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?$/.test(c.applicationVersion));
   check(['snapshotFormatVersion','layoutVersion','workerProtocolVersion'].every(k=>Number.isSafeInteger(c[k]) && c[k]>0));
   closed(value.paid,['provider','ceilingCents']);

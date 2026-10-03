@@ -1,0 +1,17 @@
+services:
+  coordinator:
+    image: ${FACTORY_COORDINATOR_IMAGE:?Set the qualified coordinator image digest}
+    user: "1000:1000"
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    volumes:
+      - type: bind
+        source: ${FACTORY_AUTHORITY_DIRECTORY:?Set the existing initialized private authority directory}
+        target: /authority
+        bind:
+          create_host_path: false
