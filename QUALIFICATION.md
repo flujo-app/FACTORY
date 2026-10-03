@@ -1,6 +1,6 @@
 # Factory qualification record
 
-Updated October 3, 2026. Current runtime source is
+Updated October 3, 2026. Qualified controller/provider runtime source is
 `8dce857df549f29c69e566fa7d927196cb324c3c`, adding qualified provider-bound
 logical cell retirement. Its frozen combination passed **288/288** with exit 0,
 all 54 source pins stable and all 29 protected accounting/history pins unchanged
@@ -16,13 +16,96 @@ The original API on port 4343 was subsequently observed unreachable. The read-on
 API on port 4344 was restored at build `8f5a940` with the existing journal registry.
 
 Paid accounting has since advanced to revision 19 through two nonfinal
-observations, retaining all US$100. A real local pinned-model download was
-explicitly interrupted with its partials preserved; a reviewed resume is running.
-The full public artifact scan remains pending. See
+observations, retaining all US$100. A real local pinned-model download completed
+after explicit interruption and a reviewed resume. Its complete artifact check
+and a separate one-call full scan both passed: **13 files / 15.24 GB**. The
+independent scan measured **61.60 seconds** and **30.8 MiB** peak process memory,
+with source, accounting/history and owner witnesses unchanged. See
 [LOCAL_MODEL_PREPARATION.md](LOCAL_MODEL_PREPARATION.md). This local operation
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Durable advisory peer communication
+
+Source `a283701933710bf39ea0673ab661064586e200f8` adds a separate message-only
+gateway and pair-scoped SQLite outbox/inbox. It authenticates both factory/cell
+identities, credential generation, original message digest and canonical bytes;
+the receiver commits before producing the acknowledgement. The sender persists
+the exact destination and body before HTTP and leaves ambiguous delivery pending.
+Payloads and provenance grant no controller, lease, budget or delivery authority.
+The private CLI preserves both configurations in a setup intent before publishing
+either and recovers interrupted publication without changing the original key.
+
+The final source-bound focused Node **24.19.0** run passed **11/11**, exit 0, with
+no skipped/cancelled tests at **07:12:21.177–07:12:32.496 UTC**. The process case
+terminates the receiver after its real SQLite commit and before an ACK, reads the
+committed inbox/event independently, closes the sender, restarts both as new OS
+processes and resolves the original message. One inbox row/event and one outbox
+acknowledgement event remain. Other cases reject forged/changed identities,
+conflicting replay, malformed ACKs, stale credentials, redirects, foreign SQLite
+files and Windows path aliases. The native private-file helper also qualifies
+credential setup interruption and private envelope export.
+
+The first run's **10 pass/1 fail** is retained: the negative wire test mistakenly
+used already canonical JSON. The final test uses actual noncanonical whitespace;
+the Windows alias fix also preceded the final run. The separate static reviewer
+and root cleared the final source. All 74 candidate-tree hashes and the native
+helper stayed stable during testing. All 54 baseline files match by LF hash;
+41 worktree/root raw differences are checkout line endings. Adoption verified the
+ten new raw files exactly and every existing root runtime raw pin unchanged.
+The original paid ledger bytes stayed unchanged. This is separate focused
+qualification, not a new combined total for the earlier 288 checks.
+
+Protected evidence is preserved in `.factory/peer-messaging-20261003`:
+
+- Final execution SHA-256:
+  `0d8e37e02d2f2338063cb170c8af91d996b2d31373ea1bf643e095083b35c1fc`.
+- Root independent review SHA-256:
+  `7194d3c4f8734e9cc6fa12b5a56d6c456b838ce350a1c916af0ecd31233b57f3`.
+- Actual local source adoption SHA-256:
+  `efe1d43b543144413e1f85ec8440150250c5abaa030602c39766abebea6f76d8`.
+
+Scope is local authenticated advisory messaging and application-process recovery.
+HMAC authenticates possession of a shared pair key; it does not independently
+certify remote work. No service was deployed or activated by source adoption. Native
+remote enrollment, independently hosted recovery, inference and measured factory
+self-improvement remain open. [PEER_MESSAGING.md](PEER_MESSAGING.md) documents
+the usable CLI, limits and protocol.
+
+An additional actual integration pilot ran at **07:37:23.719–07:37:32.990 UTC**.
+Two direct bundled-Node CLI gateway processes used fresh private pair credentials,
+separate stores and literal loopback destinations. The parent made authenticated
+read-only snapshot and Modal-journal GETs against the existing port 4344 API,
+checking factory/schema, loaded build `8f5a940` and exact paid revision 19. The
+viewer token remained in parent memory. The parent enqueued the actual persisted
+status in A's outbox and sent it to gateway B; B's advisory return bound its digest,
+payload, read-receipt hash and causal parent to its committed inbox observation.
+Production dispatch, inbox and authenticated ACK validation passed in both
+directions. Each store ended with one acknowledged outbox, one inbox and exactly
+three events: enqueue, receive and acknowledgement. The parent orchestrated the
+exchange; gateway identities are transport identities rather than enrolled FLUJO
+instances.
+
+The actual collector exited 0 after confirmed closure of its own two children.
+All **64 source** and **29 accounting/history** witnesses stayed unchanged.
+The exchanged observation reports controller revision 91, paused epoch 4, zero
+unresolved controller effects, unverified physical worker quiescence, paid
+revision 19 with all US$100 held and final spend unknown, plus the original three
+journals/15 operations/three unknown prefetch outcomes. Provider freshness is
+explicitly `not_observed`. There were zero provider, model or privileged-effect
+calls, and no API restart. This adds a real local integration proof to the
+separate 11-test qualification; it does not establish continuous monitoring,
+native enrollment, autonomous cloud cooperation or independently hosted recovery.
+
+Protected execution:
+`.factory/peer-health-exchange-5fb22a81-cc50-4e69-9643-1d68c7a501dd/execution.private.json`,
+SHA-256 `d3516675ba359f5cd8f194a8f8be9268658f0ce0c819685a164de2442c139691`.
+The first unexecuted collector/admission drafts are retained. Independent review
+required exact current paid-state binding and persistent child-output failures;
+both fixes preceded the single actual execution.
+
+### Native FLUJO outcome repair
 
 A native FLUJO runtime task delivered candidate
 `549792e1839931e862e6a305eb0d9ce2b82ae905` from exact upstream baseline `d684927`.
@@ -661,17 +744,19 @@ Protected HTTP witness SHA-256:
 ## Remaining proofs
 
 - Native remote peer enrollment, autonomous child provisioning and authenticated
-  peer communication. The successful child request was coordinator-mediated.
+  communication between deployed peers. The successful child request was
+  coordinator-mediated; the new advisory protocol is qualified locally only.
 - Independently hosted recovery and cross-host delivery ownership; a same-host
   watcher cannot recover from loss of the host itself.
-- A runtime FLUJO improvement through source-pinned acceptance and delivery, plus
-  upstream publication. The completed one-file documentation task qualifies local
-  delivery, with no PR, push, upstream merge or runtime change.
+- Activation and upstream publication of the delivered native FLUJO runtime
+  improvement. The outcome repair passed source-pinned acceptance and local
+  delivery; no PR, push, upstream merge or deployed runtime activation occurred.
 - Operational completion/cancellation and broader provider-evidence closure for
   failed or unresolved provisioning outcomes. Initial task release, unprovisioned
   leaf retirement and the narrow successful-Fly-teardown closure are implemented.
-- Modal-backed direct inference and actual native FLUJO Flow execution. Offline
-  HTTP download qualification does not establish either.
+- Mounted Modal model validation, GPU/engine startup, direct inference and actual
+  native FLUJO Flow execution. Successful local artifact checks establish the
+  snapshot bytes at their observed time; they do not establish those cloud results.
 - Measured self-improvement: comparable baseline/candidate delivery outcomes,
   protected evaluations, explicit activation and rollback. More workers or a
   successful model request do not establish improved development speed.

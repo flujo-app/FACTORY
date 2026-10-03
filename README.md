@@ -28,6 +28,19 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
+Source `a283701933710bf39ea0673ab661064586e200f8` adds authenticated advisory
+peer messages with a durable outbox/inbox, fixed destinations, credential
+generations and private setup recovery. Its **11/11** focused checks include a
+real receiver exit after inbox commit but before acknowledgement, both-process
+restart, and retry resolving one original outbox with one inbox record/event.
+The exact ten new files were adopted with all 54 existing runtime pins unchanged.
+A subsequent actual pilot used two local CLI gateways to exchange authenticated
+controller, paid-budget and Modal-journal observations in both directions. Each
+store retained one acknowledged outbox and one inbox; both gateways closed with
+the 64 source and 29 accounting/history witnesses unchanged. The observations
+describe persisted history. Deployed peers, independent-host recovery and
+autonomous enrollment remain open. See [PEER_MESSAGING.md](PEER_MESSAGING.md).
+
 Source commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` adopts the independently
 reviewed logical lifecycle subset and low-memory HTTP preparation. The combined
 188/188 qualification ran once in its isolated stage; adoption matched those
@@ -54,13 +67,15 @@ flag and adds complete artifact verification, private source/receipt binding and
 read-only source preflight before paid resource admission. Its frozen combination
 passed **274/274**, with matching source and historical paid-state bytes before
 and after the final run. Earlier unstable/interrupted qualification attempts are
-preserved separately. Actual model bytes, GPU boot, inference and native Flow
-remain unproven. See the [model definition](modal/README.md) and
+preserved separately. GPU boot, inference and native Flow remain unproven;
+local artifact bytes were subsequently validated as described below. See the
+[model definition](modal/README.md) and
 [qualification record](QUALIFICATION.md).
 
-Actual local pinned-weight preparation is now running with a reviewed resume
-protocol and preserved partial files. The first shard is downloaded; complete
-snapshot validation is pending. This admits no new paid cloud work. See
+Actual local pinned-weight preparation passed after a reviewed resume. A separate
+process independently validated all **13 files / 15.24 GB** in **61.60 seconds**,
+with **30.8 MiB** peak memory. Both operations closed successfully and preserved
+the protected source, history and owner state. This admits no new paid cloud work. See
 [LOCAL_MODEL_PREPARATION.md](LOCAL_MODEL_PREPARATION.md) for its current evidence
 and the separate remaining Modal/GPU/Flow requirements.
 

@@ -109,6 +109,19 @@ MCP and FLUJO's HTTP interfaces are potential transport/tool surfaces. The task,
 identity, authorization, deduplication and recovery semantics still need an
 explicit cross-instance contract. Select the transport after that contract.
 
+The first implemented transport is now the separate advisory peer gateway in
+[PEER_MESSAGING.md](PEER_MESSAGING.md). It persists sender intent, authenticates
+the identity pair and credential generation, commits a deduplicated inbox before
+acknowledging, and retries the exact original body/destination after a lost ACK.
+Its 11 focused checks include real receiver termination and both-process restart.
+Messages grant no work/control authority. A subsequent parent-orchestrated pilot
+used two actual local CLI gateways to exchange persisted controller, budget and
+Modal-journal observations in both directions, then confirmed both gateways had
+closed with source/accounting witnesses unchanged. This establishes local
+protocol recovery and advisory integration; deployed peers and independently
+hosted failover still need acceptance. Exact evidence is in
+[QUALIFICATION.md](QUALIFICATION.md).
+
 ## Watching is separate from taking over
 
 A watcher reports a missing heartbeat, failed readiness check or stalled task.
