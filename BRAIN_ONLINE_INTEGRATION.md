@@ -108,10 +108,21 @@ controller filesystem paths into public URLs.
 The read-only server was restored on `http://127.0.0.1:4344`, factory ID
 `factory-live-pilot`, build `8f5a94048e9c8be007cf3b5229607783b49cd47f`.
 The original port4343 service was observed unreachable and was not restored.
-The actual check at 2026-10-03T04:04:51Z confirmed authenticated snapshot/Modal
+The actual check at 2026-10-03T04:34:51Z confirmed authenticated snapshot/Modal
 reads200 and unauthenticated401, write405, query400 and other-factory404. An adapter
 pinned to the old port/build needs a reviewed configuration update. This is a local process;
 automatic restart and a remotely accessible service are separate work.
+
+That check projected controller revision 91: `child-worker` and `parent-worker`
+are retired, root logical unallocated capacity is 10,000 cents, and the root-owned
+`launch-parent` task remains running. Paid revision 17 still has 10,000 held and zero
+unallocated cents; final spend is null. The child allocation was nested inside the
+parent's allocation, so root recovered 6,000 logical cents once. Source `8dce857`
+qualified this closure with 288/288 checks and independent adoption audit. The
+existing presentation process remains actual build `8f5a940`; it was not restarted
+or relabeled. No DTO enums or browser commands were added, and workerQuiescence
+remains unverified. HTTP witness SHA-256:
+`1e545a0d0dca944e0daaae73d21486e4e00a92e0ba90b4bf5bd7be5644361bb4`.
 
 The private bearer file is
 `C:\Users\Moe\Documents\ChatGPT\FACTORY\.factory\viewer\credential.json`.
@@ -120,10 +131,12 @@ only into the server-side brain-online adapter; never expose it to its browser,
 Git, logs or process arguments. FACTORY's `loadViewerToken` checks file ownership,
 ACLs and file identity. No credential value appears in this contract.
 
-The verified launch command from the FACTORY directory is:
+For a new launch from the FACTORY directory, label the process with the checked-out
+commit. The currently running process was launched earlier from `8f5a940`:
 
 ```powershell
-& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --spending-ledger 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/spending.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --modal-journals 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/modal-journals-20261003.private.json' --port 4344 --build-revision 8f5a94048e9c8be007cf3b5229607783b49cd47f
+$factoryBuild = (git rev-parse HEAD).Trim()
+& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --spending-ledger 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/spending.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --modal-journals 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/modal-journals-20261003.private.json' --port 4344 --build-revision $factoryBuild
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
@@ -191,7 +204,8 @@ The task's builder and reviewer cells were subsequently logically retired under
 the qualified lifecycle subset. Independent audit confirmed the exact events,
 preserved delivered-task evidence and unchanged paid records. This does not verify
 process/provider quiescence. The initial lifecycle methods use existing DTO states;
-provider-bound retirement and completed/cancelled task enums remain future work.
+The later narrow provider-bound Fly closure uses the same existing states.
+Completed/cancelled task enums remain future work.
 
 FACTORY source `0948fdd` now includes the reviewed lifecycle and low-memory HTTP
 patches. Their 188/188 suite executed once in the isolated stage, and adoption was

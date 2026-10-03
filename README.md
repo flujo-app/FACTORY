@@ -30,8 +30,8 @@ reviewed logical lifecycle subset and low-memory HTTP preparation. The combined
 source bytes after line-ending normalization without another suite at that
 adoption. The
 HTTP download variant has not run in the cloud. Logical closure is implemented
-for task release and never-provision-bound leaf cells; provider-bound closure
-remains future work. The historical port 4343 API used build `6fcd718` for the
+for task release and never-provision-bound leaf cells. Later source `8dce857`
+adds the narrow qualified provider-bound path described below. The historical port 4343 API used build `6fcd718` for the
 Fly controller; that endpoint was subsequently observed unreachable.
 
 Source `67997585baa897bd7586fe21b9a755c89739a1a3` adds authenticated, read-only
@@ -59,6 +59,16 @@ authenticated check again returned three journals and 15 operations without
 changing their contents or paid accounting. The old port 4343 endpoint was not
 restored. A brain-online adapter pinned to its old endpoint/build needs a reviewed
 configuration update before using the restored service.
+
+Source `8dce857df549f29c69e566fa7d927196cb324c3c` adds provider-bound logical
+leaf closure from recorded owned Fly teardown and a fresh configured-credential
+inventory. Its complete frozen suite passed **288/288** and independent source
+and outcome audits passed. The original child/parent worker cells are now retired
+at controller events 90/91, preserving reviewed work and the unfinished root launch
+task. Root logical capacity returned by $60 once; paid revision 17 still holds all
+$100. Actual API checks project the new state under its existing loaded build
+`8f5a940`. Physical quiescence and final billing remain unverified. See
+[LIFECYCLE.md](LIFECYCLE.md) and [QUALIFICATION.md](QUALIFICATION.md).
 
 ## Run locally
 

@@ -2,7 +2,9 @@
 
 Updated 2026-10-03. The initial subset below is implemented in source commit
 `0948fdd9ff7f5d379982e6e7286fd220236a1993`. The later sections preserve the broader
-2026-10-02 proposal and its historical baseline analysis. Updating this document
+2026-10-02 proposal and its historical baseline analysis. The narrow provider-bound
+path described below is implemented in `8dce857df549f29c69e566fa7d927196cb324c3c`.
+Updating this document
 does not invoke a controller method, change a database or make a provider call.
 
 Physical resource retirement, task completion, logical capacity release, final
@@ -69,33 +71,83 @@ The protected independent adoption/closure/paid audit, published at
 `.factory/integration-stage/run-2026-10-03T01-49-59-785Z-offline/independent-adoption-closure-paid-audit-88d56140-3690-4057-91ee-86154ca54a24.private.json`,
 SHA-256 `fa2c64fcb94e2d9c506fab0453715e12c9237e88981bf1b16d29fcd10abccbe4`.
 
-`completeOperationalTask`, `cancelTask`, completed/cancelled task DTO values,
-targeted draining and provider-bound cell retirement remain **proposals**. They
+`completeOperationalTask`, `cancelTask`, completed/cancelled task DTO values
+and targeted draining remain **proposals**. They
 are not authorized by the existing logical closure methods. The low-memory HTTP
 download path is adopted source preparation, with no cloud execution or proven
 performance improvement.
+
+## Implemented provider-bound Fly closure
+
+Source `8dce857df549f29c69e566fa7d927196cb324c3c` adds this trusted-local API:
+
+```js
+const input = {
+  closureId, expectedParent, expectedStatus, expectedAllocation, expectedSpent,
+  expectedFactoryEpoch, provisionKey, retirementKey
+};
+const proof = await observeProvisionedCellRetirement(control, cellId, input,
+  { managedDirectory, org, workspace, flyPath });
+const receipt = providerRetirementEvidence(proof, control);
+// Record the safe receipt before applying the logical transition.
+const result = control.retireProvisionedCell(cellId, input, proof);
+```
+
+Here `input` is the same exact closed request supplied to the observer. The built-in
+observer directly reads bounded, stable ManagedCloud records and invokes a scoped
+read-only Fly CLI inventory. It requires successful original provisioning and
+matching owned cleanup, cloud-confirmed destroyed records, exact cell/app/effect
+bindings and correlation to the original admitted source/workspace/image request
+and timestamps. The original controller receipt did not retain attempt/owner IDs;
+those correlations come from the private managed records.
+
+The opaque capability binds the exact controller object and request. Consumption
+checks its 60-second wall/monotonic freshness, current database identities, record
+hashes and file identities inside the existing closure transaction. Existing
+leaf-first, running-task, causal-open-effect and allocation-conservation guards
+remain in force. Exact completed replay returns the original result without a
+fresh capability, provider command, event or allocation transfer. `retireCell`
+continues to reject every provision-bound cell.
+
+The result's resource scope is
+`owned-fly-teardown-recorded-and-app-not-returned-by-configured-inventory`.
+The inventory describes the configured credential's returned view. This evidence
+supports logical closure; physical global absence, worker quiescence and final
+billing are separate facts. `workerQuiescence` stays unverified and the paid ledger
+is outside this transaction. New DTO enums and browser commands were not added.
+
+The complete frozen repository suite passed **288/288**. Independent source,
+committed-tree and actual outcome audits passed. The original Fly pilot's child
+was retired at event 90, then its parent at event 91. Original history, reviewed
+work, bindings and the unfinished root launch task remain preserved. Root logical
+unallocated capacity changed from 4,000 to 10,000 cents: the nested child's 1,500
+was inside the parent's 6,000, so only 6,000 returned to root. All US$100 remains
+held under paid revision 17. The existing presentation process correctly projected
+the new state under its actual loaded build `8f5a940`. Exact evidence is in
+[QUALIFICATION.md](QUALIFICATION.md).
 
 ## Historical baseline analysis and broader proposal
 
 The sections below retain the original pre-implementation analysis, source line
 references and proposed signatures. Descriptions of the old controller refer to
 that historical baseline, not current source. The implemented API and limits are
-defined above; broader completion/provider-evidence behavior below remains a
+defined above; broader completion/provider-evidence extensions below remain a
 proposal.
 
 ### Historical behavior and gaps
 
 | Finding | Existing evidence | Implication |
 | --- | --- | --- |
-| Baseline cells had no closure method; `retired` was already understood by capacity and budget queries. | Historical `src/control.mjs:71–93`; `src/presentation.mjs:139–146` | The implemented subset now closes never-provision-bound leaves with exact-once spent transfer. Provider-bound closure remains open. |
+| Baseline cells had no closure method; `retired` was already understood by capacity and budget queries. | Historical `src/control.mjs:71–93`; `src/presentation.mjs:139–146` | Current methods close unprovisioned leaves and narrowly qualified successful Fly teardown, with exact-once spent transfer. |
 | Baseline lease authority did not check the owner cell's status. | Historical `src/control.mjs:122–129` | Current authority now requires a ready owner cell and retirement invalidates task/project execution authority. |
 | Enrollment accepts any status except retired. | `src/control.mjs:92` | A future draining state could be accidentally changed back to ready. Restrict enrollment to reserved/ready if such a state is ever introduced. |
 | Running operational tasks have no completed/cancelled transition. | `src/control.mjs:94–142`, `243–254` | Pausing correctly revokes admission but leaves old running rows and occupied branch identities. A provider's absence cannot itself prove that a task succeeded. |
 | Pause changes control epoch, not candidate/review history. | `src/control.mjs:167–173`, `267–268` | An unchanged verified Git candidate is already eligible for delivery under a fresh project lease after resume. Do not reset it or require another review merely because its producer retired. |
 | Open effects preserve uncertainty across retirement. | `test/retirement-regressions.test.mjs`; `test/review-regressions.test.mjs:135–180` | Successful cleanup is compatible with unresolved earlier work. A destroyed app cannot turn a running/unknown provision or model call into not_applied. |
 
-The historical stale-ready gap is now addressed for never-provision-bound cells.
-Provider-bound closure and operational completion/cancellation remain gaps.
+The historical stale-ready gap is now addressed for unprovisioned cells and the
+narrow successful Fly teardown path. Broader provider outcomes and operational
+completion/cancellation remain gaps.
 Retaining verified work and unknown effects during pause remains intentional. A
 verified task stays verified until delivered or explicitly abandoned; it is not a
 running execution.
@@ -120,7 +172,9 @@ retireCell(cellId, { expectedParent, expectedAllocation, expectedSpent,
 
 These are the original proposed signatures, not the current API: `releaseTask`
 and `retireCell` now use the exact initial-subset fields shown above. The other
-methods and `retirementEvidence` path remain unimplemented. A future extension
+methods and original JSON `retirementEvidence` argument remain unimplemented. The
+current provider path uses a separate method and opaque capability, described
+above. A future extension
 should capture immutable input before asynchronous evidence reads, revalidate
 inside `BEGIN IMMEDIATE`, and use trusted-local administrative authority while
 paused. Avoid requiring unrelated projects or all factory effects to drain.
@@ -190,8 +244,10 @@ Root cannot be retired, rolled into a parent, or removed by these methods. Retir
 
 ## Proposed provider evidence and reviewed-work handoff
 
-Provider-bound retirement in this section is future work. Current `retireCell`
-rejects every provision-bound identity even when provider cleanup is confirmed.
+This section preserves the broader original proposal. Current `retireCell` still
+rejects every provision-bound identity. The implemented separate
+`retireProvisionedCell` path described above handles narrowly qualified successful
+owned Fly teardown; broader outcomes and adapters remain future work.
 
 A successful logical closure must describe the scope of resource evidence honestly:
 
@@ -217,10 +273,10 @@ in the coordinated follow-up. Do not disguise completion as rejected/delivered o
 silently reset tasks to ready.
 
 The initial controller methods and dedicated lifecycle cases are qualified; actual
-logical closure of the documentation leaves is recorded above. Provider-evidence
-qualification still belongs at the trusted adapter boundary. Future provider-bound
-orchestration must use explicit task outcomes and leaves before parents, after
-owned retirement is confirmed. This document itself performs no orchestration.
+logical closure of the documentation and original Fly leaves is recorded above.
+Provider-evidence qualification belongs at the trusted runtime boundary. Broader
+provider-bound orchestration must use explicit task outcomes and leaves before
+parents. This document itself performs no orchestration.
 
 ## Original qualification plan
 

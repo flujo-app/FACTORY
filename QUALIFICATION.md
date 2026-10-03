@@ -1,10 +1,13 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current runtime source is
-`8f5a94048e9c8be007cf3b5229607783b49cd47f`, adding pinned model artifact checks,
-source/receipt binding and a supported vLLM logging flag. Its frozen combination
-passed **274/274** with exit 0 and matching source/paid-state bytes before and after
-the final run. The earlier authenticated Modal observation source `6799758` retains
+`8dce857df549f29c69e566fa7d927196cb324c3c`, adding qualified provider-bound
+logical cell retirement. Its frozen combination passed **288/288** with exit 0,
+all 54 source pins stable and all 29 protected accounting/history pins unchanged
+during qualification. The two original Fly worker cells were then logically
+retired at events 90/91, with paid accounting unchanged. Earlier model-startup
+source `8f5a94048e9c8be007cf3b5229607783b49cd47f` retains its **274/274**
+qualification. The earlier authenticated Modal observation source `6799758` retains
 its historical **270/270** qualification. The earlier lifecycle/HTTP adoption at
 `0948fdd9ff7f5d379982e6e7286fd220236a1993` retains its separate historical
 **188/188** isolated-stage qualification. R3 used unchanged launch build `15d6c78`
@@ -544,6 +547,71 @@ Minimized protected inspection SHA-256:
 Shared revision17 still holds all US$100; recorded partial observations round to
 24cents, final spend remains null, and no new paid attempt is admitted.
 
+## Provider-bound logical closure and actual adoption
+
+Commit `8dce857df549f29c69e566fa7d927196cb324c3c` changes exactly three files:
+the controller, the built-in provider-retirement observer and 14 dedicated
+regression cases. The complete Node 24.19.0 suite ran from **04:28:24.858 to
+04:28:42.366 UTC**: **288/288**, exit 0, no failures, cancellations, skips or todos.
+All 54 raw source pins matched before/after execution and all 29 protected Fly,
+Modal and paid-state pins were unchanged. Protected qualification:
+`.factory/qualification/provider-cell-closure-d3b9f80e-39aa-4c6f-b805-0073caabbaff/combined-qualification.private.json`,
+SHA-256 `4c5ea8836cf3943c4ffe4a4bff5cb5230d809e00c5c194f4fc3a9c31b57a7071`.
+Raw TAP SHA-256:
+`97bb3081d8e1515ba012d9034a3a35dee325bc5db6efdf06657b257a24597cdc`.
+Independent committed-tree audit SHA-256:
+`42d1f462676d7926e9cb1ccc69680202ae1fbd86550da949c1aba7c585ffdc6a`.
+
+The new path requires a successful original provision and matching successful
+owned cleanup, correlated cloud-confirmed destroyed ManagedCloud records, a
+fresh trusted-CLI inventory, exact cell/effect/request bindings and the existing
+leaf/task/causal-effect/allocation guards. Its process-bound proof expires after
+60 seconds using wall and monotonic clocks; current identities and artifact bytes
+are checked inside the closure transaction. Exact completed replay returns the
+recorded result without another provider command or budget transfer. The original
+controller receipt did not retain attempt/owner IDs; their historical correlation
+uses the private managed records, admitted request digest and timestamps.
+
+Evidence scope is explicitly
+`owned-fly-teardown-recorded-and-app-not-returned-by-configured-inventory`.
+An inventory covers the configured credential's returned view; it does not
+certify global provider absence or general worker quiescence.
+
+The first application stopped before dispatch because its prepared report was
+127,314 bytes and the private reader's default maximum was 65,536. No intent,
+provider call or controller mutation occurred. The exact first driver and failed
+attempt are preserved; failure proof SHA-256:
+`106c2431d6f4502ab7f5d723c509c2a550eabe7450fe257fdecb2993c18445e5`.
+The revised private driver uses a bounded 1 MiB preparation read and a fresh r2
+evidence directory. Its independent correction review SHA-256 is
+`74e3769ac997c09f38f4ed8eb9629d2252873974f9fd7bee82a8b3df5f7c08c2`.
+Production source and its qualification were unchanged by that correction.
+
+The qualified r2 driver made exactly two read-only Fly inventory commands and
+applied child retirement at event 90, then parent retirement at event 91. Root
+logical unallocated capacity changed **4,000 to 10,000 cents**, returning **6,000
+once**. The child's 1,500 allocation was nested inside the parent's 6,000. The
+original 89 events, six provider effects, reviewed artifacts, bindings and
+root-owned running `launch-parent` task were preserved. Zero-allocation
+`local-verifier` and `live-watcher` cells were unchanged. The 27 non-controller
+protected file pins and complete paid rows remained unchanged. Paid revision 17
+still holds US$100, with zero admission capacity, 24 conservatively rounded
+partial cents and null final billing. `workerQuiescence` remains unverified.
+
+Protected adoption: `.factory/provider-cell-retirement-20261003-r2/adoption.private.json`,
+SHA-256 `679701746a6bf52da94a01fef0af9ad6e7f562c7c7244b8e481de9d986f4ab0b`.
+Independent outcome audit SHA-256:
+`fe4da2d2e3f86fd2590565194c251614c18c06227a0870cc7422e55cef822f10`.
+
+Actual HTTP checks at **04:34:50.958–04:34:51.133 UTC** showed both retired cells,
+controller revision 91 and the unchanged running task and paid projection. All
+three Modal journals still expose their original 15 operations and three unknown
+prefetch outcomes. SQL and main/WAL bytes were stable during those HTTP reads.
+The existing port 4344 process was not restarted: its actual presentation build
+remains `8f5a940`, distinct from repository runtime source `8dce857`.
+Protected HTTP witness SHA-256:
+`1e545a0d0dca944e0daaae73d21486e4e00a92e0ba90b4bf5bd7be5644361bb4`.
+
 ## Remaining proofs
 
 - Native remote peer enrollment, autonomous child provisioning and authenticated
@@ -553,9 +621,9 @@ Shared revision17 still holds all US$100; recorded partial observations round to
 - A runtime FLUJO improvement through source-pinned acceptance and delivery, plus
   upstream publication. The completed one-file documentation task qualifies local
   delivery, with no PR, push, upstream merge or runtime change.
-- Operational completion/cancellation and provider-bound task/cell closure across
-  control epochs, with truthful resource and billing status. Initial task release,
-  never-provision-bound leaf retirement and reviewed-work preservation are implemented.
+- Operational completion/cancellation and broader provider-evidence closure for
+  failed or unresolved provisioning outcomes. Initial task release, unprovisioned
+  leaf retirement and the narrow successful-Fly-teardown closure are implemented.
 - Modal-backed direct inference and actual native FLUJO Flow execution. Offline
   HTTP download qualification does not establish either.
 - Measured self-improvement: comparable baseline/candidate delivery outcomes,
@@ -563,10 +631,10 @@ Shared revision17 still holds all US$100; recorded partial observations round to
   successful model request do not establish improved development speed.
 
 The [lifecycle document](LIFECYCLE.md) distinguishes the implemented initial
-subset—task release, never-provision-bound leaf retirement, ready-cell authority,
-causal guards and allocation conservation—from the broader proposal. Provider-bound
-retirement and additional completed/cancelled task states remain proposed and
-require qualified resource evidence and coordinated strict interface changes.
+subset—task release, never-provision-bound leaf retirement, qualified successful
+Fly teardown, ready-cell authority, causal guards and allocation conservation—from
+broader proposals. Additional completed/cancelled task states still require
+coordinated strict interface changes.
 
 The shared FLUJO source, owner default-model binding, paused hackathon automations
 and unrelated cloud resources were not reset or resumed by these experiments.

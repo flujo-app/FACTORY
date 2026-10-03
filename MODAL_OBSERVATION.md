@@ -88,3 +88,13 @@ returned three journals/15operations with unchanged logical state and main/WAL
 bytes. Paid revision17 and its full US$100 hold remain unchanged. The model startup
 changes at this build are prepared offline; no inference/nativeFlow success follows
 from restoring journal visibility. The old port4343 endpoint was not restored.
+
+Repository runtime source `8dce857df549f29c69e566fa7d927196cb324c3c` subsequently
+qualified provider-bound logical cell closure with 288/288 checks. Actual HTTP
+reads at 04:34:51 UTC projected Fly revision 91 and both retired worker cells, while
+the existing presentation process remained actual build `8f5a940`. This controller
+change did not alter the three Modal journals, their 15 operations, their three
+unknown prefetch outcomes or paid revision 17. The shared paid ledger still holds
+all US$100 with zero new paid admission capacity and unknown final billing.
+HTTP witness SHA-256:
+`1e545a0d0dca944e0daaae73d21486e4e00a92e0ba90b4bf5bd7be5644361bb4`.
