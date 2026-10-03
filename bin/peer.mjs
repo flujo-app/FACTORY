@@ -4,6 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { PeerStore, PeerError, requirePeer, BODY_LIMIT } from '../src/peer-messaging.mjs';
 import { startPeerServer, dispatchPeerMessage } from '../src/peer-gateway.mjs';
 import { bootstrapPeerPair } from '../src/peer-bootstrap.mjs';
+import { validateWatchConfig, runPeerWatcher } from '../src/peer-watch.mjs';
+import { createLocalHealthSource } from '../src/peer-health.mjs';
 
 const [command, ...arguments_] = process.argv.slice(2);
 let store;
@@ -22,11 +24,11 @@ try {
   const flags = {};
   for (let index = 0; index < arguments_.length; index += 2) {
     const name = arguments_[index], value = arguments_[index + 1];
-    requirePeer(['--private-module', '--config', '--database', '--host', '--port', '--tls-file', '--message-id', '--expected-generation', '--output'].includes(name)
+    requirePeer(['--private-module', '--config', '--database', '--host', '--port', '--tls-file', '--message-id', '--expected-generation', '--output', '--watch-file'].includes(name)
       && value !== undefined && !Object.hasOwn(flags, name), 'CLI');
     flags[name] = value;
   }
-  requirePeer(['pair', 'serve', 'enqueue', 'send', 'inbox', 'read', 'status', 'rotate'].includes(command), 'CLI');
+  requirePeer(['pair', 'serve', 'watch', 'enqueue', 'send', 'inbox', 'read', 'status', 'rotate'].includes(command), 'CLI');
   requirePeer(typeof flags['--private-module'] === 'string' && path.isAbsolute(flags['--private-module']), 'PRIVATE_MODULE');
   // This is an explicitly selected trusted local operator module, never a peer input.
   const privateFiles = await import(pathToFileURL(flags['--private-module']).href);
@@ -64,6 +66,15 @@ try {
       const host = flags['--host'] ?? '127.0.0.1', port = Number(flags['--port'] ?? '4350');
       const tls = flags['--tls-file'] ? await privateFiles.readPrivateJson(path.resolve(flags['--tls-file']), { maxBytes: 64 * 1024 }) : undefined;
       if (tls) requirePeer(Object.keys(tls).sort().join(',') === 'cert,key' && typeof tls.key === 'string' && typeof tls.cert === 'string', 'TLS');
+      if (command === 'watch') {
+        requirePeer(typeof flags['--watch-file'] === 'string' && path.isAbsolute(flags['--watch-file']), 'CLI');
+        const configuration = validateWatchConfig(await privateFiles.readPrivateJson(flags['--watch-file'], { maxBytes: 8192 }), store.config);
+        const sourceReader = await createLocalHealthSource({ configuration, privateFiles });
+        const controller = new AbortController(), stop = () => controller.abort();
+        process.once('SIGINT', stop); process.once('SIGTERM', stop);
+        try { await runPeerWatcher({ store, configuration, sourceReader, host, port, tls, onEvent: safePrint, signal: controller.signal }); }
+        finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      } else {
       const server = await startPeerServer({ store, host, port, tls });
       safePrint({ state: 'listening', port: server.address().port, tls: Boolean(tls), scope: 'advisory-pair-only' });
       let stopping = false;
@@ -73,6 +84,7 @@ try {
       };
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
       await new Promise(resolve => server.once('close', resolve));
+      }
     }
   }
 } catch (error) {

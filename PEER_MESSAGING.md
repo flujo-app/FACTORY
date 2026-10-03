@@ -97,3 +97,87 @@ and the same `--private-module`:
 No existing presentation route or command capability changes. Local two-process
 qualification demonstrates protocol crash/retry behavior; an independently hosted
 peer and full FLUJO autonomous federation still need separate acceptance.
+
+## Automatic mutual watching
+
+`watch --watch-file ABSOLUTE_PRIVATE_JSON --port PORT` owns a peer receiver and
+automatically probes the configured other peer. Start one process for each side,
+using the existing private pair configs and separate advisory databases. A watch
+profile is closed and explicit:
+
+```json
+{
+  "schemaVersion": 1,
+  "watchId": "alpha-watches-beta",
+  "source": {
+    "snapshotUrl": "http://127.0.0.1:4361/v1/snapshot",
+    "tokenFile": "ABSOLUTE_PRIVATE_VIEWER_TOKEN_JSON",
+    "expectedFactoryId": "factory-a",
+    "expectedCellId": "coordinator"
+  },
+  "intervalMs": 2000,
+  "timeoutMs": 5000,
+  "maxAgeMs": 30000,
+  "messageTtlMs": 60000,
+  "durationMs": null
+}
+```
+
+The source identifies this process's own factory/cell and accepts only a fixed
+literal-loopback HTTP snapshot GET. Its private JSON token file contains exactly
+`{"token":"RANDOM_VIEWER_TOKEN"}`. The token is used only for that local source;
+no viewer token, private path or source URL travels to a peer. `durationMs:null`
+runs until an explicit stop or credential failure. A positive duration may bound
+a temporary rehearsal. Polling is 1–60 seconds, each HTTP attempt 0.1–30 seconds,
+source age 1 second–1 hour, and message expiry 1 second–24 hours.
+
+Watch receivers additionally expose fixed `GET /v1/peer/health`. This is a separate
+HMAC domain from messages, binding both identities, credential generation, GET
+method, exact path, random challenge nonce, request time and canonical response
+bytes. Request and response freshness have a 30-second clock-skew bound; health
+bodies are limited to 8 KiB. Authentication is checked before and after source or
+peer IO and inside the observation transaction. No redirects are followed. A
+plain `serve` receiver does not expose health without an explicit source reader.
+
+The authenticated response reports its process instance and a closed projection
+of its own read-only snapshot: controller revision/status/epoch, configured cell
+role/status/heartbeat classification, unresolved effect count/drain status,
+`workerQuiescence:"unverified"`, logical allocation aggregates and USD paid
+aggregates/revision. Paid overcommit is retained, incomplete billing keeps final
+spend null, and paid availability is separate from controller availability. Raw
+missions, tasks, effects, reservations, commands and credentials are omitted.
+An unavailable local source still permits an authenticated health response; that
+response does not assert fresh controller or budget capacity.
+
+Each watcher persists meaningful changes as advisory `health_observation`
+messages. Poll times, nonce, mailbox counts and raw age do not create changes.
+Status, reachability/authentication, freshness classification, revisions, actual
+aggregate changes and remote process restart can create an episode. Independent
+controller and paid revision floors survive outages and restarts. A rewind marks
+the current source unavailable and keeps the prior trusted projection separately;
+it cannot turn stale history into recovered capacity.
+
+The retained watch-owned outbox chain is also the durable checkpoint. One existing
+SQLite transaction compares its predecessor and admits the exact message and
+event. Competing watchers discard stale probes and reobserve. There are no new
+tables or peer schema/config versions. The full retained chain is validated in
+bounded pages, with no lifetime observation cutoff. Explicit stable `watchId` and
+immutable nonsecret config-binding digest prevent silent source/policy repointing;
+configuration migration is unsupported. Pair credential rotation preserves the
+watch namespace and original pending bodies.
+
+On restart, watchers reconcile their own pending intents automatically. Retries
+retain original message ID/body/digest, destination, created time and expiry;
+they never enqueue a refreshed replacement. Uncertain expired originals remain
+explicitly `expired-unconfirmed`; already committed duplicates can still resolve
+their original acknowledgement. Retry backoff is capped at 30 seconds. At 32
+pending intents admission pauses while retries continue, so newer observations
+are rechecked when capacity frees. Later eligible intents do not wait behind an
+expired original. stdout exposes listening, changed observation, delivery and
+backpressure/stopped states; it suppresses unchanged observations.
+
+This grants observation and advisory delivery only. It cannot claim a task,
+change controller state, release billing holds or admit paid work. Qualification
+must show two actual processes observing each other, unchanged-state silence,
+receiver/watcher restart and exact original ACK recovery. Same-host qualification
+does not establish independent-host availability or deployed FLUJO autonomy.

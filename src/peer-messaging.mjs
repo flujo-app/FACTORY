@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { WATCH_FORMAT, WATCH_PAGE_LIMIT, nextWatchPayload, validateWatchPayload } from './peer-watch-state.mjs';
 
 export const PEER_PATH = '/v1/peer/messages';
 export const PEER_PROTOCOL = 'factory-peer-advisory-v1';
@@ -216,9 +217,11 @@ export class PeerStore {
     active(this.config, this.clock());
   }
   enqueue(input) {
+    return this.transaction(() => this.#enqueueInsideTransaction(input));
+  }
+  #enqueueInsideTransaction(input) {
     requirePeer(input && Object.keys(input).every(key => ['messageId', 'type', 'payload', 'createdAt', 'expiresAt', 'provenance'].includes(key)));
     identifier(input.messageId);
-    return this.transaction(() => {
       this.assertCurrentCredential(); const old = this.outbox(input.messageId);
       const createdAt = input.createdAt ?? old?.envelope.createdAt ?? this.clock();
       const envelope = validateEnvelope({ schemaVersion: 1, protocol: PEER_PROTOCOL, messageId: input.messageId,
@@ -230,6 +233,74 @@ export class PeerStore {
       this.db.prepare("INSERT INTO peer_outbox VALUES(?,?,?,?,?,'pending',NULL,NULL)").run(envelope.messageId, body.toString('utf8'), digest, this.config.endpoint, this.config.generation);
       this.db.prepare('INSERT INTO peer_events(type,message_id,digest,observed_at) VALUES(?,?,?,?)').run('outbox_enqueued', envelope.messageId, digest, this.clock());
       return this.outbox(envelope.messageId);
+  }
+  #watchHistory({ watchId, bindingDigest }) {
+    identifier(watchId); requirePeer(typeof bindingDigest === 'string' && HASH.test(bindingDigest), 'WATCH_SHAPE');
+    const prefix = 'watch.' + hash(Buffer.from(watchId)).slice(0, 32) + '.';
+    // Full retained chain, read in bounded pages. There is no lifetime cutoff or wall-clock order.
+    const count = this.db.prepare(`SELECT count(*) AS total FROM peer_outbox o
+      WHERE substr(o.message_id,1,?)=? OR json_extract(o.body,'$.payload.watchId')=?`).get(prefix.length,prefix,watchId).total;
+    const eventsCount = this.db.prepare("SELECT count(*) AS total FROM peer_events WHERE type='outbox_enqueued' AND substr(message_id,1,?)=?").get(prefix.length,prefix).total;
+    requirePeer(count===eventsCount,'WATCH_CHAIN');
+    const page = this.db.prepare(`SELECT o.message_id,e.sequence FROM peer_outbox o JOIN peer_events e
+      ON e.message_id=o.message_id AND e.type='outbox_enqueued'
+      WHERE (substr(o.message_id,1,?)=? OR json_extract(o.body,'$.payload.watchId')=?) AND e.sequence>?
+      ORDER BY e.sequence LIMIT ?`);
+    let previous=null,after=0,seen=0,pendingCount=0;const pending=[];
+    while(true) {
+      const rows=page.all(prefix.length,prefix,watchId,after,WATCH_PAGE_LIMIT);if(!rows.length)break;
+      for(const row of rows) {
+      const outbox = this.outbox(row.message_id), envelope = outbox.envelope;
+      const events = this.db.prepare("SELECT sequence,digest FROM peer_events WHERE type='outbox_enqueued' AND message_id=? ORDER BY sequence LIMIT 2").all(outbox.messageId);
+      requirePeer(events.length === 1 && events[0].digest === outbox.digest, 'WATCH_CHAIN');
+      requirePeer(envelope.type === 'health_observation' && envelope.payload?.format === WATCH_FORMAT
+        && envelope.payload.watchId === watchId && envelope.payload.bindingDigest === bindingDigest, 'WATCH_CONFIG_CONFLICT');
+      requirePeer(envelope.payload.observation?.generation === outbox.admittedGeneration
+        && Object.values(envelope.provenance).every(value => value === null), 'WATCH_CHAIN');
+      const node={...outbox,sequence:events[0].sequence,payload:envelope.payload};
+      validateWatchPayload(node.payload, previous, { watchId, bindingDigest });
+      requirePeer(node.messageId === prefix + node.payload.episode
+        && (!previous || (node.payload.semanticDigest !== previous.payload.semanticDigest
+          && node.admittedGeneration >= previous.admittedGeneration)), 'WATCH_CHAIN');
+      previous=node;after=row.sequence;seen++;
+      if(node.state==='pending'){pendingCount++;if(pending.length<32)pending.push(node);}
+      }
+    }
+    requirePeer(seen===count,'WATCH_CHAIN');return {checkpoint:previous,pending,pendingCount};
+  }
+  watchCheckpoint(binding) {
+    return this.transaction(() => {
+      this.assertCurrentCredential(); const row = this.#watchHistory(binding).checkpoint;
+      return row ? { messageId: row.messageId, digest: row.digest, sequence: row.sequence, payload: structuredClone(row.payload) } : null;
+    });
+  }
+  recordWatchObservation({ watchId, bindingDigest, expectedMessageId, expectedDigest, observation, messageTtlMs }) {
+    requirePeer(expectedMessageId === null || typeof expectedMessageId === 'string', 'WATCH_SHAPE');
+    requirePeer(expectedDigest === null || (typeof expectedDigest === 'string' && HASH.test(expectedDigest)), 'WATCH_SHAPE');
+    requirePeer((expectedMessageId === null) === (expectedDigest === null), 'WATCH_SHAPE');
+    requirePeer(Number.isSafeInteger(messageTtlMs) && messageTtlMs >= 1000 && messageTtlMs <= 86400000, 'WATCH_SHAPE');
+    return this.transaction(() => {
+      this.assertCurrentCredential(); const history = this.#watchHistory({ watchId, bindingDigest }), previous = history.checkpoint;
+      requirePeer((previous?.messageId ?? null) === expectedMessageId && (previous?.digest ?? null) === expectedDigest, 'WATCH_CONFLICT');
+      requirePeer(observation?.generation === this.config.generation, 'CREDENTIAL_GENERATION');
+      requirePeer(observation?.source?.controller === null || observation?.source === null
+        || observation?.source?.controller?.cell?.id === this.config.peer.cellId, 'IDENTITY');
+      const payload = nextWatchPayload(previous, observation, { watchId, bindingDigest });
+      const checkpoint = row => row ? { messageId: row.messageId, digest: row.digest, sequence: row.sequence, payload: structuredClone(row.payload) } : null;
+      if (previous?.payload.semanticDigest === payload.semanticDigest) return { changed: false, checkpoint: checkpoint(previous), outbox: null };
+      requirePeer(history.pendingCount < 32, 'WATCH_BACKPRESSURE');
+      const createdAt = integer(this.clock()), messageId = 'watch.' + hash(Buffer.from(watchId)).slice(0,32) + '.' + payload.episode;
+      const outbox = this.#enqueueInsideTransaction({ messageId, type: 'health_observation', payload, createdAt, expiresAt: createdAt + messageTtlMs });
+      const sequence = this.db.prepare("SELECT sequence FROM peer_events WHERE type='outbox_enqueued' AND message_id=?").get(messageId).sequence;
+      return { changed: true, checkpoint: checkpoint({ ...outbox, payload, sequence }), outbox };
+    });
+  }
+  watchPending({ watchId, bindingDigest, limit = 32 }) {
+    requirePeer(Number.isSafeInteger(limit) && limit >= 1 && limit <= 32, 'WATCH_SHAPE');
+    return this.transaction(() => {
+      this.assertCurrentCredential(); const history = this.#watchHistory({ watchId, bindingDigest });
+      requirePeer(history.pendingCount <= limit, 'WATCH_BACKPRESSURE');
+      return history.pending.map(row => ({ ...row, delivery: row.envelope.expiresAt <= this.clock() ? 'expired-unconfirmed' : 'pending' }));
     });
   }
   outbox(messageId) {

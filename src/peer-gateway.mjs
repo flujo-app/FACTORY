@@ -2,15 +2,38 @@ import http from 'node:http';
 import https from 'node:https';
 import { BODY_LIMIT, ACK_LIMIT, PEER_PATH, PeerError, requirePeer, wireBytes,
   requestHeaders, verifyRequest, acknowledgementHeaders, verifyAcknowledgement } from './peer-messaging.mjs';
+import { HEALTH_PATH, verifyHealthRequest, healthResponseBytes, healthResponseHeaders } from './peer-health.mjs';
 
 function errorResponse(response, status, code) {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   response.end(JSON.stringify({ error: { code } }));
 }
 /** Advisory-only receiver. An ACK follows the committed inbox transaction. */
-function createPeerServer({ store, config = store.config, tls } = {}) {
+function createPeerServer({ store, config = store.config, tls, health } = {}) {
   requirePeer(config === store.config, 'CONFIG_CONFLICT');
   const handler = (request, response) => {
+    if (health && request.method === 'GET' && request.url === HEALTH_PATH) {
+      if (request.headers['transfer-encoding'] || (request.headers['content-length'] !== undefined && request.headers['content-length'] !== '0'))
+        return errorResponse(response, 400, 'BODY_LIMIT');
+      void (async () => {
+        try {
+          store.assertCurrentCredential();
+          const challenge = verifyHealthRequest(config, request.headers, store.clock());
+          const source = await health.sourceReader.read();
+          store.assertCurrentCredential();
+          const bytes = healthResponseBytes(config, challenge, { instanceId: health.instanceId, source }, store.clock());
+          store.assertCurrentCredential();
+          response.writeHead(200, { ...healthResponseHeaders(config, challenge, bytes, store.clock()),
+            'content-length': String(bytes.length), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+          response.end(bytes);
+        } catch (error) {
+          const code = error instanceof PeerError ? error.code : 'HEALTH_UNAVAILABLE';
+          const status = ['AUTHENTICATION', 'IDENTITY', 'CREDENTIAL_EXPIRED', 'CREDENTIAL_GENERATION'].includes(code) ? 401 : 503;
+          if (!response.destroyed) errorResponse(response, status, code);
+        }
+      })();
+      return;
+    }
     if (request.method !== 'POST' || request.url !== PEER_PATH) return errorResponse(response, 404, 'ROUTE');
     const length = request.headers['content-length'];
     if (!length || !/^[1-9][0-9]{0,5}$/.test(length) || Number(length) > BODY_LIMIT || request.headers['transfer-encoding'])
@@ -76,6 +99,7 @@ export async function dispatchPeerMessage({ store, messageId, timeoutMs = 5000 }
       request.once('error', () => finish({ failure: 'CONNECTION' })); request.end(body);
     } catch { request?.destroy(); finish({ failure: 'CONNECTION' }); }
   });
+  store.assertCurrentCredential();
   if (result.failure) return { state: 'pending', messageId, digest: outbox.digest, failure: result.failure };
   try {
     store.assertCurrentCredential();
