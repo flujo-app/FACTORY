@@ -5,6 +5,7 @@ import { dirname, isAbsolute } from 'node:path';
 import { safeReceipt } from './receipts.mjs';
 import { consumeGitRefusalProof } from './git-effect.mjs';
 import { consumeProviderRetirementProof } from './provider-retirement.mjs';
+import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -335,10 +336,15 @@ export class FactoryControl {
     if (Object.hasOwn(specification,'taskType') && !['software','operation'].includes(specification.taskType)) fail('INVALID', 'Unsupported immutable task type.');
     if (specification.taskType === 'operation') operationContract(specification);
     else if (Object.hasOwn(specification,'operation')) fail('INVALID', 'An operation contract requires an explicit operation task type.');
+    if(Object.hasOwn(specification,'nativeMission')) {
+      if(specification.taskType==='operation') fail('INVALID','Native mission execution requires a software task.');
+      validateNativeMission(specification.nativeMission);
+    }
     const payload = canonical(specification), hash = digest(specification);
     return this.transaction(() => {
       this.active(); const previous = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
       if (previous) { if (previous.project_id !== projectId || previous.branch !== branch || previous.spec_digest !== hash) fail('CONFLICT', 'Task key has different input.'); return this.task(taskId); }
+      if(specification.nativeMission && this.db.prepare('SELECT specification FROM tasks').all().some(row=>JSON.parse(row.specification).nativeMission?.missionId===specification.nativeMission.missionId))fail('NATIVE_MISSION_ID','Mission identity is already assigned to another task.');
       this.db.prepare('INSERT INTO tasks(id,project_id,branch,specification,spec_digest,status) VALUES(?,?,?,?,?,?)').run(taskId,projectId,branch,payload,hash,'ready');
       this.event('task_created',taskId,{projectId,branch,specDigest:hash}); return this.task(taskId);
     });
@@ -347,7 +353,9 @@ export class FactoryControl {
   openEffects(scope, scopeId) { return this.db.prepare(`SELECT key,state FROM effects WHERE scope=? AND scope_id=? AND state IN ${OPEN_EFFECTS}`).all(scope,scopeId); }
   claimTask(taskId, cellId, ttlMs = 60000) {
     id(taskId); id(cellId); integer(ttlMs,'ttlMs',1);
-    return this.transaction(() => {
+    return this.transaction(() => this.#claimTask(taskId,cellId,ttlMs));
+  }
+  #claimTask(taskId,cellId,ttlMs) {
       const control = this.active(); const task = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
       const cell = this.db.prepare("SELECT * FROM cells WHERE id=? AND status='ready'").get(cellId);
       if (!cell || !['developer','coordinator'].includes(cell.role)) fail('CELL','Ready developer/coordinator is required.');
@@ -358,6 +366,61 @@ export class FactoryControl {
       this.db.prepare('UPDATE tasks SET status=?,owner=?,epoch=?,token_hash=?,expires=?,control_epoch=? WHERE id=?').run('running',cellId,epoch,tokenHash(token),expires,control.epoch,taskId);
       this.event('task_claimed',taskId,{cellId,epoch,controlEpoch:control.epoch});
       return {scope:'task',scopeId:taskId,cellId,epoch,controlEpoch:control.epoch,expires,token};
+  }
+  #nativeMissionTarget(task) {
+    const m=validateNativeMission(task.specification.nativeMission),cell=this.db.prepare('SELECT * FROM cells WHERE id=?').get(m.cellId);
+    const effect=this.effect(m.provisionKey);
+    if(!cell || !['reserved','ready'].includes(cell.status) || !['developer','coordinator'].includes(cell.role)
+      || effect.kind!=='provision' || effect.state!=='succeeded' || effect.owner!==cell.parent_id
+      || effect.receipt?.worker!==m.app || effect.receipt?.app!==m.app || effect.receipt?.state!=='ready'
+      || ['cell:'+m.cellId,'app:'+m.app].some(target=>this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get(target)?.effect_key!==m.provisionKey)
+      || this.db.prepare("SELECT key FROM effects WHERE kind='retire' AND scope_id=?").get(m.app)
+      || this.db.prepare("SELECT t.specification FROM effects e JOIN tasks t ON t.id=e.task_id WHERE e.kind='retire'").all()
+        .some(row=>JSON.parse(row.specification).operation?.app===m.app)) fail('NATIVE_MISSION_TARGET','An available provision-bound worker is required.');
+    return m;
+  }
+  /** Trusted local enrollment and assignment after authenticated native preparation. */
+  claimNativeMission({taskId,expectedSpecDigest,expectedFactoryEpoch,workerProof,ttlMs=60000}) {
+    id(taskId);integer(expectedFactoryEpoch,'expectedFactoryEpoch',1);integer(ttlMs,'ttlMs',1);
+    return this.transaction(()=>{
+      const current=this.active(),task=this.task(taskId),m=this.#nativeMissionTarget(task);
+      if(current.epoch!==expectedFactoryEpoch || task.status!=='ready' || task.spec_digest!==expectedSpecDigest
+        || digest(workerProof)!==digest(m.worker)) fail('STALE','Native preparation no longer matches the ready task.');
+      this.db.prepare('UPDATE cells SET status=?,heartbeat=? WHERE id=?').run('ready',this.clock(),m.cellId);
+      this.event('native_cell_enrolled',m.cellId,{taskId,provisionKey:m.provisionKey,worker:m.worker});
+      return this.#claimTask(taskId,m.cellId,ttlMs);
+    });
+  }
+  admitNativeMissionEffect(lease,request) {
+    return this.transaction(()=>{
+      const task=this.task(lease.scopeId);this.#nativeMissionTarget(task);
+      if(digest(request)!==digest(nativeMissionRequest(task,lease,request.outputFile))) fail('NATIVE_MISSION_BINDING','Mission request must match the assigned task.');
+      const key=nativeMissionEffectKey(request),admitted=this.#admitEffect(lease,{key,kind:'flow_call',request});
+      if(!admitted.fresh) {
+        const record=this.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted' AND subject=?").all(key);
+        if(record.length!==1 || digest(JSON.parse(record[0].details).request)!==digest(request))fail('NATIVE_MISSION_HISTORY','Original mission history is required.');
+      }
+      return admitted;
+    });
+  }
+  /** Dispatch is synchronous admission only; the returned promise is awaited outside both writer locks. */
+  startNativeMissionEffect(lease,key,dispatch) {
+    const verify=()=>{
+      this.authority(lease);const row=this.effect(key),task=this.task(lease.scopeId);this.#nativeMissionTarget(task);
+      const records=this.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted' AND subject=?").all(key);
+      if(records.length!==1 || row.kind!=='flow_call' || row.scope!=='task' || row.scope_id!==lease.scopeId
+        || row.owner!==lease.cellId || row.owner_epoch!==lease.epoch || row.control_epoch!==lease.controlEpoch
+        || row.request_digest!==digest(JSON.parse(records[0].details).request) || typeof dispatch!=='function')fail('NATIVE_MISSION_HISTORY','An unstarted native mission is required.');
+      return row;
+    };
+    // Persist started BEFORE any external invocation; rollback of the final fence cannot erase it.
+    this.transaction(()=>{
+      if(verify().state!=='accepted')fail('NATIVE_MISSION_HISTORY','An unstarted native mission is required.');
+      this.db.prepare('UPDATE effects SET state=?,updated=? WHERE key=?').run('running',this.clock(),key);
+    });
+    return this.transaction(()=>{
+      if(verify().state!=='running')fail('NATIVE_MISSION_HISTORY','A started native mission is required.');
+      return {pending:dispatch()};
     });
   }
   /** Trusted-local handoff, including while paused; no operational completion claim. */
@@ -551,6 +614,10 @@ export class FactoryControl {
       } else if (lease.scope!=='task') fail('AUTHORITY','Task authority is required.');
       if (lease.scope === 'task') {
         const task = this.task(lease.scopeId);
+        if(kind==='flow_call' && task.specification.nativeMission) {
+          this.#nativeMissionTarget(task);
+          if(key!==nativeMissionEffectKey(request) || digest(request)!==digest(nativeMissionRequest(task,lease,request?.outputFile))) fail('NATIVE_MISSION_BINDING','Native Flow effect must match the assigned mission.');
+        }
         if (task.specification.taskType === 'operation') {
           const operation = operationContract(task.specification);
           if (kind !== operation.kind || request?.cellId !== operation.cellId || request?.app !== operation.app || taskId !== null && taskId !== task.id) fail('OPERATION_BINDING', 'Effect must match the immutable operation contract.');
@@ -570,7 +637,9 @@ export class FactoryControl {
       const now=this.clock();
       this.db.prepare('INSERT INTO effects(key,scope,scope_id,task_id,owner,owner_epoch,control_epoch,kind,request_digest,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(key,lease.scope,lease.scopeId,taskId??(lease.scope==='task'?lease.scopeId:null),owner.owner,lease.epoch,lease.controlEpoch,kind,hash,'accepted',now,now);
       if(kind==='provision') for(const target of ['cell:'+request.cellId,'app:'+request.app]) this.db.prepare('INSERT INTO effect_bindings VALUES(?,?)').run(target,key);
-      this.event('effect_accepted',key,{kind,scope:lease.scope,scopeId:lease.scopeId,requestDigest:hash}); return {fresh:true,effect:this.effect(key)};
+      this.event('effect_accepted',key,{kind,scope:lease.scope,scopeId:lease.scopeId,requestDigest:hash});
+      if(kind==='flow_call' && this.task(lease.scopeId).specification.nativeMission)this.event('native_mission_admitted',key,{request});
+      return {fresh:true,effect:this.effect(key)};
   }
   effect(key) { const row=this.db.prepare('SELECT * FROM effects WHERE key=?').get(id(key)); if (!row) fail('EFFECT','Effect not found.'); return {...row,receipt:row.receipt?JSON.parse(row.receipt):null}; }
   /** Trusted local shutdown authority, restricted to an app already admitted for provisioning. */
@@ -602,7 +671,7 @@ export class FactoryControl {
       return this.effect(key);
     });
   }
-  startEffect(lease,key) { return this.transaction(() => { this.authority(lease); const row=this.effect(key); if (row.state!=='accepted' || row.scope!==lease.scope || row.scope_id!==lease.scopeId || row.owner_epoch!==lease.epoch) fail('EFFECT','Accepted effect belongs to another attempt.'); this.db.prepare('UPDATE effects SET state=?,updated=? WHERE key=?').run('running',this.clock(),key); return this.effect(key); }); }
+  startEffect(lease,key) { return this.transaction(() => { this.authority(lease); const row=this.effect(key); if(row.kind==='flow_call' && this.task(lease.scopeId).specification.nativeMission) fail('NATIVE_MISSION_DISPATCH_REQUIRED','Native missions require their fenced dispatcher.'); if (row.state!=='accepted' || row.scope!==lease.scope || row.scope_id!==lease.scopeId || row.owner_epoch!==lease.epoch) fail('EFFECT','Accepted effect belongs to another attempt.'); this.db.prepare('UPDATE effects SET state=?,updated=? WHERE key=?').run('running',this.clock(),key); return this.effect(key); }); }
   settleEffect(key, state, receipt={}) {
     if (!['succeeded','not_applied','unknown'].includes(state)) fail('INVALID','Invalid settlement.');
     return this.transaction(() => {
