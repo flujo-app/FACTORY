@@ -461,6 +461,15 @@ throughout the witness, which made zero provider calls. Protected witness:
 `.factory/viewer/modal-observation-witnesses/modal-api-211f3c38-0494-4146-b443-6524f63900a8.evidence.private.json`,
 SHA-256 `d73219e9fe4ee2566c2799f5f6856dec2986dced67fdbfe3a65cf53d0b22acb1`.
 
+An independent adoption audit completed at **03:08:59.554 UTC**. It verified all
+45 current raw and committed normalized source files against the qualification,
+the exact eight-file adoption, saved execution/TAP records, and one additional
+authenticated local API read. Every run contains exactly `create-volume`,
+`deploy`, `prefetch`, `stop-app` and `delete-volume`; unknown outcomes, logical
+records, main/WAL bytes and paid accounting remained unchanged. It did not rerun
+tests or call a provider. Protected independent audit SHA-256:
+`bd181bd348cf430d2c93e244df9784628a1c126eac4a6dffbc65694a232be38b`.
+
 This route explicitly reports `registered-modal-operation-journals` scope,
 `persisted-local-operation-journal` basis and provider freshness `not_observed`.
 Its content-SHA journal revisions are separate from the controller cursor and the
