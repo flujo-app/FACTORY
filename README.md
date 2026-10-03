@@ -166,8 +166,8 @@ evidence, not a running-worker acceptance result.
 The spending intent is **at most US$100 across the paid cloud work**, including
 the Modal/open-weight model path. `src/spending.mjs` conserves one durable USD
 allowance across providers, using integer cents and serialized admission. The
-first experiment reserved $10 for Fly and $30 for Modal. A second, distinct Modal
-experiment adds another $30 hold; $30 currently remains unallocated. Current
+first experiment reserved $10 for Fly and $30 for Modal. Two further, distinct
+Modal experiments each hold $30; all $100 is reserved and $0 remains unallocated. Current
 results and billing status are recorded in [QUALIFICATION.md](QUALIFICATION.md).
 Each paid dispatch rechecks its reservation; known experiment or global exhaustion
 blocks new paid work. Owned cleanup remains possible. Retirement keeps funds held

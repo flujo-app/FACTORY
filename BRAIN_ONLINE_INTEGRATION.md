@@ -125,7 +125,9 @@ The verified launch command from the FACTORY directory is:
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
-and $30 Modal, with $60 unallocated. The current HTTP budget DTO reports controller
+and three $30 Modal reservations, with $0 unallocated. As of October 3 at 01:49 UTC,
+partial recorded provider charges are 16 cents; final spend remains unknown.
+The current HTTP budget DTO reports controller
 logical allocation only. The optional `snapshot.paidBudget` extension reads the
 separate paid ledger when the server starts with `--spending-ledger ABSOLUTE_PATH`.
 It has its own read transaction, `revision` and `observedAt`; paid writes do not
@@ -152,7 +154,17 @@ without invented totals, while the readable controller snapshot remains usable.
 The first visual PR may ignore this optional extension until its display contract
 is independently qualified.
 
-The first Fly launch stopped during local fixture creation before any cloud
-provisioning or model call. Its ledger is real; the cloud proof remains open.
-The local Git crash/recovery proof passed. Modal inference work is separate and
-shares the same total spending budget.
+The recovered Fly pilot passed with two real workers and confirmed owned
+retirement. The local Git crash/recovery proof also passed. Modal R3 is still in
+its original CPU prefetch stage after two retired attempts that did not complete
+weights. No Modal inference or native model/Flow execution has been proven yet.
+The API's paused controller describes the Fly journal; it does not describe the
+separate Modal operation journal. Both providers share the paid admission ledger.
+
+The brain-online owner pushed build
+`9b1daf9825d38b94b0a5da4ed3ba06b4d9feba4e`, adding the label “Controller admission”
+and the actual observed backend build/revision and local-coordinator scope.
+FACTORY inspected that narrow diff; the earlier independent 23-check execution
+applies specifically to build `b811bbd`, not this later commit. The owner reports
+28 checks plus typecheck/build passing and a fresh actual BFF read at 01:31 UTC.
+The PR remains unmerged and undeployed by FACTORY.

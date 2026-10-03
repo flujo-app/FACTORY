@@ -63,6 +63,13 @@ the owner's nine mounted-host cases failed against the preceding build and
 passed after the fix. This records reviewed source and local validation, not a
 merged or deployed PR.
 
+The subsequent brain-online build
+`9b1daf9825d38b94b0a5da4ed3ba06b4d9feba4e` labels admission scope and shows the
+actual backend build/revision. FACTORY inspected this narrow diff without finding
+an authentication, API or schema change. Its 28 checks, typecheck/build and fresh
+01:31 UTC actual BFF read are owner-reported; the independent 23-check execution
+above belongs to `b811bbd`. No merge or deployment was performed here.
+
 A saved real-Git before/after comparison uses identical specification, candidate,
 review, delivery request and destination. An external winner advanced the target
 before either trial. Baseline `d70bd69` leaves the completed preflight refusal
@@ -137,6 +144,40 @@ original request digests and the saved Flow's actual Process `maxTokens: 64`.
 Download completion, performance improvement and actual inference remain
 unproven; file-count observations and offline checks establish none of those.
 
+A fresh independent witness at **01:49:22–23 UTC** again found R3's exact App
+deployed with one CPU runner/running input and zero inference runners/inputs.
+Its owned Volume still existed with filesystem version 2. The original local
+journal still had only successful create/deploy and a running prefetch.
+Evidence SHA-256:
+`eb1d16486f15670cc2eddc3519425080fb073a06669f3bcdb175f0a0f8d95f5e`.
+
+Historical provider diagnostics inspected after R2's retirement show failed
+worker heartbeats and a container killed by **SIGKILL, exit 137** at
+**00:28:28.930 UTC**, with a provider memory warning. This strengthens memory
+pressure as a hypothesis; it does not establish a kernel OOM event or the cause.
+The original uncertain prefetch receipt remains unchanged. Provider container
+attempts do not establish coordinator replay. Immutable transcribed UI evidence
+SHA-256:
+`7f5da7362723c9a4a8f7f527d9eae2cc15c494d4d1b5edc3cd4675b884b68333`.
+
+R3's image enables `HF_XET_HIGH_PERFORMANCE` on a 2 GiB CPU downloader. Current
+Hugging Face documentation describes that mode for machines with at least 64 GB
+RAM and warns that smaller systems may perform worse. This is a concrete
+configuration mismatch and a diagnostic lead, not proven causality. Two rounded
+historical dashboard samples at 01:22 and 01:26 UTC showed about 1.8 GiB RAM and
+1.8 CPU cores used, with low network ingress. Those samples establish neither
+download completion nor a general stall. The running R3 image was not altered.
+[Hugging Face Xet documentation](https://github.com/huggingface/hub-docs/blob/main/docs/hub/xet/using-xet-storage.md).
+Dashboard transcription SHA-256:
+`92836e5ded49d09628f6f88cf583e2b60e0ae8c0e4a06db8cf909e1e1cb02f08`.
+
+The O owner separately reports two deliberately launched O runs, each with a
+127-cent reservation and confirmed cleanup of its model/tools sandboxes. Their
+254 cents remain held pending billing; observed and final charges are unavailable.
+These are owner-reported O operations under separately reported human approval,
+not reservations or resources adopted by this FACTORY ledger. The $100 figures
+above retain their registered-FACTORY scope.
+
 The ledger is local
 admission/accounting for registered factory reservations; it is not a provider
 hard billing stop or an audit of unrelated account usage. The Fly apps have been
@@ -209,6 +250,29 @@ object. The driver's own success alone is insufficient; raw response and
 identity-bound receipts require independent review.
 
 ## Remaining proofs
+
+Two compatible follow-ups have passed isolated review but are not yet applied to
+the shared runtime while R3 runs. The logical lifecycle patch supports task
+release and retirement only for never-provision-bound leaves, preserving reviewed
+work and paid holds. Its author passed 76 affected checks; an independent reviewer
+passed 32 lifecycle/adversarial cases. Patch SHA-256:
+`d0e4f42520a4ef122b3c4f67527a139b16a7e158b6503de3f45cf49150513364`.
+
+The low-memory HTTP variant disables Xet and HF Transfer before Hub import, uses
+one download worker, sends no cached Hugging Face token, and verifies the pinned
+Hub version and actual private download metadata. It retains the same resources,
+timeouts, model revision, inference acceptance, cleanup and billing contracts.
+Independent validation passed 35 focused Node checks and nine socket-blocked
+probes against actual official Hub 0.36.0 source. The Node checks invoke 54 Python
+test methods; a separate focused Python execution covers 44 of those. Corrected
+inventory metadata did not change source or rerun tests. This is offline
+qualification, not demonstrated cloud throughput, peak memory or download success.
+Patch SHA-256:
+`fb982f97eef5986781c34e222f882fa9fbe72fc464dad44ca4bb981a3ccf7f3a`.
+Independent report SHA-256:
+`eddbafc221ad2f0e5444f289a9289d04a6858f0710e999d6ad26efba08cbbd16`.
+The full allowance remains held; preparing either patch does not admit another
+paid experiment. Combined isolated qualification is pending.
 
 - Native remote peer enrollment, autonomous child provisioning and authenticated
   peer communication. The successful child request was coordinator-mediated.
