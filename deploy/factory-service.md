@@ -133,6 +133,29 @@ availability.
 
 ## Qualified local execution
 
+Source `fea3d151c1a4380495094744d00a33770b1abbb5` adds the optional
+[capacity-broker role](factory-service.broker.md), exact vendored ManagedCloud,
+pinned Fly CLI and authenticated private container-source profile. The complete
+suite passed **433/433**; 134 of 135 final input hashes match that run, with the
+one later isolated Docker-fixture correction qualified by final build/acceptance.
+Final local image ID is
+`sha256:e277a4b6cad24f25f45288ce094033d432d9b89676fdff52b4116303cb49c1d1`.
+Bound snapshot capture and native restore preserved configuration and dormant
+schedules. Both workers listed an inert MCP tool without invoking it. Broker
+restart replayed the original `not_applied` provision intent under a fully held
+fixture budget, with zero ManagedCloud provisioning or Fly calls. Nine owned
+containers and four volumes were removed.
+
+The separate latest native-cell restart proof used local coordinator image ID
+`sha256:b1bc00c8ad4ef0ef1e42284a0ffa0aa63c4bf1be6ce29378e078a474b3aedcca`
+with identical native-cell runtime: exactly one POST and synthetic-model call,
+paused GET recovery after restart, and the next task ready without effects under
+the full hold. Its nine containers and three volumes were removed. Both proofs
+used the pinned native image below. These local image IDs imply no published
+registry digest, cloud rollout or remote authority activation.
+
+Earlier native-cell-only service qualification follows.
+
 Source `ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` passed **416/416** Node 24.19.0 checks and actual
 packaged service acceptance. Qualified local coordinator image is
 `sha256:c1848edbf480b70a005e4fd80a06a02ea94e4c1658703b9a6c4ad62f4420d51e`;

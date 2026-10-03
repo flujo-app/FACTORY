@@ -71,6 +71,15 @@ FLUJO cloud image uses Node 22, and ManagedCloud overrides its command.
 coordinator and explicit local native companion. Its actual Docker acceptance
 uses private fixture volumes and a synthetic model, including paused recovery
 after both services restart and refusal of fresh work under a fully held budget.
+The optional [capacity-broker role](deploy/factory-service.broker.md) uses the
+same existing private authority files and an explicit authenticated native
+source profile. A separate local snapshot capture/restore preserved worker
+configuration and dormant schedules, and exposed an inert MCP tool without
+calling it. Its fully held budget retained one `not_applied` provision intent
+and replayed the same key after broker restart. The native-cell queue's separate
+budget refusal leaves its new task ready without effects. Neither proof admits
+another paid resource or creates an independent authority replica.
 Cloud deployment and shared authenticated remote authority remain separate work.
-These checks prove selected local queue execution and restart recovery; they
-do not prove paid inference, browser/MCP tools or accepted software delivery.
+These checks prove selected local execution, source restoration and restart
+recovery; paid inference, browser/other tool execution and accepted software
+delivery remain open.

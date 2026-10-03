@@ -28,15 +28,18 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
-Source `ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` packages a Node 24 coordinator beside a separately pinned
-clean native FLUJO worker. The complete suite passed **416/416**. Actual hardened
-Docker services accepted work after startup, lost one completed response,
-restarted, and recovered the original result with GET while paused. Exactly one
-POST and one synthetic-model call occurred. Full fixture budget refusal left
-the next task ready with no effects; nine test containers and three private
-volumes were removed. Build revision remains part of the immutable worker
-identity. See [the service guide](deploy/factory-service.md). Cloud deployment,
-shared remote authority, browser/MCP tools and paid Modal inference remain open.
+Source `fea3d151c1a4380495094744d00a33770b1abbb5` packages native-cell and
+capacity-broker roles over one private authority. The full suite passed
+**433/433**; the later fixture-only correction passed separate final-image
+Docker acceptance. An authenticated container source exported its workspace,
+and a second native worker restored its configuration with due schedules dormant.
+Both workers exposed the expected MCP tool without invoking it. A fully held
+fixture budget refused provisioning and broker restart preserved the original
+`not_applied` intent. Separate native-cell acceptance retained one POST and one
+synthetic-model call across lost-response restart and paused GET recovery.
+All owned test resources were removed. See [the service guide](deploy/factory-service.md)
+and [capacity broker guide](deploy/factory-service.broker.md). Paid inference,
+cloud enrollment, shared remote authority and independent-host recovery remain open.
 
 Source `8ef36348f04d0a4a452acd75c493fb1cffa3c97c` adds the native cell mission queue. Its complete isolated
 Node 24.19.0 suite passed **408/408**; the focused combination passed **50/50**.

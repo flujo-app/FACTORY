@@ -142,11 +142,28 @@ confirm software acceptance, prove worker quiescence or release paid holds.
 The focused tests check actual CLI startup against private fixture databases,
 refuse missing/blank/foreign/aliased authority, and preserve valid issue/tool
 flows with preinitialized peer ledgers. Separate adapter tests authenticate a
-container source and retain its optional revision. Docker acceptance must
-additionally record the built image and actual role startup. A fully held
-isolated ledger can exercise native capacity request -> authenticated peer
-inbox -> broker rejection with zero ManagedCloud/Fly calls. A fixture adapter
-can prove a permitted invocation/replay boundary without spending, but successful
-original ManagedCloud provisioning also uses the Machines HTTPS API; a fake Fly
-CLI alone is not a cloud deployment proof. Actual paid provider operation,
-recursive fleet enrollment and independent-host authority remain separate work.
+container source and retain its optional revision. Actual Docker acceptance on
+source `fea3d151c1a4380495094744d00a33770b1abbb5` used local image ID
+`sha256:e277a4b6cad24f25f45288ce094033d432d9b89676fdff52b4116303cb49c1d1`.
+The original snapshot protocol captured and finalized the bound workspace, and
+a fresh encrypted envelope restored a second native worker with distinct
+bootstrap credentials. Both workers exposed the expected inert MCP tool;
+there were no tool invocations, Flow runs or schedule runs in this clone test.
+Model/MCP/Flow and active schedule/state data remained preserved.
+
+An authenticated fixture peer request reached the packaged broker over the
+same private authority files. A fully held isolated ledger refused admission
+before ManagedCloud provisioning or Fly invocation. The original provision
+effect stayed `not_applied`; real broker restart replayed that exact key and
+refusal with the same paid row/event history. This broker request was sent by
+the fixture peer, separate from the earlier native Flow/MCP request proof.
+All nine owned containers and four volumes were removed; stopped worker/broker
+processes exited 0 without OOM. See [the qualification record](../QUALIFICATION.md)
+for the full 433-test scope and later fixture-only Docker correction.
+
+This snapshot restore does not prove successful `ManagedCloud.up` or Fly
+deployment. Original ManagedCloud provisioning also uses the Machines HTTPS
+API; a fake Fly CLI alone cannot prove it. Actual paid provider operation,
+recursive provision-to-cell registration and independent-host authority remain
+separate work. No registry publication, original ledger mutation or paid release
+followed from this acceptance.

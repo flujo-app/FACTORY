@@ -1,7 +1,70 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`ea364d60f9d93dd1d001b7fa71fbf70e22a7612c`. Its isolated Node 24.19.0 suite passed **416/416**,
+`fea3d151c1a4380495094744d00a33770b1abbb5`. The complete Node 24.19.0 suite passed
+**433/433**, actual child 40736, exit 0/null signal, with no failed, skipped,
+cancelled or todo results. Its 135 frozen inputs include the production source
+profile binding, broker startup, vendored ManagedCloud and pinned Fly CLI packaging.
+Of the final 135 inputs, 134 retain their exact tested hashes. Only the isolated
+Docker test fixture subsequently changed its unsupported GET response to 405
+and added explicit read-only native MCP tool-inventory checks. Final Docker
+build and acceptance qualify those final fixture bytes; the full suite was
+not rerun or relabeled as covering that later delta.
+
+The final clone/broker image is local Docker ID
+`sha256:e277a4b6cad24f25f45288ce094033d432d9b89676fdff52b4116303cb49c1d1`.
+Actual build child 24572 and acceptance child 37860 both closed at exit 0/null.
+Authenticated bound discovery used the original native snapshot protocol to
+capture and finalize a 4,191-byte, five-member archive. A fresh encrypted envelope
+restored a second native worker with distinct bootstrap credentials. Model,
+MCP, Flow, schedule and schedule-state data remained preserved; due active
+schedules stayed dormant, with zero conversations and schedule-run records.
+Two real MCP handshakes and explicit tool inventories exposed the expected
+inert tool, with zero tool invocations or native Flow execution in this clone run.
+The broker used one shared private authority volume. A fully held 10,000-cent
+fixture ledger refused paid admission before any ManagedCloud attempt or Fly
+invocation, retaining one `not_applied` provision intent. Real broker restart
+replayed the same effect key and refusal without another paid admission.
+All nine owned containers and four volumes were removed; stopped worker and
+broker processes exited 0 with no OOM. The proof includes 138 closed Docker
+commands, 276 hashed raw outputs and 62 owner-bound inspections.
+
+Separate native-cell restart acceptance used the earlier local coordinator ID
+`sha256:b1bc00c8ad4ef0ef1e42284a0ffa0aa63c4bf1be6ce29378e078a474b3aedcca`,
+whose native-cell runtime matches the final image. Actual child 47804 closed at
+exit 0/null. One POST and one synthetic-model call survived a lost completed
+response, service restart and paused GET recovery. A fully held fixture budget
+left the next task ready, unowned and without effects. All nine owned containers
+and three volumes were removed. Both runs used the same clean native FLUJO image
+`sha256:b672e51d86a025d45e0ce2711ee862f472fa2ce16236ba6650ee414725d1fe20`,
+from source `549792e1839931e862e6a305eb0d9ce2b82ae905`. These are local image IDs;
+no registry publication or cloud activation occurred.
+
+Adoption copied exactly 31 changed files, preserved 104 untouched original
+files byte for byte, and retained all 135 final raw inputs under
+`.factory/capacity-service-20261003/qualified-source`. All 135 committed files
+match qualified content after LF normalization; the 31 adopted working files
+also match their raw hashes. Markdown updates after this runtime commit do not
+change the 119 non-Markdown runtime/build/test pins. Both original controller
+and paid-ledger main-file hashes stayed unchanged. All US$100 remains held,
+with zero available admission and final billing unknown.
+
+Evidence retained under `.factory/capacity-service-20261003`:
+
+- Full-suite witness SHA256: `f3b17cc5b7e123da66397133beca2c39830d2bed9592037ff5f4309733cc2ca1`.
+- Final build witness SHA256: `099e30c7a2021c616681ad25470ca28021f9f47418bf3d803b2204aaac4bf707`.
+- Clone/broker execution SHA256: `7c420f36056ea6a4bb32114d23a2aa4b36afbbb47c95a8e193bce34c1e3c8ddb`.
+- Native-cell execution SHA256: `45f1c900069941e0e774d33eeb29553dd64d7811d21daf399f3c3cef1b16f133`.
+
+Failed exploratory fixtures and the earlier tested source are retained with their
+separate identities. The local clone is not a successful `ManagedCloud.up` or
+Fly deployment; it does not establish recursive cell enrollment, remote shared
+authority, independent-host recovery, paid Modal inference, browser/other tool
+execution or accepted software delivery. The original API was not restarted
+or freshly health-checked. See [the broker guide](deploy/factory-service.broker.md).
+
+Earlier native-cell-only service source
+`ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` passed **416/416**,
 actual child 36888, exit 0, with no failed, skipped, cancelled or todo results.
 This adds Node 24 service packaging and support for an actual native worker's
 optional lower-case 40-character build revision, retaining exact identity checks.

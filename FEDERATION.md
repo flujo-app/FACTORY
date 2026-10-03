@@ -229,14 +229,14 @@ request. These are concrete foundations for a factory provisioning capability.
 See [the cloud architecture](C:/Users/Moe/Documents/GitHub/flujo-cloud/docs/architecture.md)
 and [ManagedCloud](C:/Users/Moe/Documents/GitHub/flujo-cloud/lib/managed.mjs:253).
 
-The bridge currently exposes CLI/application-service operations; an MCP wrapper
-is future work. Its `list` operation reports local inventory/journal state, not
-live fleet health. It provides neither a fleet scheduler nor later workspace
-synchronization. A proposed first development slice is a controlled Flow-callable
-adapter over this service plus durable delegated-task acceptance and result
-reconciliation. A remotely enrolled factory cell needs an explicit source/control
-identity; current local discovery intentionally excludes worker/container/network
-modes.
+The bridge exposes CLI/application-service operations. The factory adds a private
+MCP capacity tool, authenticated peer inbox and controller-admitted adapter.
+`list` still reports local inventory/journal state, not live fleet health; there
+is no fleet scheduler or later workspace synchronization. An explicit private
+`sourceProfileFile` now binds an authenticated loopback worker's workspace,
+archive and compatibility identity in a container namespace. Original desktop
+discovery retains its existing identity checks. The new source binding does
+not enroll a remote cell or supply a shared remote control authority.
 
 Its worker mode deliberately suppresses scheduler catch-up, Persona dispatch and
 remote-task resume. This is appropriate for a delegated execution snapshot. An
@@ -312,20 +312,26 @@ bounded topology, not arbitrary scale or universal unattended reliability.
 
 ## Container service qualification
 
-Source `ea364d60f9d93dd1d001b7fa71fbf70e22a7612c` packages a Node 24 coordinator beside a separately pinned
-clean native FLUJO worker. The complete suite passed **416/416**. Actual hardened
-Docker services accepted work after startup, lost one completed response,
-restarted, and recovered the original result with GET while paused. Exactly one
-POST and one synthetic-model call occurred. Full fixture budget refusal left
-the next task ready with no effects; nine test containers and three private
-volumes were removed. Build revision remains part of the immutable worker
-identity. See [the service guide](deploy/factory-service.md). Cloud deployment,
-shared remote authority, browser/MCP tools and paid Modal inference remain open.
+Source `fea3d151c1a4380495094744d00a33770b1abbb5` packages native-cell and
+capacity-broker roles over one private authority. The complete suite passed
+**433/433**; the later isolated Docker-fixture delta received final-image
+acceptance. A bound native source exported its workspace and a second worker
+restored model/MCP/Flow configuration with due schedules dormant. The expected
+MCP tool was listed on both workers without invocation. Full fixture budget
+refusal retained one `not_applied` provision intent across broker restart.
+Separate native-cell acceptance recovered one original POST and synthetic-model
+result with GET while paused; its next task stayed ready without effects.
+All owned fixture resources were removed. Build revision remains part of the
+immutable worker identity. See [the service guide](deploy/factory-service.md)
+and [broker guide](deploy/factory-service.broker.md). This proves local snapshot
+restore and admission/restart behavior; successful Fly provisioning, recursive
+enrollment, remote shared authority and paid Modal inference remain open.
 
 One authoritative coordinator owns controller, paid admission and durable
 mission outputs. Its native companion shares loopback networking and has a
 separate workspace volume. Container qualification supplies a runnable local
 service bundle; it does not authorize independent copies of the paid ledger or
-provide a remote authority protocol. Production ManagedCloud source discovery
-still requires its supported desktop identity path. Recursive cloud enrollment,
-independent-host recovery and comparable delivery-speed measurements remain open.
+provide a remote authority protocol. The explicit private source profile supports
+container discovery without desktop PID or registration assumptions. Recursive
+provision-to-cell registration, independent-host recovery and comparable
+delivery-speed measurements remain open.
