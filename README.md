@@ -31,8 +31,8 @@ source bytes after line-ending normalization without another suite at that
 adoption. The
 HTTP download variant has not run in the cloud. Logical closure is implemented
 for task release and never-provision-bound leaf cells; provider-bound closure
-remains future work. The existing operator API on port 4343 still runs build
-`6fcd718` for the Fly controller, with commands disabled.
+remains future work. The historical port 4343 API used build `6fcd718` for the
+Fly controller; that endpoint was subsequently observed unreachable.
 
 Source `67997585baa897bd7586fe21b9a755c89739a1a3` adds authenticated, read-only
 Modal journal observation with private operator configuration and independent
@@ -44,6 +44,21 @@ persisted history rather than fresh provider status and does not establish model
 inference or native Flow success. See [MODAL_OBSERVATION.md](MODAL_OBSERVATION.md)
 for its separate contract and [QUALIFICATION.md](QUALIFICATION.md) for the exact
 test and live-witness records.
+
+Source `8f5a94048e9c8be007cf3b5229607783b49cd47f` fixes the pinned vLLM startup
+flag and adds complete artifact verification, private source/receipt binding and
+read-only source preflight before paid resource admission. Its frozen combination
+passed **274/274**, with matching source and historical paid-state bytes before
+and after the final run. Earlier unstable/interrupted qualification attempts are
+preserved separately. Actual model bytes, GPU boot, inference and native Flow
+remain unproven. See the [model definition](modal/README.md) and
+[qualification record](QUALIFICATION.md).
+
+The read-only API was restored on `127.0.0.1:4344` at build `8f5a940`; an actual
+authenticated check again returned three journals and 15 operations without
+changing their contents or paid accounting. The old port 4343 endpoint was not
+restored. A brain-online adapter pinned to its old endpoint/build needs a reviewed
+configuration update before using the restored service.
 
 ## Run locally
 

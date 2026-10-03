@@ -60,13 +60,13 @@ reservation scope. Partial usage observations and successful cleanup do not
 release reservation holds. Final billing remains unknown until separately
 qualified evidence supports settlement.
 
-The existing server on port 4343 and the brain-online adapter keep their
-snapshot/events contract. Any new frontend integration must explicitly opt into
+The snapshot/events contract stays compatible. The historical port4343 server
+was later observed unreachable; the restored service is on port4344. Any new frontend integration must explicitly opt into
 this separate endpoint and validate its scope and revision semantics.
 
 ## Qualified local run
 
-Implementation build `67997585baa897bd7586fe21b9a755c89739a1a3` is running on
+Implementation build `67997585baa897bd7586fe21b9a755c89739a1a3` initially ran on
 `127.0.0.1:4344` with the three existing Modal pilot journals registered. Its
 full source combination passed 270/270 results, exit 0, with no skips or
 cancellations and unchanged source bytes during execution. The first recorder's
@@ -80,3 +80,11 @@ conservatively rounded partial observations, and unknown final billing. No
 provider call, paid dispatch, inference, or native FLUJO Flow occurred in this
 verification. Exact evidence and remaining proofs are in
 [QUALIFICATION.md](QUALIFICATION.md).
+
+The service was restored at build `8f5a94048e9c8be007cf3b5229607783b49cd47f` on
+port4344 after both previous endpoints were observed unreachable. Its frozen full
+combination passed274/274; actual HTTP checks at04:04:51.158–04:04:51.369UTC again
+returned three journals/15operations with unchanged logical state and main/WAL
+bytes. Paid revision17 and its full US$100 hold remain unchanged. The model startup
+changes at this build are prepared offline; no inference/nativeFlow success follows
+from restoring journal visibility. The old port4343 endpoint was not restored.

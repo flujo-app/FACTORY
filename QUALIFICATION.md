@@ -1,14 +1,16 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current runtime source is
-`67997585baa897bd7586fe21b9a755c89739a1a3`, adding authenticated read-only Modal
-journal observation. Its complete qualified suite passed **270/270** with recorded
-exit 0 and unchanged source hashes. The earlier lifecycle/HTTP adoption at
+`8f5a94048e9c8be007cf3b5229607783b49cd47f`, adding pinned model artifact checks,
+source/receipt binding and a supported vLLM logging flag. Its frozen combination
+passed **274/274** with exit 0 and matching source/paid-state bytes before and after
+the final run. The earlier authenticated Modal observation source `6799758` retains
+its historical **270/270** qualification. The earlier lifecycle/HTTP adoption at
 `0948fdd9ff7f5d379982e6e7286fd220236a1993` retains its separate historical
 **188/188** isolated-stage qualification. R3 used unchanged launch build `15d6c78`
 (whose earlier source suite passed **162/162**) and ended without inference proof.
-The original API on port 4343 remains build `6fcd718`; a separate API on port 4344
-runs build `6799758` with an explicit Modal journal registry.
+The original API on port 4343 was subsequently observed unreachable. The read-only
+API on port 4344 was restored at build `8f5a940` with the existing journal registry.
 
 ## Proven so far
 
@@ -44,7 +46,7 @@ does not establish equality with the dirty shared local FLUJO checkout. No
 generated source was executed on the owner's host, and this was a delegation
 connectivity proof rather than a delivered FLUJO repository improvement.
 
-The operator API is live on `127.0.0.1:4343`, build `6fcd718`, serving one configured
+The original operator API ran on `127.0.0.1:4343`, build `6fcd718`, serving one configured
 factory from read-only SQLite. Actual checks returned 401 without authentication,
 200 for authenticated snapshots/events and 405 for writes. It exposes separate
 logical allocation and paid admission projections. The brain-online staff BFF
@@ -60,12 +62,12 @@ does not extend the controller's effect-drain or pause claim to Modal. The paid
 gate can fence the next dispatch but cannot itself cancel an already-running
 provider operation.
 
-The separate API on `127.0.0.1:4344`, build `6799758`, now exposes registered
+The separate API initially started on `127.0.0.1:4344`, build `6799758`, exposing registered
 Modal journals through an authenticated observation route. Its persisted local
 operation records and independent paid-budget projection have their own scope;
 neither extends the Fly controller snapshot into Modal execution authority.
 The actual witness and source qualification are recorded below. The brain-online
-frontend has not opted into this new route, and port 4343 was not changed.
+frontend has not opted into this new route. Its later restoration is recorded below.
 
 Independent review cleared brain-online build
 `b811bbd2dd8f7682e9c5598845c8f23a84badf1d`: **23/23** targeted mounted-host,
@@ -476,7 +478,7 @@ Its content-SHA journal revisions are separate from the controller cursor and th
 numeric paid revision. Response read time does not establish fresh provider state.
 Successful historical cleanup records do not resolve unknown prefetch, prove
 current account-wide absence or establish inference/native FLUJO Flow success.
-The original port 4343 process remains build `6fcd718` and Fly-scoped; no frontend
+At that historical witness the port 4343 process remained build `6fcd718` and Fly-scoped; no frontend
 opt-in, new model call, speed measurement or additional paid attempt occurred.
 
 The witness's shared paid revision 17 reports four `retired-meter-pending`
@@ -484,6 +486,63 @@ reservations, 10,000 held cents, zero unallocated cents, 24 conservatively round
 partial cents, final spend null and billing incomplete. Journal visibility and
 successful cleanup do not release those holds or establish final billing. The
 broader remaining proofs below stay unresolved.
+
+## Pinned model startup and artifact qualification
+
+Commit `8f5a94048e9c8be007cf3b5229607783b49cd47f` adopts exactly 14 files.
+The final combined suite ran on Node24.19.0 from **04:01:07.256 to 04:01:23.912 UTC**:
+**274/274**, exit0, no failures, cancellations, skips or todos. All 52 recorded
+source files matched before and after; 17 historical paid-ledger/journal/manifest/
+resource/report/main-WAL entries also matched. Protected proof:
+`.factory/qualification/model-startup-45063dd5-419a-4332-8a12-c2e9ceb5058c/combined-qualification.private.json`,
+SHA-256 `5c970489b197708d87124aebde345cfb0704bdada1ec44a23a697420f42548fe`.
+Saved TAP SHA-256 `fdb821a231da827374840016d446b0c2c96e13fba5c441ad037c9f99d959facc`.
+
+A first combined run reported 274 passes but was rejected because the helper's
+comment changed during execution, then was restored. Its source-mutation record
+is preserved at SHA-256 `7588076ae31ea2cede4a9fa754aa5d77dac9b79c20f71ba3585dff97a0663025`.
+An interrupted replacement saved only a pre-snapshot; its test outcome is unknown,
+and its note is preserved at SHA-256 `f1493a15f0da6afac85b602a1b88468bfd5fc41bbd63b06757823c85c75dd91f`.
+The final run above follows confirmed source freeze; prior attempts are not borrowed
+as current qualification.
+
+The helper pins the official revision's 13 files, including four LFS shards, and
+streams full size/hash verification before prefetch's explicit commit and serve's
+engine launch. Read-only preparation validates helper/manifest source identity
+before paid resource admission; durable deploy/prefetch requests and a closed,
+typed private success receipt bind the same source. Genuine tagged vLLM parser
+probes qualify the logging registration; the combined suite captures the adapted
+actual serve command with a mocked artifact gate. Synthetic artifact fixtures do
+not establish actual model completeness. Full model scan duration, mounted
+VolumeFS behavior, peak memory, full engine/GPU startup and inference remain
+unmeasured. Concurrent writers and later independent vLLM opens remain outside the
+guard's atomicity claim; the Windows restored-mtime limit is documented in the
+[model definition](modal/README.md).
+
+Independent adoption at **04:03:31.375 UTC** verified the exact 14-file commit,
+all 52 current raw and committed normalized source pins, saved execution/TAP,
+protected proof permissions and unchanged historical paid files. It did not rerun
+tests or call providers. Protected audit:
+`.factory/qualification/model-startup-adoption-20261003/independent-review.private.json`,
+SHA-256 `ee29ebf831427673013bf7f873dce2661d02b4de5bb049f8a7a01c5ef7073ca4`.
+
+After both old local endpoints returned ECONNREFUSED, the read-only API was restored
+on `127.0.0.1:4344` at build `8f5a940`. Actual authenticated checks at
+**04:04:51.158–04:04:51.369 UTC** returned exactly three journals/15 operations,
+three unknown prefetches, the existing snapshot, and the expected 401/405/400/404
+rejections. Logical contents and main/WAL bytes stayed unchanged; zero provider
+calls or paid dispatch occurred. Protected witness SHA-256:
+`0864091d2a36907027d79890ee980260ca012ea54e8e68bd4687832e2112d279`.
+Port4343 was not restored and frontend adoption is not implied.
+
+A read-only billing UI inspection ending **03:19:23 UTC** showed current workspace
+usage/credit estimates and only visible invoices dated October1/September4,
+preceding these factory runs. Neither that history nor the workspace's displayed
+zero net spend finalizes an owned run. No payment, limits or settings changed.
+Minimized protected inspection SHA-256:
+`1f72b059dffde70e53b73b693b590b5097a1e536d6945a13cd0b80c30a746039`.
+Shared revision17 still holds all US$100; recorded partial observations round to
+24cents, final spend remains null, and no new paid attempt is admitted.
 
 ## Remaining proofs
 

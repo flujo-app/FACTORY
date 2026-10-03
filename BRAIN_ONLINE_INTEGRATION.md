@@ -105,10 +105,12 @@ controller filesystem paths into public URLs.
 
 ## Run status
 
-The read-only server is running at `http://127.0.0.1:4343`, factory ID
-`factory-live-pilot`, build `6fcd718592ebf86b2d546f0eaab2cb5b159a4140`.
-The live check at 2026-10-02T23:21:24Z confirmed unauthenticated 401,
-authenticated snapshot/events 200, and write 405. This is a local process;
+The read-only server was restored on `http://127.0.0.1:4344`, factory ID
+`factory-live-pilot`, build `8f5a94048e9c8be007cf3b5229607783b49cd47f`.
+The original port4343 service was observed unreachable and was not restored.
+The actual check at 2026-10-03T04:04:51Z confirmed authenticated snapshot/Modal
+reads200 and unauthenticated401, write405, query400 and other-factory404. An adapter
+pinned to the old port/build needs a reviewed configuration update. This is a local process;
 automatic restart and a remotely accessible service are separate work.
 
 The private bearer file is
@@ -121,7 +123,7 @@ ACLs and file identity. No credential value appears in this contract.
 The verified launch command from the FACTORY directory is:
 
 ```powershell
-& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --spending-ledger 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/spending.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --port 4343 --build-revision 6fcd718592ebf86b2d546f0eaab2cb5b159a4140
+& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --spending-ledger 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/spending.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --modal-journals 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/modal-journals-20261003.private.json' --port 4344 --build-revision 8f5a94048e9c8be007cf3b5229607783b49cd47f
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
@@ -211,10 +213,10 @@ The PR remains unmerged and undeployed by FACTORY.
 
 ## Separate Modal journal view
 
-A separate owned local API now runs on `http://127.0.0.1:4344`, implementation
-build `67997585baa897bd7586fe21b9a755c89739a1a3`. The existing port 4343 process,
-its build, and the brain-online adapter's snapshot/events integration stay as
-reported above. No frontend adoption of the new endpoint is implied.
+A separate owned local API initially ran on `http://127.0.0.1:4344`, implementation
+build `67997585baa897bd7586fe21b9a755c89739a1a3`, preserving the old snapshot/events
+contract. It was restored at build `8f5a940`, as reported above. No frontend adoption
+of the new endpoint or automatic build-pin update is implied.
 
 `GET /v1/factories/factory-live-pilot/modal-runs` (alias `/v1/modal-runs`) uses
 the same private bearer mechanism. Its scope is
