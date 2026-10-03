@@ -46,6 +46,13 @@ customer access excluded. Its frontend work is
 [brain-online PR 34](https://github.com/flujo-app/brain-online/pull/34).
 See [the interface contract](C:/Users/Moe/Documents/ChatGPT/FACTORY/BRAIN_ONLINE_INTEGRATION.md).
 
+This snapshot's task/effect/pause scope is the Fly pilot's controller. Modal uses
+a separate operation journal and shared paid-admission ledger, without consulting
+that controller's pause. The shared paid projection covers both providers; it
+does not extend the controller's effect-drain or pause claim to Modal. The paid
+gate can fence the next dispatch but cannot itself cancel an already-running
+provider operation.
+
 Independent review cleared brain-online build
 `b811bbd2dd8f7682e9c5598845c8f23a84badf1d`: **23/23** targeted mounted-host,
 avatar and bridge checks passed. Refresh responses denying authorization now
@@ -143,6 +150,15 @@ being prepared without changing the current experiment. [Modal volume documentat
 File counts and a timed-out log observation do not prove download completion,
 failure or byte progress. No direct model call or native Modal-backed FLUJO Flow
 has yet been proven.
+
+Read-only inspection of the running compiled FLUJO adapter also found that the
+Flow path does not forward HTTP `max_tokens` into its Process node. R2 requests
+64 tokens but its configured model/server output bound of 1024 is the effective
+limit. The next staged fixture puts 64 directly on the node and binds its exact
+digest. Stricter smoke acceptance will require one assistant choice, a normal
+stop, no tool/function calls, the expected returned model and the exact ready
+object. Any R2 generation result must be independently checked against those
+criteria; the old driver's own success alone is insufficient.
 
 ## Remaining proofs
 
