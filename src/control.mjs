@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { safeReceipt } from './receipts.mjs';
 import { consumeGitRefusalProof } from './git-effect.mjs';
+import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -191,6 +192,16 @@ export class FactoryControl {
   retireCell(cellId, input) {
     id(cellId);
     const request = closureInput(input, ['closureId','expectedParent','expectedStatus','expectedAllocation','expectedSpent','expectedFactoryEpoch']);
+    return this.#retireCell(cellId,request,null,false);
+  }
+  /** Provider-bound closure requires the built-in inspector's opaque, fresh capability. */
+  retireProvisionedCell(cellId, input, proof) {
+    id(cellId);
+    const request = closureInput(input, ['closureId','expectedParent','expectedStatus','expectedAllocation','expectedSpent','expectedFactoryEpoch','provisionKey','retirementKey']);
+    id(request.provisionKey); id(request.retirementKey);
+    return this.#retireCell(cellId,request,proof,true);
+  }
+  #retireCell(cellId, request, proof, provisioned) {
     id(request.closureId); id(request.expectedParent); integer(request.expectedAllocation,'expectedAllocation');
     integer(request.expectedSpent,'expectedSpent'); integer(request.expectedFactoryEpoch,'expectedFactoryEpoch',1);
     if (!['reserved','ready'].includes(request.expectedStatus) || cellId === 'root') fail('CELL', 'Only a non-root reserved or ready leaf may retire.');
@@ -213,7 +224,8 @@ export class FactoryControl {
       validateProvisionBindings(this);
       const binding = this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('cell:' + cellId);
       if (causalOpenEffects(this, { cellId, taskIds: tasks.map(task => task.id), provisionKeys: binding ? [binding.effect_key] : [] }).length) fail('UNRECONCILED', 'Causal task, delivery, provision or cleanup effects remain open.');
-      if (binding) fail('PROVISIONED_CELL', 'Provision-bound cells require a genuine provider-evidence retirement path.');
+      if (binding && !provisioned) fail('PROVISIONED_CELL', 'Provision-bound cells require a genuine provider-evidence retirement path.');
+      if (provisioned && (!binding || binding.effect_key !== request.provisionKey)) fail('PROVISION_BINDING', 'The exact provision-bound cell is required.');
       const siblings = this.db.prepare("SELECT id,allocation,spent FROM cells WHERE parent_id=? AND status!='retired'").all(parent.id);
       for (const row of [cell, parent, ...siblings]) {
         integer(row.allocation,'allocation'); integer(row.spent,'spent');
@@ -224,9 +236,12 @@ export class FactoryControl {
       const newSpent = BigInt(parent.spent) + BigInt(cell.spent);
       if (BigInt(parent.spent) + allocated > BigInt(parent.allocation) || newSpent > BigInt(Number.MAX_SAFE_INTEGER)
           || newSpent + allocated - BigInt(cell.allocation) > BigInt(parent.allocation)) fail('BUDGET', 'Logical allocation conservation failed.');
+      const resource = provisioned ? consumeProviderRetirementProof(proof,this,cellId,request) : null;
+      if (provisioned && !resource) fail('PROVIDER_RETIREMENT_PROOF', 'A fresh bound provider inspection is required.');
       const result = { cellId, status: 'retired', parentId: parent.id, allocation: cell.allocation, spent: cell.spent,
         transferredLogicalCents: cell.spent, releasedLogicalCents: cell.allocation - cell.spent,
-        resourceScope: 'no-recorded-provisioning-logical-only', workerQuiescence: 'unverified' };
+        resourceScope: resource?.resourceScope ?? 'no-recorded-provisioning-logical-only', workerQuiescence: 'unverified',
+        ...(resource ? { resourceEvidence:resource } : {}) };
       this.db.prepare("UPDATE cells SET status='retired' WHERE id=?").run(cellId);
       this.db.prepare('UPDATE cells SET spent=? WHERE id=?').run(Number(newSpent),parent.id);
       this.db.prepare('UPDATE integrations SET expires=0 WHERE owner=?').run(cellId);
