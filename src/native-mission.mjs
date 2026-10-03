@@ -43,7 +43,7 @@ export async function claimNativeMission({control,taskId,client,outputFile,ttlMs
   return control.claimNativeMission({taskId,expectedSpecDigest:task.spec_digest,expectedFactoryEpoch:epoch,workerProof:client.binding,ttlMs});
 }
 /** Exactly one admitted POST. Existing intents are observed, never sent again. */
-export async function runNativeMission({control,lease,client,paidAdmission,privateFiles,outputFile}) {
+export async function runNativeMission({control,lease,client,paidAdmission,privateFiles,outputFile,signal}) {
   requireValue(paidAdmission instanceof SpendingLedger,'NATIVE_MISSION_PAID_LEDGER');privateContract(privateFiles);
   const request=nativeMissionRequest(control.task(lease.scopeId),lease,outputFile);clientBinding(client,request);
   const admission=control.admitNativeMissionEffect(lease,request),key=nativeMissionEffectKey(request);
@@ -53,6 +53,7 @@ export async function runNativeMission({control,lease,client,paidAdmission,priva
     paidAdmission.reserve({reservationId:paidId,...request.paid});paidAdmission.start(paidId);
     const observation=await client.dispatch(callInput(request),{admitPost(operation){
       return paidAdmission.transaction(()=>{
+        requireValue(!signal?.aborted,'NATIVE_MISSION_STOPPED');
         paidAdmission.assertAdmission();const row=paidAdmission.row(paidId),snapshot=paidAdmission.snapshot();
         requireValue(row.state==='started' && row.provider===request.paid.provider && row.ceiling_cents===request.paid.ceilingCents
           && (row.charged_cents===null || row.charged_cents<row.ceiling_cents) && snapshot.overCommittedCents===0,'NATIVE_MISSION_PAID_FENCE');

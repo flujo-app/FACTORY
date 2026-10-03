@@ -14,7 +14,8 @@ import { SpendingLedger } from '../src/spending.mjs';
 import { createNativeMissionClient } from '../src/native-mission-client.mjs';
 import { claimNativeMission,runNativeMission,observeNativeMission } from '../src/native-mission.mjs';
 
-const flags={};for(let i=2;i<process.argv.length;i+=2){const k=process.argv[i],v=process.argv[i+1];assert.ok(['--application','--expected-head','--evidence','--private-module'].includes(k)&&v&&!Object.hasOwn(flags,k));flags[k]=v;}
+const flags={};for(let i=2;i<process.argv.length;i+=2){const k=process.argv[i],v=process.argv[i+1];assert.ok(['--application','--expected-head','--evidence','--private-module','--cell-runtime'].includes(k)&&v&&!Object.hasOwn(flags,k));flags[k]=v;}
+const cellRuntime=flags['--cell-runtime']==='1';assert.ok(flags['--cell-runtime']===undefined||cellRuntime);
 for(const k of ['--application','--evidence','--private-module'])assert.ok(path.isAbsolute(flags[k]??''));assert.match(flags['--expected-head']??'',/^[a-f0-9]{40}$/);
 const application=flags['--application'],root=flags['--evidence'];
 assert.equal(execFileSync('git',['rev-parse','HEAD'],{cwd:application,encoding:'utf8',windowsHide:true}).trim(),flags['--expected-head']);
@@ -26,7 +27,30 @@ const compatibility={applicationVersion:version,snapshotFormatVersion:2,layoutVe
 const runtime=path.join(root,'application'),workspace='factory-mission-smoke',key=randomBytes(32),token=randomBytes(32).toString('hex');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 let worker,workerClosed,model,proxy,control,paid,archiveHash,errorCode=null,acceptance=null,workerLog='',workerLogBytes=0,workerLogOverflow=false,modelCalls=0,posts=0,drop=true;
-const workerReceipts=[],providerRequests=[],observations=[];
+const workerReceipts=[],cellReceipts=[],providerRequests=[],observations=[];
+let cellProcess=null,cellClosed=null;
+async function stopCell(){if(!cellProcess)return;const child=cellProcess,pending=cellClosed;if(child.exitCode===null&&child.signalCode===null)assert.ok(child.kill('SIGTERM'));
+  const stopped=await Promise.race([pending,delay(10000).then(()=>null)]);assert.ok(stopped?.closed,'Actual cell closure required');if(cellProcess===child)cellProcess=null;}
+async function runCellUntil(profile,accept,onIdle){
+  const receipt={pid:null,spawnedAt:new Date().toISOString(),closed:false,closeCode:null,closeSignal:null,stopRequested:false,statuses:[],stdout:'',stderr:''};
+  const child=spawn(process.execPath,[path.resolve('bin/native-cell.mjs'),'run','--private-module',flags['--private-module'],'--profile',profile],
+    {cwd:process.cwd(),windowsHide:true,stdio:['ignore','pipe','pipe'],env:safeEnv()});
+  cellProcess=child;receipt.pid=child.pid;cellReceipts.push(receipt);
+  cellClosed=new Promise((res,rej)=>{child.once('error',rej);child.once('close',(code,signal)=>{Object.assign(receipt,{closed:true,closeCode:code,closeSignal:signal,closedAt:new Date().toISOString()});res(receipt);});});void cellClosed.catch(()=>{});
+  let buffer='',selected=null,idleCalled=false,failed=null,bytes=0;
+  child.stdout.on('data',b=>{bytes+=b.length;receipt.stdout+=b.toString();buffer+=b.toString();if(bytes>1048576){failed='CELL_OUTPUT_LIMIT';child.kill('SIGTERM');return;}
+    for(;;){const n=buffer.indexOf('\n');if(n<0)break;const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const status=JSON.parse(line);receipt.statuses.push(status);
+      if(status.state==='idle'&&!idleCalled&&onIdle){idleCalled=true;try{onIdle();}catch{failed='CELL_BACKLOG_INJECTION';child.kill('SIGTERM');}}
+      if(!selected&&accept(status)){selected=status;receipt.stopRequested=true;child.kill('SIGTERM');}
+    }catch{failed='CELL_STATUS_INVALID';child.kill('SIGTERM');}}
+  });
+  child.stderr.on('data',b=>{bytes+=b.length;receipt.stderr+=b.toString();if(bytes>1048576){failed='CELL_OUTPUT_LIMIT';child.kill('SIGTERM');}});
+  const deadline=Date.now()+240000;while(!selected&&!failed&&!receipt.closed&&Date.now()<deadline)await delay(50);
+  await stopCell();assert.equal(failed,null);assert.ok(selected,'Expected native cell state required');assert.equal(receipt.stopRequested,true);
+  assert.ok((receipt.closeCode===0&&receipt.closeSignal===null)||(process.platform==='win32'&&receipt.closeCode===null&&receipt.closeSignal==='SIGTERM'),
+    'Expected actual owned process close tuple required; Windows SIGTERM is forced termination');
+  return selected;
+}
 async function listen(s){await new Promise((res,rej)=>{s.once('error',rej);s.listen(0,'127.0.0.1',res);});return s.address().port;}
 async function close(s){if(s)await new Promise(res=>{s.close(res);s.closeAllConnections?.();});}
 async function port(){const s=http.createServer(),p=await listen(s);await close(s);return p;}
@@ -81,27 +105,48 @@ try{
   const workerBinding={workspace,archiveSha256:archiveHash,compatibility},clientOptions={origin:`http://127.0.0.1:${proxyPort}`,token,...workerBinding,timeoutMs:180000};
   let client=createNativeMissionClient(clientOptions);const mission={schemaVersion:1,missionId:randomBytes(16).toString('hex'),cellId:'native-child',app:'native-mission-fixture',provisionKey:'fixture-provision',worker:workerBinding,flowId:flow.id,flowSha256:digest(actualFlow),paid:{provider:'fly',ceilingCents:500}};
   function assignment(id,nativeMission){control.createTask({taskId:id,projectId:'fixture',branch:'codex/'+id,specification:{problem:'Develop and improve FLUJO',acceptance:['independent review before delivery'],baseline:flags['--expected-head'],nativeMission}});}
-  assignment('fresh-mission',mission);const outputFile=path.join(root,'output.private.json'),lease=await claimNativeMission({control,taskId:'fresh-mission',client,outputFile,ttlMs:1800000});await privateFiles.writePrivateJson(path.join(root,'lease.private.json'),lease,{exclusive:true});
-  const first=await runNativeMission({control,lease,client,paidAdmission:paid,privateFiles,outputFile});assert.equal(first.effect.state,'unknown');assert.equal(first.dispatched,true);assert.equal(modelCalls,1);assert.equal(posts,1);
+  let lease,first,repaired,replay,refused;
+  const outputDirectory=path.join(root,'cell-output'),outputFile=cellRuntime?path.join(outputDirectory,mission.missionId+'.private.json'):path.join(root,'output.private.json');
+  const cellProfile=path.join(root,'cell-profile.private.json');
+  if(cellRuntime){
+    await privateFiles.ensurePrivateDirectory(outputDirectory);await privateFiles.writePrivateJson(path.join(root,'native-auth.private.json'),{token},{exclusive:true});
+    await privateFiles.writePrivateJson(cellProfile,{controlDatabase:path.join(root,'control.sqlite'),spendingDatabase:path.join(root,'paid.sqlite'),
+      client:{origin:clientOptions.origin,tokenFile:path.join(root,'native-auth.private.json'),worker:workerBinding,timeoutMs:180000},
+      cell:{cellId:mission.cellId,app:mission.app,provisionKey:mission.provisionKey,worker:workerBinding,outputDirectory,ttlMs:1800000,pollMs:100}},{exclusive:true});
+    const status=await runCellUntil(cellProfile,s=>s.state==='dispatched'&&s.effectState==='unknown',()=>assignment('fresh-mission',mission));
+    first={dispatched:true,effect:control.effect(status.key)};
+  }else{
+    assignment('fresh-mission',mission);lease=await claimNativeMission({control,taskId:'fresh-mission',client,outputFile,ttlMs:1800000});await privateFiles.writePrivateJson(path.join(root,'lease.private.json'),lease,{exclusive:true});
+    first=await runNativeMission({control,lease,client,paidAdmission:paid,privateFiles,outputFile});
+  }
+  assert.equal(first.effect.state,'unknown');assert.equal(first.dispatched,true);assert.equal(modelCalls,1);assert.equal(posts,1);
   const original=JSON.parse(control.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted'").get().details).request;
   const saved=await fs.readFile(path.join(root,'data','workspaces',workspace,'db','conversations',original.conversationId+'.json'),'utf8');
   await stopWorker();control.close();paid.close();control=new FactoryControl(path.join(root,'control.sqlite'));paid=new SpendingLedger(path.join(root,'paid.sqlite'));client=createNativeMissionClient(clientOptions);
   await startWorker(workerPort,archive,harness);assert.equal(modelCalls,1,'Bootstrap cannot replay the assigned mission');
-  const repaired=await observeNativeMission({control,key:first.effect.key,client,privateFiles});assert.equal(repaired.effect.state,'succeeded');assert.equal(modelCalls,1);assert.equal(posts,1);
+  if(cellRuntime){control.pause();const status=await runCellUntil(cellProfile,s=>s.state==='recovered');assert.equal(status.observations[0].key,first.effect.key);repaired={dispatched:false,effect:control.effect(first.effect.key)};}
+  else repaired=await observeNativeMission({control,key:first.effect.key,client,privateFiles});
+  assert.equal(repaired.effect.state,'succeeded');assert.equal(modelCalls,1);assert.equal(posts,1);
   const output=await privateFiles.readPrivateJson(outputFile,{maxBytes:2*1048576});assert.equal(output.body.status,'completed');assert.ok(output.body.messages.some(m=>m.role==='assistant'&&m.content==='fresh-native-mission-complete'));
   assert.equal(control.task('fresh-mission').status,'running');assert.equal(control.task('fresh-mission').candidate,null);
-  const replay=await runNativeMission({control,lease,client,paidAdmission:paid,privateFiles,outputFile});assert.equal(replay.dispatched,false);assert.equal(posts,1);
+  if(cellRuntime){control.resume();replay={dispatched:false,effect:control.effect(first.effect.key)};}
+  else replay=await runNativeMission({control,lease,client,paidAdmission:paid,privateFiles,outputFile});
+  assert.equal(replay.dispatched,false);assert.equal(posts,1);
   paid.reserve({reservationId:'hold-remaining',provider:'modal',ceilingCents:9500});assignment('budget-refusal',{...mission,missionId:randomBytes(16).toString('hex')});
-  const refusedOutput=path.join(root,'refused.private.json'),refusedLease=await claimNativeMission({control,taskId:'budget-refusal',client,outputFile:refusedOutput,ttlMs:1800000});
-  const refused=await runNativeMission({control,lease:refusedLease,client,paidAdmission:paid,privateFiles,outputFile:refusedOutput});assert.equal(refused.effect.state,'not_applied');assert.equal(posts,1);assert.equal(modelCalls,1);
+  if(cellRuntime){refused=await runCellUntil(cellProfile,s=>s.state==='budget');assert.equal(control.task('budget-refusal').status,'ready');assert.equal(control.openEffects('task','budget-refusal').length,0);}
+  else{const refusedOutput=path.join(root,'refused.private.json'),refusedLease=await claimNativeMission({control,taskId:'budget-refusal',client,outputFile:refusedOutput,ttlMs:1800000});
+    refused=await runNativeMission({control,lease:refusedLease,client,paidAdmission:paid,privateFiles,outputFile:refusedOutput});assert.equal(refused.effect.state,'not_applied');}
+  assert.equal(posts,1);assert.equal(modelCalls,1);
   acceptance={format:'factory-native-mission-acceptance',schemaVersion:1,applicationHead:flags['--expected-head'],worker:workerBinding,flowSha256:mission.flowSha256,first,repaired,replay,refused,
-    modelCalls,posts,paidProviderCalls:0,controllerAndWorkerRestarted:true,originalConversationBeforeRestartSha256:hash(saved),taskStatus:control.task('fresh-mission').status,
+    modelCalls,posts,paidProviderCalls:0,controllerAndWorkerRestarted:true,nativeCellRuntime:cellRuntime,backlogInjectedAfterStartup:cellRuntime,pausedGetRecovery:cellRuntime,
+    actualCellProcesses:cellReceipts,originalConversationBeforeRestartSha256:hash(saved),taskStatus:control.task('fresh-mission').status,
     scope:'Actual fresh encrypted native FLUJO child, assigned Flow, durable mission dispatch and authenticated conversation recovery. Synthetic loopback model and controller provisioning fixture; no Fly/Modal deployment or software acceptance proof.'};
 }catch(e){errorCode=e?.code??e?.message??'SMOKE_FAILED';console.error(JSON.stringify({accepted:false,errorCode}));process.exitCode=1;}
 finally{
+  try{await stopCell();}catch{errorCode='CELL_CLOSE_UNCONFIRMED';process.exitCode=1;}
   try{await stopWorker();}catch{errorCode='WORKER_CLOSE_UNCONFIRMED';process.exitCode=1;}await close(proxy);await close(model);control?.close();paid?.close();
   if(workerLogOverflow){errorCode='WORKER_LOG_OVERFLOW';process.exitCode=1;}
-  await privateFiles.writePrivateJson(path.join(root,'execution.private.json'),{format:'factory-native-mission-execution',schemaVersion:1,workerReceipts,workerLog,workerLogBytes,workerLogOverflow,providerRequests,observations,modelCalls,posts,paidProviderCalls:0,errorCode,completedAt:new Date().toISOString(),allWorkersClosed:workerReceipts.length>0&&workerReceipts.every(r=>r.closed)},{exclusive:true});
+  await privateFiles.writePrivateJson(path.join(root,'execution.private.json'),{format:'factory-native-mission-execution',schemaVersion:1,workerReceipts,cellReceipts,workerLog,workerLogBytes,workerLogOverflow,providerRequests,observations,modelCalls,posts,paidProviderCalls:0,errorCode,completedAt:new Date().toISOString(),allWorkersClosed:workerReceipts.length>0&&workerReceipts.every(r=>r.closed),allCellsClosed:cellReceipts.every(r=>r.closed)},{exclusive:true});
   for(const n of['public','node_modules','scripts']){const p=path.join(runtime,n),s=await fs.lstat(p).catch(()=>null);if(s?.isSymbolicLink())await fs.unlink(p);}
   if(acceptance){const accepted=errorCode===null&&process.exitCode!==1&&workerReceipts.every(r=>r.closed);await privateFiles.writePrivateJson(path.join(root,'acceptance.private.json'),{...acceptance,accepted},{exclusive:true});console.log(JSON.stringify({accepted,modelCalls,posts,paidProviderCalls:0}));}
 }

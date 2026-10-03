@@ -386,9 +386,40 @@ export class FactoryControl {
       const current=this.active(),task=this.task(taskId),m=this.#nativeMissionTarget(task);
       if(current.epoch!==expectedFactoryEpoch || task.status!=='ready' || task.spec_digest!==expectedSpecDigest
         || digest(workerProof)!==digest(m.worker)) fail('STALE','Native preparation no longer matches the ready task.');
+      // Competing dispatchers may have prepared different tasks before either claim committed.
+      for(const other of this.db.prepare("SELECT id FROM tasks WHERE owner=? AND status='running' AND id<>?").all(m.cellId,taskId)) {
+        const assignment=this.task(other.id),prior=this.db.prepare("SELECT kind,state FROM effects WHERE task_id=? OR (scope='task' AND scope_id=?)").all(other.id,other.id);
+        if(!assignment.specification.nativeMission || prior.some(effect=>['accepted','running','unknown'].includes(effect.state))
+          || !prior.some(effect=>effect.kind==='flow_call' && effect.state==='succeeded'))
+          fail('BUSY','A previous assignment on this native cell must settle before another claim.');
+      }
       this.db.prepare('UPDATE cells SET status=?,heartbeat=? WHERE id=?').run('ready',this.clock(),m.cellId);
       this.event('native_cell_enrolled',m.cellId,{taskId,provisionKey:m.provisionKey,worker:m.worker});
-      return this.#claimTask(taskId,m.cellId,ttlMs);
+      const lease=this.#claimTask(taskId,m.cellId,ttlMs);
+      this.event('native_mission_claimed',taskId,{specDigest:task.spec_digest,cellId:m.cellId,app:m.app,
+        provisionKey:m.provisionKey,worker:m.worker,attempt:lease.epoch,controlEpoch:lease.controlEpoch,expires:lease.expires});
+      return lease;
+    });
+  }
+  /** Recover only a stale native assignment that has never admitted any external effect. */
+  releaseUnstartedNativeMission({taskId,expectedAttempt,expectedSpecDigest,expectedFactoryEpoch,workerProof}) {
+    id(taskId);integer(expectedAttempt,'expectedAttempt',1);integer(expectedFactoryEpoch,'expectedFactoryEpoch',1);
+    return this.transaction(()=>{
+      const current=this.control(),task=this.task(taskId),m=this.#nativeMissionTarget(task);
+      const claims=this.db.prepare("SELECT details FROM events WHERE type='native_mission_claimed' AND subject=?").all(taskId)
+        .map(row=>JSON.parse(row.details)).filter(row=>row.attempt===expectedAttempt);
+      const expected={specDigest:task.spec_digest,cellId:m.cellId,app:m.app,provisionKey:m.provisionKey,
+        worker:m.worker,attempt:task.epoch,controlEpoch:task.control_epoch};
+      const {expires:originalExpires,...originalClaim}=claims[0]??{};
+      if(current.epoch!==expectedFactoryEpoch || task.status!=='running' || task.owner!==m.cellId
+        || task.epoch!==expectedAttempt || task.spec_digest!==expectedSpecDigest || task.candidate!==null || task.review!==null
+        || (task.control_epoch===current.epoch && task.expires>this.clock()) || digest(workerProof)!==digest(m.worker)
+        || claims.length!==1 || digest(originalClaim)!==digest(expected) || !Number.isSafeInteger(originalExpires) || originalExpires>task.expires
+        || this.db.prepare("SELECT key FROM effects WHERE task_id=? OR (scope='task' AND scope_id=?)").get(taskId,taskId))
+        fail('NATIVE_MISSION_UNSTARTED','Only an expired original native assignment with no lifetime effects may be released.');
+      this.db.prepare("UPDATE tasks SET status='ready',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
+      this.event('native_mission_unstarted_released',taskId,{...expected,expectedFactoryEpoch});
+      return this.task(taskId);
     });
   }
   admitNativeMissionEffect(lease,request) {
