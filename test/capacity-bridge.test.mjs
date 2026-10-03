@@ -241,3 +241,35 @@ test('independent controllers with the same local labels cannot share one paid h
   assert.equal(one.paid.snapshot().reservations.length,2);assert.equal(one.paid.snapshot().committedCents,2000);assert.equal(calls.length,2);
   assert.equal((await interpret(two,second,a,{paidAdmission:one.paid})).dispatched,false);assert.equal(calls.length,2);
 });
+
+test('official native revision survives grant, original peer request and successful admission without changing four-field grants',async t=>{
+  const official={...nativeProof,compatibility:{...nativeProof.compatibility,revision:'c'.repeat(40)}};
+  const f=fixture(t,{native:true,policy:{native:official}});
+  assert.deepEqual(validateCapacityGrant(f.grant).native,official);
+  assert.deepEqual(issueCapacityGrant({control:f.control,store:f.receiver,grant:f.grant}),f.binding);
+  const o=receive(f,'official-revision',{}, {nativeProof:official});
+  assert.deepEqual(o.envelope.payload.nativeProof,official);
+  let calls=0;const a=await adapter(async input=>{calls++;return ready(input);});
+  assert.equal((await interpret(f,o,a)).effect.state,'succeeded');
+  assert.equal((await interpret(f,o,a)).dispatched,false);assert.equal(calls,1);
+  const legacy=fixture(t,{native:true});
+  assert.deepEqual(validateCapacityGrant(legacy.grant).native,nativeProof);
+  assert.equal(Object.hasOwn(validateCapacityGrant(legacy.grant).native.compatibility,'revision'),false);
+});
+
+test('malformed or mismatched native revision refuses issuance or enqueue without new authority or paid effects',t=>{
+  const f=fixture(t,{issue:false,native:true});
+  const before=f.control.status(),history=f.control.db.prepare('SELECT * FROM events').all();
+  for (const revision of [true,null,'c'.repeat(39),'C'.repeat(40),42]) {
+    const grant=structuredClone(f.grant);grant.native.compatibility.revision=revision;
+    assert.throws(()=>issueCapacityGrant({control:f.control,store:f.receiver,grant}),errorCode('CAPACITY_INVALID'));
+  }
+  assert.deepEqual(f.control.status(),before);assert.deepEqual(f.control.db.prepare('SELECT * FROM events').all(),history);
+  const official={...nativeProof,compatibility:{...nativeProof.compatibility,revision:'c'.repeat(40)}};
+  f.grant={...f.grant,native:official};issueCapacityGrant({control:f.control,store:f.receiver,grant:f.grant});
+  for (const proof of [nativeProof,{...official,compatibility:{...official.compatibility,revision:'d'.repeat(40)}}]) {
+    assert.throws(()=>enqueueCapacityRequest({store:f.sender,grant:f.grant,request:request('wrong-revision'),nativeProof:proof}),errorCode('CAPACITY_NATIVE'));
+  }
+  assert.equal(f.sender.db.prepare('SELECT count(*) AS n FROM peer_outbox').get().n,0);
+  assert.equal(f.paid.snapshot().reservations.length,0);assert.equal(admitted(f).length,0);
+});

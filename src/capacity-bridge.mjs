@@ -20,7 +20,8 @@ function text(value, limit) { requireValue(typeof value === 'string' && value.le
 function native(value) {
   if (value === null) return null;
   exact(value,['workspace','archiveSha256','compatibility']); id(value.workspace);
-  requireValue(HASH.test(value.archiveSha256)); exact(value.compatibility,['applicationVersion','snapshotFormatVersion','layoutVersion','workerProtocolVersion']);
+  requireValue(HASH.test(value.archiveSha256)); exact(value.compatibility,['applicationVersion','snapshotFormatVersion','layoutVersion','workerProtocolVersion'],['revision']);
+  requireValue(!Object.hasOwn(value.compatibility,'revision') || typeof value.compatibility.revision==='string' && /^[a-f0-9]{40}$/.test(value.compatibility.revision));
   text(value.compatibility.applicationVersion,64);
   for (const key of ['snapshotFormatVersion','layoutVersion','workerProtocolVersion']) integer(value.compatibility[key],1);
   return structuredClone(value);

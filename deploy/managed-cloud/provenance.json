@@ -1,0 +1,71 @@
+{
+  "format": "factory-managed-cloud-source",
+  "schemaVersion": 1,
+  "upstream": "flujo-cloud",
+  "sourceCommit": "c36ceef69d6563b4839b605a377b3757ee8e4958",
+  "sourceClean": true,
+  "module": "lib/managed.mjs",
+  "runtimeDependencies": "Node builtins only",
+  "files": [
+    {
+      "path": "package.json",
+      "bytes": 408,
+      "sha256": "e8994c447e7ac5d0d4928ee0cab105b3e98d0bcb00acab871f24ff4aaef777fb"
+    },
+    {
+      "path": "lib/managed.mjs",
+      "bytes": 22603,
+      "sha256": "9f52fe362a96449f16a0fd5671efe7460481d684a9cd3d68e31eb451a761e471"
+    },
+    {
+      "path": "lib/bridge.mjs",
+      "bytes": 21703,
+      "sha256": "564539817046ec12bd326bc0d4159bf37bc3fd9810bb83e1589408ba333a742f"
+    },
+    {
+      "path": "lib/journal.mjs",
+      "bytes": 2507,
+      "sha256": "71f143d16ddef439cd0fc7c4c3ee75c9f41b8fda8c5bef2622ddc5883968c18b"
+    },
+    {
+      "path": "lib/process.mjs",
+      "bytes": 2920,
+      "sha256": "90d6588dfb245ed02f47015246255d56cc75b00f13bc9b91c6d763f4ba60bd70"
+    },
+    {
+      "path": "lib/snapshot.mjs",
+      "bytes": 4294,
+      "sha256": "7e5e29b05984a1d6a09a9390832b259e51d3295dbdd0b130bc1cf3b9a9f5bdad"
+    },
+    {
+      "path": "lib/discovery.mjs",
+      "bytes": 5029,
+      "sha256": "2e2d26d75ac43539f57deeca2420355c649dd84b1632c2c9c3ef740af7a49757"
+    },
+    {
+      "path": "lib/images.mjs",
+      "bytes": 12791,
+      "sha256": "2e423279ce3fe304695ebcd1a1670b7bfc75824d03be570be2bbe2eebab7bd9b"
+    },
+    {
+      "path": "lib/private-files.mjs",
+      "bytes": 9240,
+      "sha256": "7ae5ba87ec1cd387ee1b914105894d29254e07c0a3644c86f65810f461dcd54d"
+    },
+    {
+      "path": "lib/envelope.mjs",
+      "bytes": 793,
+      "sha256": "09cb2d4fa255f1e3c7e8c966fb01e13329529bede4bd84c39e5ff5872314ce64"
+    },
+    {
+      "path": "lib/machines.mjs",
+      "bytes": 1352,
+      "sha256": "55c72f9aa49ad391eb7aab85df0ec6054295c18b2a6a88231b0036ce8b02842e"
+    },
+    {
+      "path": "lib/requests.mjs",
+      "bytes": 540,
+      "sha256": "7efd08cb634f00d7ea721536b47649d5d11fa7c918575dc48ffa4bae7a94da7e"
+    }
+  ]
+}

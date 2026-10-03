@@ -32,6 +32,7 @@ test('actual issue/tool/broker CLIs connect private MCP to authenticated peers a
   const pair=createPairConfigurations({a:{identity:{factoryId:'cli-fixture',cellId:'root'},endpoint:`http://127.0.0.1:${await port()}/v1/peer/messages`},b:{identity:{factoryId:'cli-fixture',cellId:'broker'},endpoint:`http://127.0.0.1:${brokerPort}/v1/peer/messages`},credentialExpiresAt:now+120000});
   await files.writePrivateJson(p('sender.json'),pair.a,{exclusive:true});await files.writePrivateJson(p('receiver.json'),pair.b,{exclusive:true});
   const receiver=new PeerStore(p('receiver.sqlite'),{config:pair.b});receiver.close();
+  const sender=new PeerStore(p('sender.sqlite'),{config:pair.a});sender.close();
   control=new FactoryControl(p('control.sqlite'));control.initialize({mission:'CLI acceptance',budgetCents:10000,maxCells:4,maxDepth:2});
   control.createTask({taskId:'t',projectId:'fixture',branch:'codex/cli',specification:{problem:'Capacity',acceptance:['No unpaid cloud call'],baseline:'fixture'}});
   const lease=control.claimTask('t','root',100000),compatibility={applicationVersion:'3.46.0',snapshotFormatVersion:2,layoutVersion:2,workerProtocolVersion:1},nativeIdentity={workspace:'fixture',archiveSha256:'b'.repeat(64),compatibility};
@@ -39,6 +40,9 @@ test('actual issue/tool/broker CLIs connect private MCP to authenticated peers a
     template:{source:'http://127.0.0.1:4200',workspace:'fixture',image:'registry.invalid/test@sha256:'+'a'.repeat(64),org:'synthetic',region:'iad',appPrefix:'cli-fixture',flowIds:['fixture']},paid:{provider:'fly',ceilingCents:500}};
   await files.writePrivateJson(p('grant.json'),grant,{exclusive:true});
   paid=new SpendingLedger(p('paid.sqlite'));paid.initialize({limitCents:10000,currency:'USD'});paid.reserve({reservationId:'fully-held',provider:'fly',ceilingCents:10000});
+  if(process.platform!=='win32')for(const name of ['receiver.sqlite','sender.sqlite','control.sqlite','paid.sqlite'])for(const suffix of ['','-wal','-shm']){
+    await fs.chmod(p(name+suffix),0o600).catch(error=>{if(error.code!=='ENOENT')throw error;});
+  }
   await files.writePrivateJson(p('issue.json'),{peerConfigFile:p('receiver.json'),peerDatabase:p('receiver.sqlite'),grantFile:p('grant.json'),controlDatabase:p('control.sqlite'),outputFile:p('policy.json')},{exclusive:true});
   const issued=child('issue',p('issue.json'));children.push(issued);const issueResult=await issued.closed;assert.equal(issueResult.code,0);assert.equal(JSON.parse(issueResult.stdout).issued,true);assert.ok(!issueResult.stdout.includes(lease.token)&&!issueResult.stdout.includes(pair.a.key));
   const managed=p('managed.mjs');await fs.writeFile(managed,"import fs from 'node:fs';export class ManagedCloud {constructor(o){this.o=o;}async sources(){return [];}async preflight(){throw new Error('Forbidden');}async up(){fs.writeFileSync(this.o.callsFile,'unexpected');throw new Error('Forbidden');}async call(){throw new Error('Forbidden');}async list(){return [];}async down(){throw new Error('Forbidden');}}\n");

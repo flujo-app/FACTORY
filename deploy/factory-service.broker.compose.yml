@@ -1,0 +1,24 @@
+# Optional broker role; use together with factory-service.compose.yml and the native companion.
+services:
+  capacity-broker:
+    image: ${FACTORY_COORDINATOR_IMAGE:?Set the newly qualified coordinator/broker image digest}
+    user: "1000:1000"
+    command: [capacity-broker, --private-module, /app/deploy/private-files.mjs, --profile, /authority/capacity-broker.private.json]
+    network_mode: service:coordinator
+    depends_on:
+      coordinator:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 11m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=768m,mode=1777
+      - /home/node:rw,nosuid,nodev,size=64m,mode=0700,uid=1000,gid=1000
+    volumes:
+      - type: bind
+        source: ${FACTORY_AUTHORITY_DIRECTORY:?Set the same existing initialized private authority directory}
+        target: /authority
+        bind:
+          create_host_path: false

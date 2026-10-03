@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { createManagedCloudSourceBinding } from './managed-cloud-source.mjs';
 
 const METHODS = ['sources', 'preflight', 'up', 'call', 'list', 'down'];
 const SAFE_CODES = new Set(['MANAGED_BUSY', 'EEXIST', 'ENOENT', 'IMAGE_REGISTRY', 'IMAGE_COMPATIBILITY']);
@@ -121,8 +122,13 @@ async function packageInformation(modulePath) {
  * Receipts omit credentials. call() returns untrusted worker output separately from status evidence;
  * callers must not place its body into a public operational receipt or treat it as task acceptance.
  */
-export async function createManagedCloudAdapter({ modulePath, options = {}, service } = {}) {
+export async function createManagedCloudAdapter({ modulePath, options = {}, service, sourceWorkerProfile, privateFiles } = {}) {
   object(options, 'ManagedCloud options');
+  if (sourceWorkerProfile !== undefined && (service !== undefined || Object.hasOwn(options, 'discover'))) {
+    throw inputError('A bound source requires module construction without a discovery override.');
+  }
+  const binding = sourceWorkerProfile === undefined ? null
+    : createManagedCloudSourceBinding({ sourceWorkerProfile, privateFiles });
   let source;
   if (service !== undefined) {
     source = { kind: 'injected', serviceName: 'ManagedCloud' };
@@ -133,7 +139,7 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
     try {
       const { ManagedCloud } = await import(pathToFileURL(modulePath).href);
       if (typeof ManagedCloud !== 'function') throw new Error('Missing ManagedCloud export.');
-      service = new ManagedCloud({ ...options, progress: NO_PROGRESS });
+      service = new ManagedCloud({ ...options, ...(binding ? { discover: binding.discover } : {}), progress: NO_PROGRESS });
     } catch (error) {
       throw operationError('load', error);
     }
@@ -146,9 +152,10 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
 
   async function invoke(operation, method, args, receipt) {
     try {
+      if (binding) await binding.refreshSecrets();
       const result = receipt(await service[method](...args));
       // Upstream also checks per-worker control credentials before returning call output.
-      return withholdKnownSecrets(result, knownSecrets(options.env, service.env));
+      return withholdKnownSecrets(result, [...knownSecrets(options.env, service.env), ...(binding?.secrets() ?? [])]);
     }
     catch (error) { throw operationError(operation, error); }
   }
@@ -172,10 +179,22 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
       });
     },
     async preflight(input) {
-      return invoke('preflight', 'preflight', [object(input, 'Preflight input')], deploymentReceipt);
+      const value = object(input, 'Preflight input');
+      const admitted = binding ? binding.input(value) : value;
+      if (binding) {
+        try { await binding.discover({ source: admitted.source }); }
+        catch (error) { throw operationError('preflight', error); }
+      }
+      return invoke('preflight', 'preflight', [admitted], deploymentReceipt);
     },
     async provision(input) {
-      return invoke('provision', 'up', [object(input, 'Provision input')], deploymentReceipt);
+      const value = object(input, 'Provision input');
+      const admitted = binding ? binding.input(value) : value;
+      if (binding) {
+        try { await binding.discover({ source: admitted.source }); }
+        catch (error) { throw operationError('provision', error); }
+      }
+      return invoke('provision', 'up', [admitted], deploymentReceipt);
     },
     async call(id, input) {
       workerId(id);

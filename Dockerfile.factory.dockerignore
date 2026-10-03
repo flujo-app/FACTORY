@@ -13,3 +13,8 @@
 !deploy/
 !deploy/private-files.mjs
 !deploy/factory-service.entrypoint.sh
+!deploy/managed-cloud/
+!deploy/managed-cloud/package.json
+!deploy/managed-cloud/provenance.json
+!deploy/managed-cloud/lib/
+!deploy/managed-cloud/lib/*.mjs

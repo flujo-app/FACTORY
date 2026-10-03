@@ -1,3 +1,23 @@
+FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS flyctl-build
+ARG TARGETARCH
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "$TARGETARCH" in \
+         amd64) archive=flyctl_0.4.111_Linux_x86_64.tar.gz; checksum=1878d7fb1f8a418039042cf0749e4b7216c6c7018b66ae10611a64c2b6d9aa9e ;; \
+         arm64) archive=flyctl_0.4.111_Linux_arm64.tar.gz; checksum=964db79665d7ab97af3ba5af6b35f33677ca61dcb4bcef9d6a388d46481cb312 ;; \
+         *) exit 1 ;; \
+       esac \
+    && curl --fail --location --proto '=https' --proto-redir '=https' --retry 2 \
+         "https://github.com/superfly/flyctl/releases/download/v0.4.111/$archive" --output /tmp/flyctl.tar.gz \
+    && printf '%s  %s\n' "$checksum" /tmp/flyctl.tar.gz | sha256sum --check --strict \
+    && mkdir /flyctl \
+    && tar --extract --gzip --file /tmp/flyctl.tar.gz --directory /flyctl flyctl \
+    && chmod 0555 /flyctl/flyctl \
+    && version="$(/flyctl/flyctl version)" \
+    && printf '%s\n' "$version" \
+    && case "$version" in 'flyctl v0.4.111 '*) ;; *) exit 1 ;; esac
+
 FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
 
 ENV NODE_ENV=production
@@ -9,7 +29,13 @@ COPY bin/ ./bin/
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY deploy/private-files.mjs deploy/factory-service.entrypoint.sh ./deploy/
+COPY deploy/managed-cloud/ ./deploy/managed-cloud/
+COPY --from=flyctl-build /flyctl/flyctl /usr/local/bin/flyctl
+COPY --from=flyctl-build /etc/ssl/certs/ /etc/ssl/certs/
+COPY --from=flyctl-build /usr/share/ca-certificates/ /usr/share/ca-certificates/
 RUN printf '%s\n' '7ae5ba87ec1cd387ee1b914105894d29254e07c0a3644c86f65810f461dcd54d  deploy/private-files.mjs' | sha256sum --check --strict \
+    && printf '%s\n' 'c2c4db31be0ceb7d2f53fcb2920553bbd41d6012e26f8e330b5a90b06ed88490  deploy/managed-cloud/provenance.json' | sha256sum --check --strict \
+    && node --input-type=module -e 'import fs from "node:fs"; import {createHash} from "node:crypto"; const p=JSON.parse(fs.readFileSync("deploy/managed-cloud/provenance.json")); for(const f of p.files){const b=fs.readFileSync("deploy/managed-cloud/"+f.path); if(b.length!==f.bytes || createHash("sha256").update(b).digest("hex")!==f.sha256) throw new Error("Vendored source mismatch");}' \
     && test "$(node --version)" = v24.19.0 \
     && chmod 0555 deploy/factory-service.entrypoint.sh \
     && install -d -m 0700 -o node -g node /authority /data /fixture

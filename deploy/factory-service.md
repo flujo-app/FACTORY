@@ -4,6 +4,10 @@ This image runs the existing `bin/native-cell.mjs` at the single authoritative
 coordinator. Its profile selects existing initialized FactoryControl and
 SpendingLedger files; the entrypoint creates neither a database nor a policy.
 The image contains no profile, token, snapshot, paid ledger or host `node_modules`.
+The optional explicit `capacity-broker` role is described in
+[factory-service.broker.md](factory-service.broker.md). Its process shares the
+same initialized authority volume and uses an authenticated explicit native
+source profile. The default role remains the native-cell mission runner.
 The Dockerfile-specific context allowlist also excludes `.factory`, `.git`,
 owner workspaces, tests and private runtime artifacts.
 
