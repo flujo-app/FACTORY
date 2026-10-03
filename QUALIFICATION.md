@@ -125,5 +125,12 @@ establishes its actual running CPU stage, not completed weights or inference.
   protected evaluations, explicit activation and rollback. More workers or a
   successful model request do not establish improved development speed.
 
+The independently reviewed [lifecycle proposal](LIFECYCLE.md) describes the next
+compatible patch: logical leaf retirement and task release, ready-cell authority
+checks, causal effect guards and exact allocation conservation. It preserves
+reviewed work and paid billing holds. It is a proposal rather than an implemented
+closure API; additional completed/cancelled task states first require coordinated
+strict interface-contract changes.
+
 The shared FLUJO source, owner default-model binding, paused hackathon automations
 and unrelated cloud resources were not reset or resumed by these experiments.
