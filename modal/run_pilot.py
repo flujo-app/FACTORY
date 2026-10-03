@@ -72,7 +72,7 @@ def require_admission(payload):
     if payload["operation"] not in MUTATIONS:
         return
     request = payload["request"]
-    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion"):
+    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion", "prefetchDownload"):
         if request.get(key) != payload.get(key):
             raise ValueError("Bridge arguments differ from the durable intent.")
     if Path(payload["journalPath"]).resolve() != Path(payload["runDirectory"], "modal.sqlite").resolve() or not re.fullmatch(r"[a-z0-9_-]{1,80}", payload.get("effectKey", "")):
@@ -120,6 +120,16 @@ def owned_weights(modal, payload, resources):
     if volume.object_id != resources["volumeId"]:
         raise ValueError("Model weights Volume identity differs from recorded ownership.")
     return volume
+
+
+def required_download_profile(payload, resources=None):
+    expected = {"transport": "http", "maxWorkers": 1, "hubVersion": "0.36.0"}
+    profile = payload.get("prefetchDownload")
+    if profile != expected or CONFIG.get("prefetchDownload") != expected or type(profile.get("maxWorkers")) is not int:
+        raise ValueError("The explicitly admitted pinned single-thread HTTP download profile is required.")
+    if resources is not None and resources.get("prefetchDownload") != profile:
+        raise ValueError("Deployed download profile differs from the admitted prefetch.")
+    return profile
 
 
 def owned_billing_observation(rows, resources, start, end):
@@ -294,6 +304,7 @@ def operate(payload):
         checkpoint(payload, {"volumeId": volume.object_id, "volumeCreated": True, "volumeFsVersion": version})
         return {"state": "volume-created", "volumeId": volume.object_id, "volumeFsVersion": version}
     if operation == "deploy":
+        download_profile = required_download_profile(payload)
         resources = checkpoint(payload)
         volume = owned_weights(modal, payload, resources)
         try:
@@ -305,7 +316,7 @@ def operate(payload):
         os.environ["FACTORY_MODAL_VOLUME_ID"] = volume.object_id
         inference = importlib.import_module("inference")
         inference.app.deploy(environment_name="main", strategy="recreate", tag=payload["runId"])
-        checkpoint(payload, {"appId": inference.app.app_id, "appDeployed": True})
+        checkpoint(payload, {"appId": inference.app.app_id, "appDeployed": True, "prefetchDownload": download_profile})
         serve = modal.Function.from_name(payload["appName"], "serve", environment_name="main").hydrate()
         prefetch = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         result = {"appId": inference.app.app_id, "serveFunctionId": serve.object_id,
@@ -314,16 +325,27 @@ def operate(payload):
         return {"state": "deployed", **result}
     resources = checkpoint(payload)
     if operation == "prefetch":
+        download_profile = required_download_profile(payload, resources)
         volume = owned_weights(modal, payload, resources)
         function = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         if function.object_id != resources.get("prefetchFunctionId"):
             raise ValueError("Prefetch Function identity changed.")
         result = function.remote()
         if (result.get("state") != "weights-cached" or result.get("volumeId") != volume.object_id
-                or result.get("volumeFsVersion") != resources["volumeFsVersion"]):
+                or result.get("volumeFsVersion") != resources["volumeFsVersion"]
+                or result.get("model") != CONFIG["model"] or result.get("revision") != CONFIG["revision"]):
             raise ValueError("Pinned weights were not confirmed.")
+        downloaded = result.get("download")
+        expected_fields = set(download_profile) | {"hfXetVersion", "xetDisabled", "hfTransferDisabled"}
+        if (not isinstance(downloaded, dict) or set(downloaded) != expected_fields or any(downloaded.get(key) != value for key, value in download_profile.items())
+                or type(downloaded.get("maxWorkers")) is not int or downloaded.get("xetDisabled") is not True
+                or downloaded.get("hfTransferDisabled") is not True):
+            raise ValueError("Actual pinned HTTP download metadata was not confirmed.")
+        native_version = downloaded["hfXetVersion"]
+        if native_version is not None and (not isinstance(native_version, str) or not re.fullmatch(r"[A-Za-z0-9.!+-]{1,80}", native_version)):
+            raise ValueError("Native dependency metadata was not confirmed.")
         checkpoint(payload, {"weightsCached": True})
-        return result
+        return {key: result[key] for key in ("state", "model", "revision", "volumeId", "volumeFsVersion", "download")}
     if operation == "create-proxy-token":
         if not resources.get("appDeployed") or not resources.get("serveFunctionId") or not resources.get("weightsCached"):
             raise ValueError("Proxy-token creation requires the recorded ready inference deployment.")

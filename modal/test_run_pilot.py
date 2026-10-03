@@ -95,7 +95,9 @@ class BridgeTests(unittest.TestCase):
                     raise ValueError("private SDK diagnostic")
                 def remote():
                     test.calls.append("prefetch-call")
-                    return test.prefetch_result or {"state": "weights-cached", "volumeId": test.volume_id, "volumeFsVersion": test.volume_version}
+                    return test.prefetch_result or {"state": "weights-cached", "volumeId": test.volume_id, "volumeFsVersion": test.volume_version,
+                        "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
+                        "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": "1.6.0", "xetDisabled": True, "hfTransferDisabled": True}}
                 return SimpleNamespace(hydrate=lambda: SimpleNamespace(object_id="fu-owned", get_web_url=lambda: "https://factory--serve.modal.run", remote=remote))
 
         self.fake = ModuleType("modal")
@@ -106,12 +108,14 @@ class BridgeTests(unittest.TestCase):
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
 
-    def payload(self, operation, state="running"):
+    def payload(self, operation, state="running", *, legacy_download=False):
         request = {"operation": operation, "runId": "offline-run", "appName": "factory-offline-model",
                    "volumeName": "factory-offline-weights", "profile": "fake-profile", "environment": "main",
                    "workspaceName": "factory-account", "runDirectory": str(self.root)}
         if operation in {"prepare", "create-volume", "deploy", "prefetch", "create-proxy-token"}:
             request["volumeFsVersion"] = 2
+        if operation in {"deploy", "prefetch"} and not legacy_download:
+            request["prefetchDownload"] = dict(pilot.CONFIG["prefetchDownload"])
         payload = {**request, "request": request, "effectKey": operation, "journalPath": str(self.root / "modal.sqlite")}
         encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         connection = sqlite3.connect(payload["journalPath"])
@@ -128,6 +132,8 @@ class BridgeTests(unittest.TestCase):
             self.volume_exists = True
             if payload["operation"] in {"deploy", "prefetch"}:
                 value.setdefault("volumeFsVersion", 2)
+                if "prefetchDownload" in payload:
+                    value.setdefault("prefetchDownload", payload["prefetchDownload"])
         pilot.write_json(self.root / "resources.private.json", value)
 
     def meter_payload(self):
@@ -494,6 +500,47 @@ class BridgeTests(unittest.TestCase):
         self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
         self.assertEqual(pilot.operate(request)["volumeFsVersion"], 2)
         self.assertEqual(self.calls, ["prefetch-call"])
+
+    def test_original_legacy_intents_cannot_be_adopted_as_http_deploy_or_prefetch(self):
+        for operation in ("deploy", "prefetch"):
+            with self.subTest(operation=operation):
+                request = self.payload(operation, legacy_download=True)
+                self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+                with self.assertRaises(ValueError): pilot.operate(request)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.volume_lookups, [])
+
+    def test_payload_download_profile_cannot_differ_from_its_durable_intent(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+        request["prefetchDownload"] = {**request["prefetchDownload"], "maxWorkers": 8}
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+
+    def test_prefetch_profile_must_match_the_recorded_deployment_before_invocation(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned", prefetchDownload={"transport": "xet"})
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+
+    def test_result_download_mode_revision_and_dependency_metadata_must_be_exact(self):
+        request = self.payload("prefetch")
+        valid = {"state": "weights-cached", "volumeId": "vo-owned", "volumeFsVersion": 2,
+                 "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
+                 "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None, "xetDisabled": True, "hfTransferDisabled": True}}
+        cases = [{"revision": "a" * 40}, {"model": "other/model"},
+                 *[{"download": {**valid["download"], **change}} for change in ({"transport": "xet"}, {"maxWorkers": True},
+                   {"hubVersion": "1.29.0"}, {"xetDisabled": False}, {"hfTransferDisabled": False},
+                   {"hfXetVersion": 42}, {"hfXetVersion": "raw private /path"}, {"unexpected": "private"})]]
+        for change in cases:
+            with self.subTest(change=change):
+                self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+                self.prefetch_result = {**valid, **change}
+                with self.assertRaises(ValueError): pilot.operate(request)
+                self.assertNotIn("weightsCached", json.loads((self.root / "resources.private.json").read_text()))
+        self.prefetch_result = {**valid, "rawDiagnostic": "private-server-path"}
+        result = pilot.operate(request)
+        self.assertEqual(result, valid)
 
     def test_wrong_prefetch_result_cannot_checkpoint_cached_weights(self):
         request = self.payload("prefetch")

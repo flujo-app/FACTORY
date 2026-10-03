@@ -31,6 +31,7 @@ test('offline inference definition binds v2 without creating resources and prese
   });
   assert.equal(output, '');
   assert.equal(config.volumeFsVersion, 2);
+  assert.deepEqual(config.prefetchDownload, { transport: 'http', maxWorkers: 1, hubVersion: '0.36.0' });
 });
 
 test('compute projection covers one bounded L4 pool and is explicitly an estimate', () => {

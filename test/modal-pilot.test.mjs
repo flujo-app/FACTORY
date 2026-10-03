@@ -31,8 +31,8 @@ async function fixture(t, settings = {}) {
       environment: payload.environment, profile: payload.profile, workspaceName: payload.workspaceName };
     switch (payload.operation) {
       case 'create-volume': resourceState.volumeId = 'vo-owned'; resourceState.volumeCreated = true; resourceState.volumeFsVersion = payload.volumeFsVersion; await persist(); return { state: 'volume-created', volumeId: 'vo-owned', volumeFsVersion: payload.volumeFsVersion };
-      case 'deploy': Object.assign(resourceState, { appId: 'ap-owned', appDeployed: true, serveFunctionId: 'fu-serve', prefetchFunctionId: 'fu-prefetch', endpoint: 'https://factory--serve.modal.run' }); await persist(); return { state: 'deployed', ...resourceState };
-      case 'prefetch': resourceState.weightsCached = true; await persist(); return { state: 'weights-cached' };
+      case 'deploy': Object.assign(resourceState, { appId: 'ap-owned', appDeployed: true, serveFunctionId: 'fu-serve', prefetchFunctionId: 'fu-prefetch', endpoint: 'https://factory--serve.modal.run', prefetchDownload: payload.prefetchDownload }); await persist(); return { state: 'deployed', ...resourceState };
+      case 'prefetch': resourceState.weightsCached = true; await persist(); return { state: 'weights-cached', download: { ...payload.prefetchDownload, hfXetVersion: '1.6.0', xetDisabled: true, hfTransferDisabled: true } };
       case 'create-proxy-token':
         Object.assign(resourceState, { proxyTokenCreated: true, proxyTokenId: 'wk-fake' }); await persist();
         await writeFile(path.join(runDirectory, 'proxy-token.private.json'), JSON.stringify({ runId: payload.runId, profile: payload.profile, tokenId: 'wk-fake', tokenSecret: 'ws-private-proxy-token', bearer: 'wk-fake.ws-private-proxy-token' }));
@@ -160,6 +160,54 @@ test('direct and actual FLUJO Flow complete before independently verified fixtur
   const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
   assert.equal(JSON.parse(journal.get('create-flujo-flow').request_json).flowDigest, digest(createdFlow));
   assert.equal(JSON.parse(journal.get('flujo-generation').request_json).flowDigest, digest(createdFlow));
+});
+
+test('fresh manifest and immutable deploy/prefetch intents bind HTTP one-thread profile without public metadata leakage', async t => {
+  const f = await fixture(t);
+  await runModalPilot(f.options, f.dependencies);
+  const expected = { transport: 'http', maxWorkers: 1, hubVersion: '0.36.0' };
+  const manifest = JSON.parse(await readFile(path.join(f.options.runDirectory, 'manifest.private.json'), 'utf8'));
+  assert.deepEqual(manifest.prefetchDownload, expected);
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  for (const operation of ['deploy', 'prefetch']) {
+    const intent = journal.get(operation), request = JSON.parse(intent.request_json);
+    assert.deepEqual(request.prefetchDownload, expected);
+    assert.equal(intent.request_digest, digest(request));
+    assert.deepEqual(f.payloads.find(item => item.operation === operation).prefetchDownload, expected);
+  }
+  // Native dependency metadata belongs to the SDK's private success receipt,
+  // while the coordinator retains its existing sanitized result projection.
+  assert.equal(journal.get('prefetch').result.download, undefined);
+  assert.ok(f.notifications.every(event => !('download' in event) && !('prefetchDownload' in event)));
+  for (const operation of ['stop-app', 'delete-volume', 'delete-proxy-token']) {
+    assert.equal(JSON.parse(journal.get(operation).request_json).prefetchDownload, undefined);
+  }
+});
+
+test('legacy download intents and manifest stay byte-identical through cleanup and cannot become HTTP retries', async t => {
+  const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
+  await runModalPilot(f.options, f.dependencies);
+  const manifestPath = path.join(f.options.runDirectory, 'manifest.private.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); delete manifest.prefetchDownload;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const manifestBytes = await readFile(manifestPath, 'utf8');
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  for (const operation of ['deploy', 'prefetch']) {
+    const request = JSON.parse(journal.get(operation).request_json); delete request.prefetchDownload;
+    journal.db.prepare('UPDATE modal_operations SET request_json=?, request_digest=? WHERE key=?').run(JSON.stringify(request), digest(request), operation);
+  }
+  const original = ['deploy', 'prefetch'].map(operation => journal.get(operation));
+  const callsBefore = f.calls.length;
+  settings.sdkFailures = ['prefetch'];
+  await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+  assert.equal(await readFile(manifestPath, 'utf8'), manifestBytes);
+  for (const row of original) assert.deepEqual(journal.get(row.key), row);
+  assert.ok(f.calls.slice(callsBefore).every(operation => !['create-volume', 'deploy', 'prefetch', 'create-proxy-token'].includes(operation)));
+  assert.equal(journal.get('stop-app').state, 'succeeded');
+  assert.equal(journal.get('delete-volume').state, 'succeeded');
+  await runModalPilot(f.options, f.dependencies);
+  assert.equal(f.calls.filter(operation => operation === 'prefetch').length, 1);
+  assert.deepEqual(journal.get('prefetch'), original[1]);
 });
 
 test('completion acceptance requires one terminal assistant, exact ready JSON and the expected direct or Flow model', () => {

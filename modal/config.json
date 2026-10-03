@@ -19,6 +19,7 @@
   "requestTimeoutSeconds": 120,
   "startupTimeoutSeconds": 600,
   "prefetchTimeoutSeconds": 3600,
+  "prefetchDownload": { "transport": "http", "maxWorkers": 1, "hubVersion": "0.36.0" },
   "maxModelLength": 4096,
   "maxOutputTokens": 1024,
   "maxRequestBytes": 65536,

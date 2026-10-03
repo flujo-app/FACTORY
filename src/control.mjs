@@ -24,6 +24,47 @@ function evidence(path) {
   if (!isAbsolute(path)) fail('INVALID', 'Evidence path must be absolute.');
   return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
 }
+function closureInput(input, keys) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.keys(input).some(key => !keys.includes(key)) || keys.some(key => !Object.hasOwn(input, key))) fail('INVALID', 'Exact closure identity is required.');
+  return Object.fromEntries(keys.map(key => [key, input[key]]));
+}
+function closureRecord(control, closureId, type, subject, requestDigest) {
+  const records = control.db.prepare("SELECT type,subject,details FROM events WHERE type IN ('task_released','cell_retired')").all();
+  for (const row of records) {
+    const details = JSON.parse(row.details);
+    if (details.closureId !== closureId) continue;
+    if (row.type !== type || row.subject !== subject || details.requestDigest !== requestDigest) fail('CONFLICT', 'Closure identity is already bound to another request.');
+    return details;
+  }
+  return null;
+}
+function causalOpenEffects(control, { cellId = null, taskIds = [], provisionKeys = [] }) {
+  const tasks = new Set(taskIds), provisions = new Set(provisionKeys);
+  for (const effect of control.db.prepare("SELECT key,scope,scope_id,task_id FROM effects WHERE kind='provision'").all()) {
+    if (tasks.has(effect.task_id) || (effect.scope === 'task' && tasks.has(effect.scope_id))) provisions.add(effect.key);
+  }
+  const apps = new Set(control.db.prepare("SELECT target,effect_key FROM effect_bindings WHERE target LIKE 'app:%'").all()
+    .filter(binding => provisions.has(binding.effect_key)).map(binding => binding.target.slice(4)));
+  return control.db.prepare(`SELECT key,scope,scope_id,task_id,owner,state FROM effects WHERE state IN ${OPEN_EFFECTS}`).all()
+    .filter(effect => (cellId !== null && effect.owner === cellId) || tasks.has(effect.task_id)
+      || (effect.scope === 'task' && tasks.has(effect.scope_id)) || provisions.has(effect.key)
+      || (effect.scope === 'cleanup' && apps.has(effect.scope_id)));
+}
+function validateProvisionBindings(control) {
+  const effects = control.db.prepare("SELECT key,owner FROM effects WHERE kind='provision'").all();
+  const bindings = control.db.prepare('SELECT target,effect_key FROM effect_bindings').all();
+  const keys = new Set(effects.map(effect => effect.key));
+  if (bindings.some(binding => !keys.has(binding.effect_key))) fail('PROVISION_BINDING', 'Provisioning bindings are inconsistent.');
+  for (const effect of effects) {
+    const targets = bindings.filter(binding => binding.effect_key === effect.key).map(binding => binding.target);
+    const cells = targets.filter(target => target.startsWith('cell:')), apps = targets.filter(target => target.startsWith('app:'));
+    if (targets.length !== 2 || cells.length !== 1 || apps.length !== 1 || !ID.test(cells[0].slice(5))
+        || !/^[a-z][a-z0-9-]{2,62}$/.test(apps[0].slice(4))) fail('PROVISION_BINDING', 'Provisioning must retain its exact cell and app bindings.');
+    const cell = control.db.prepare('SELECT parent_id FROM cells WHERE id=?').get(cells[0].slice(5));
+    if (!cell || cell.parent_id !== effect.owner) fail('PROVISION_BINDING', 'Provisioning owner does not match the bound cell parent.');
+  }
+}
 
 /** One local transactional authority. No distributed-consensus or provider-idempotency claim. */
 export class FactoryControl {
@@ -119,11 +160,87 @@ export class FactoryControl {
       return {scope:'task',scopeId:taskId,cellId,epoch,controlEpoch:control.epoch,expires,token};
     });
   }
+  /** Trusted-local handoff, including while paused; no operational completion claim. */
+  releaseTask(taskId, input) {
+    id(taskId);
+    const request = closureInput(input, ['closureId','expectedAttempt','expectedOwner','expectedStatus','expectedTaskControlEpoch','expectedFactoryEpoch']);
+    id(request.closureId); id(request.expectedOwner); integer(request.expectedAttempt,'expectedAttempt',1);
+    integer(request.expectedTaskControlEpoch,'expectedTaskControlEpoch',1); integer(request.expectedFactoryEpoch,'expectedFactoryEpoch',1);
+    if (request.expectedStatus !== 'running') fail('INVALID', 'Release requires the exact running identity.');
+    const requestDigest = digest({ taskId, ...request });
+    return this.transaction(() => {
+      const control = this.control(), task = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+      const previous = closureRecord(this, request.closureId, 'task_released', taskId, requestDigest);
+      if (previous) {
+        if (!task || task.status !== 'ready' || task.epoch !== request.expectedAttempt || task.owner !== null
+            || task.token_hash !== null || task.expires !== null || task.control_epoch !== null) fail('STALE', 'A later task claim fences this release replay.');
+        return previous.result;
+      }
+      if (control.epoch !== request.expectedFactoryEpoch || !task || task.status !== request.expectedStatus
+          || task.owner !== request.expectedOwner || task.epoch !== request.expectedAttempt
+          || task.control_epoch !== request.expectedTaskControlEpoch) fail('STALE', 'Task or factory identity changed before release.');
+      if (task.candidate !== null || task.review !== null) fail('TASK', 'Submitted work must retain its candidate and review state.');
+      if (causalOpenEffects(this, { taskIds: [taskId] }).length) fail('UNRECONCILED', 'Causal task, delivery or cleanup effects remain open.');
+      const result = { taskId, status: 'ready', attempt: task.epoch, previousOwner: task.owner, previousTaskControlEpoch: task.control_epoch };
+      this.db.prepare("UPDATE tasks SET status='ready',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
+      this.event('task_released', taskId, { closureId: request.closureId, requestDigest, expectedFactoryEpoch: request.expectedFactoryEpoch, result });
+      return result;
+    });
+  }
+  /** Logical closure only. Every provision-bound identity requires a later provider-evidence path. */
+  retireCell(cellId, input) {
+    id(cellId);
+    const request = closureInput(input, ['closureId','expectedParent','expectedStatus','expectedAllocation','expectedSpent','expectedFactoryEpoch']);
+    id(request.closureId); id(request.expectedParent); integer(request.expectedAllocation,'expectedAllocation');
+    integer(request.expectedSpent,'expectedSpent'); integer(request.expectedFactoryEpoch,'expectedFactoryEpoch',1);
+    if (!['reserved','ready'].includes(request.expectedStatus) || cellId === 'root') fail('CELL', 'Only a non-root reserved or ready leaf may retire.');
+    const requestDigest = digest({ cellId, ...request });
+    return this.transaction(() => {
+      const control = this.control(), cell = this.db.prepare('SELECT * FROM cells WHERE id=?').get(cellId);
+      const previous = closureRecord(this, request.closureId, 'cell_retired', cellId, requestDigest);
+      if (previous) {
+        if (!cell || cell.status !== 'retired' || cell.parent_id !== request.expectedParent
+            || cell.allocation !== request.expectedAllocation || cell.spent !== request.expectedSpent) fail('STALE', 'Retired cell identity changed.');
+        return previous.result;
+      }
+      if (control.epoch !== request.expectedFactoryEpoch || !cell || cell.parent_id !== request.expectedParent
+          || cell.status !== request.expectedStatus || cell.allocation !== request.expectedAllocation || cell.spent !== request.expectedSpent) fail('STALE', 'Cell or factory identity changed before retirement.');
+      const parent = this.db.prepare('SELECT * FROM cells WHERE id=?').get(cell.parent_id);
+      if (!parent || !['reserved','ready'].includes(parent.status)) fail('PARENT', 'An admitted parent is required.');
+      if (this.db.prepare("SELECT id FROM cells WHERE parent_id=? AND status!='retired'").get(cellId)) fail('CHILDREN', 'Non-retired children must close first.');
+      const tasks = this.db.prepare('SELECT id,status FROM tasks WHERE owner=?').all(cellId);
+      if (tasks.some(task => task.status === 'running')) fail('TASK', 'Running tasks must be explicitly released before retirement.');
+      validateProvisionBindings(this);
+      const binding = this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('cell:' + cellId);
+      if (causalOpenEffects(this, { cellId, taskIds: tasks.map(task => task.id), provisionKeys: binding ? [binding.effect_key] : [] }).length) fail('UNRECONCILED', 'Causal task, delivery, provision or cleanup effects remain open.');
+      if (binding) fail('PROVISIONED_CELL', 'Provision-bound cells require a genuine provider-evidence retirement path.');
+      const siblings = this.db.prepare("SELECT id,allocation,spent FROM cells WHERE parent_id=? AND status!='retired'").all(parent.id);
+      for (const row of [cell, parent, ...siblings]) {
+        integer(row.allocation,'allocation'); integer(row.spent,'spent');
+        if (row.spent > row.allocation) fail('BUDGET', 'Logical spent exceeds allocation.');
+      }
+      if (parent.id === 'root' && parent.allocation !== integer(control.policy.budgetCents,'budgetCents')) fail('BUDGET', 'Root allocation does not match its immutable logical budget policy.');
+      const allocated = siblings.reduce((sum, sibling) => sum + BigInt(sibling.allocation), 0n);
+      const newSpent = BigInt(parent.spent) + BigInt(cell.spent);
+      if (BigInt(parent.spent) + allocated > BigInt(parent.allocation) || newSpent > BigInt(Number.MAX_SAFE_INTEGER)
+          || newSpent + allocated - BigInt(cell.allocation) > BigInt(parent.allocation)) fail('BUDGET', 'Logical allocation conservation failed.');
+      const result = { cellId, status: 'retired', parentId: parent.id, allocation: cell.allocation, spent: cell.spent,
+        transferredLogicalCents: cell.spent, releasedLogicalCents: cell.allocation - cell.spent,
+        resourceScope: 'no-recorded-provisioning-logical-only', workerQuiescence: 'unverified' };
+      this.db.prepare("UPDATE cells SET status='retired' WHERE id=?").run(cellId);
+      this.db.prepare('UPDATE cells SET spent=? WHERE id=?').run(Number(newSpent),parent.id);
+      this.db.prepare('UPDATE integrations SET expires=0 WHERE owner=?').run(cellId);
+      this.db.prepare('UPDATE tasks SET token_hash=NULL,expires=NULL WHERE owner=?').run(cellId);
+      this.event('cell_retired', cellId, { closureId: request.closureId, requestDigest, expectedFactoryEpoch: request.expectedFactoryEpoch, result });
+      return result;
+    });
+  }
   authority(lease) {
     const control = this.active();
     if (!lease || !['task','project'].includes(lease.scope)) fail('AUTHORITY','Lease is required.');
     const row = lease.scope === 'task' ? this.db.prepare('SELECT * FROM tasks WHERE id=?').get(id(lease.scopeId)) : this.db.prepare('SELECT * FROM integrations WHERE project_id=?').get(id(lease.scopeId));
     if (!row || (lease.scope==='task' && row.status!=='running') || row.owner!==lease.cellId || row.epoch!==lease.epoch || row.control_epoch!==lease.controlEpoch || control.epoch!==lease.controlEpoch || row.expires<=this.clock() || row.token_hash!==tokenHash(lease.token)) fail('STALE','Lease is stale, expired or belongs to another owner.');
+    if (!this.db.prepare("SELECT id FROM cells WHERE id=? AND status='ready'").get(row.owner)) fail('STALE', 'Lease owner cell is no longer ready.');
     return row;
   }
   renew(lease, ttlMs=60000) { integer(ttlMs,'ttlMs',1); return this.transaction(() => { this.authority(lease); const expires=this.clock()+ttlMs; if (lease.scope==='task') this.db.prepare('UPDATE tasks SET expires=? WHERE id=?').run(expires,lease.scopeId); else this.db.prepare('UPDATE integrations SET expires=? WHERE project_id=?').run(expires,lease.scopeId); return {...lease,expires}; }); }

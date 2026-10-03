@@ -1,6 +1,7 @@
 """Deploy with explicit run-owned App/Volume names; importing does not deploy."""
 
 import json
+from importlib.metadata import PackageNotFoundError, version
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,9 @@ CONFIG_PATH = HERE / "config.json"
 if not CONFIG_PATH.is_file():
     CONFIG_PATH = Path("/opt/factory/config.json")
 CONFIG = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+DOWNLOAD_PROFILE = {"transport": "http", "maxWorkers": 1, "hubVersion": "0.36.0"}
+if CONFIG.get("prefetchDownload") != DOWNLOAD_PROFILE:
+    raise ValueError("The explicit single-thread pinned HTTP download profile is required")
 POLICY_PATH = HERE / "factory_policy.py"
 if not POLICY_PATH.is_file():
     POLICY_PATH = Path("/opt/factory/factory_policy.py")
@@ -48,9 +52,10 @@ image = (
     .add_local_file(CONFIG_PATH, "/opt/factory/config.json")
 )
 download_image = modal.Image.debian_slim(python_version=CONFIG["pythonVersion"]).uv_pip_install(
-    "huggingface_hub==0.36.0"
+    f'huggingface_hub=={DOWNLOAD_PROFILE["hubVersion"]}'
 ).env({"FACTORY_MODAL_APP_NAME": APP_NAME, "FACTORY_MODAL_VOLUME_NAME": VOLUME_NAME, "FACTORY_MODAL_VOLUME_ID": VOLUME_ID,
-       "HF_HUB_DISABLE_TELEMETRY": "1", "HF_XET_HIGH_PERFORMANCE": "1"}).add_local_file(
+       "HF_HUB_DISABLE_TELEMETRY": "1", "HF_HUB_DISABLE_XET": "1",
+       "HF_XET_HIGH_PERFORMANCE": "0", "HF_HUB_ENABLE_HF_TRANSFER": "0"}).add_local_file(
     CONFIG_PATH, "/opt/factory/config.json"
 )
 
@@ -66,15 +71,36 @@ def checked_weights():
               min_containers=0, max_containers=1, buffer_containers=0,
               scaledown_window=2, retries=0)
 def prefetch():
-    volume = checked_weights()
+    # Image environment is set before Python imports the Hub. Refuse inherited
+    # overrides or a previously imported Hub with stale transport constants.
+    expected_environment = {"HF_HUB_DISABLE_XET": "1", "HF_XET_HIGH_PERFORMANCE": "0",
+                            "HF_HUB_ENABLE_HF_TRANSFER": "0"}
+    if any(os.environ.get(key) != value for key, value in expected_environment.items()):
+        raise RuntimeError("The admitted HTTP download environment is required")
+    hub_version = version("huggingface-hub")
+    if hub_version != DOWNLOAD_PROFILE["hubVersion"]:
+        raise RuntimeError("The admitted Hub package version is required")
     from huggingface_hub import snapshot_download
+    from huggingface_hub import constants
+    if constants.HF_HUB_DISABLE_XET is not True or constants.HF_HUB_ENABLE_HF_TRANSFER is not False:
+        raise RuntimeError("The imported Hub transport settings differ from the admitted profile")
+    try:
+        xet_version = version("hf-xet")
+    except PackageNotFoundError:
+        xet_version = None
+    if xet_version is not None and not re.fullmatch(r"[A-Za-z0-9.!+-]{1,80}", xet_version):
+        raise RuntimeError("Invalid native dependency version metadata")
+    volume = checked_weights()
 
     snapshot_download(repo_id=CONFIG["model"], revision=CONFIG["revision"],
                       local_dir=MODEL_PATH,
-                      allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"])
+                      allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"],
+                      max_workers=DOWNLOAD_PROFILE["maxWorkers"], token=False)
     volume.commit()
     return {"state": "weights-cached", "model": CONFIG["model"], "revision": CONFIG["revision"],
-            "volumeId": VOLUME_ID, "volumeFsVersion": CONFIG["volumeFsVersion"]}
+            "volumeId": VOLUME_ID, "volumeFsVersion": CONFIG["volumeFsVersion"],
+            "download": {**DOWNLOAD_PROFILE, "hubVersion": hub_version, "hfXetVersion": xet_version,
+                         "xetDisabled": True, "hfTransferDisabled": True}}
 
 
 @app.function(image=image, gpu=CONFIG["gpu"], volumes={"/models": weights},

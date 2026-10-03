@@ -214,6 +214,7 @@ async function sourceContext(options, context, { allowOwn = false, resources = {
 export async function prepareModalPilot(input = {}, dependencies = {}) {
   const options = optionsFor(input), context = await contextFor(options, dependencies);
   if (context.config.volumeFsVersion !== 2) fail('INVALID_VOLUME_FS_VERSION');
+  if (!context.config.prefetchDownload || digest(context.config.prefetchDownload) !== digest({ transport: 'http', maxWorkers: 1, hubVersion: '0.36.0' })) fail('INVALID_DOWNLOAD_PROFILE');
   modalBridgeTimeoutMs('prefetch', context.config);
   const local = await sourceContext(options, context);
   const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']), volumeFsVersion: context.config.volumeFsVersion });
@@ -281,6 +282,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
   const lock = await open(lockPath, 'wx', 0o600).catch(() => fail('RUN_LOCKED'));
   let journal, spending, ownsSpending = false, startedAt = context.clock(), failure = null, prepared, source, finalReport;
   let runVolumeFsVersion = context.config.volumeFsVersion;
+  let runDownloadProfile = context.config.prefetchDownload === undefined ? undefined : Object.freeze({ ...context.config.prefetchDownload });
   let runFlow = modalFlow(options);
   const attemptId = randomUUID();
   const events = [], cleanup = [], privateEvents = path.join(options.runDirectory, 'events.private.jsonl');
@@ -294,7 +296,8 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     ? JSON.parse(await privateRead(path.join(options.runDirectory, 'resources.private.json'))) : {};
   const requestFor = operation => ({ operation, runId: options.runId, appName: options.appName, volumeName: options.volumeName,
     environment: options.environment, profile: prepared.profile, workspaceName: prepared.workspaceName, runDirectory: options.runDirectory,
-    ...(runVolumeFsVersion === undefined ? {} : { volumeFsVersion: runVolumeFsVersion }) });
+    ...(runVolumeFsVersion === undefined ? {} : { volumeFsVersion: runVolumeFsVersion }),
+    ...(['deploy', 'prefetch'].includes(operation) && runDownloadProfile !== undefined ? { prefetchDownload: runDownloadProfile } : {}) });
   const perform = async (key, operation, operationRequest, action, { paid = false } = {}) => {
     const request = { ...requestFor(operation), ...operationRequest };
     const admission = journal.admit(key, operation, request);
@@ -378,6 +381,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     if (options.cleanupOnly) {
       const manifest = JSON.parse(await privateRead(manifestPath));
       runVolumeFsVersion = manifest.volumeFsVersion;
+      runDownloadProfile = manifest.prefetchDownload;
       if (runVolumeFsVersion !== undefined && ![1, 2].includes(runVolumeFsVersion)) fail('CLEANUP_OWNERSHIP_CONFLICT');
       const originalOptions = { ...manifest.options, cleanupOnly: true, through: options.through };
       if (manifest.format !== 'factory-modal-pilot' || manifest.runId !== options.runId
@@ -402,7 +406,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     if (!prepared.appAbsent || !prepared.volumeAbsent) fail('RESOURCE_IDENTITY_ALREADY_EXISTS');
     source = (await sourceContext(options, context)).source;
     await privateJson(manifestPath, { format: 'factory-modal-pilot', version: 1, runId: options.runId,
-      startedAt, options, volumeFsVersion: runVolumeFsVersion, profile: prepared.profile, workspaceName: prepared.workspaceName, source: prepared.source, desiredState: 'retired',
+      startedAt, options, volumeFsVersion: runVolumeFsVersion, prefetchDownload: runDownloadProfile, profile: prepared.profile, workspaceName: prepared.workspaceName, source: prepared.source, desiredState: 'retired',
       model: select(context.config, ['model', 'revision', 'servedModel', 'license']), state: 'admitted' }, true);
     await privateJson(path.join(options.runDirectory, 'redeployable-fixture.private.json'), {
       model: { ...fixtureModel(options, context.config, 'https://replace-with-owned-endpoint.modal.run', ''), displayName: 'Factory Modal Coder (retired)' },
