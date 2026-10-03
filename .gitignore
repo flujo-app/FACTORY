@@ -4,3 +4,5 @@ evidence/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+__pycache__/
+*.pyc

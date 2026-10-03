@@ -2,6 +2,10 @@
 
 Version 0.2 · October 2, 2026 · Discussion draft
 
+The notebook below records the original design assessment. Subsequent implemented
+and live-tested results are tracked separately in
+[the qualification record](C:/Users/Moe/Documents/ChatGPT/FACTORY/QUALIFICATION.md).
+
 ## Confirmed direction
 
 The first mission is **develop and improve FLUJO as the factory platform**.

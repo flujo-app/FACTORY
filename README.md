@@ -11,9 +11,11 @@ candidate reviews, messages and external-effect receipts in SQLite. The gateway
 admits an effect before dispatch and preserves uncertainty across interruption.
 Adapters reuse local Git and the existing `flujo-cloud` `ManagedCloud` service.
 
-**Cloud proof remains open.** The deterministic pilot uses real local processes,
-SQLite and Git with fixed code fixtures. It invokes no model, provisions no cloud
-resource and does not establish cross-host coordination or autonomous FLUJO peers.
+The live Fly pilot passed with two real FLUJO workers, independent candidate
+review and verified owned retirement. The deterministic recovery pilot uses real
+local processes, SQLite and Git with fixed code fixtures. Modal inference and
+native Flow proof remain open after the first weight-download timeout. See
+[QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
 ## Run locally
 
@@ -126,8 +128,13 @@ After interruption, inspect the existing task, effect and destination before
 retrying. A timeout does not prove an operation failed. Unresolved effects block
 conflicting takeover. An accepted intent that never started can be cancelled;
 negative reconciliation of a started or unknown effect is deliberately
-unsupported until executor and destination reconciliation exists. The local Git
-pilot demonstrates positive reconciliation of an observed exact commit.
+unsupported without executor proof. The local Git pilot demonstrates positive
+reconciliation of an observed exact commit. `executeGitDelivery` in
+`src/git-effect.mjs` adds a narrow exception for a completed, genuine local Git
+compare-and-swap refusal: it settles as `not_applied` using a bound, single-use
+in-process proof. A timeout, killed executor, forged error or missing receipt
+still remains unknown. Refusal leaves the reviewed task undelivered; rebasing
+requires a new candidate and review.
 
 Preserve the controller database and recovery artifacts. For cloud operations,
 also preserve `ManagedCloud` attempt metadata, journals and credentials until

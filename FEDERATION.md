@@ -234,6 +234,12 @@ and [Temporal durable execution](https://docs.temporal.io/temporal).
 
 ## First federation experiment
 
+The first partial live delegation proof has now passed: real parent/child FLUJO
+workers, coordinator-mediated child admission, independent review, owned teardown
+and a separate same-host provider witness. It does not yet qualify the full
+experiment below. Exact evidence and remaining scope are in
+[the qualification record](C:/Users/Moe/Documents/ChatGPT/FACTORY/QUALIFICATION.md).
+
 1. Select one bounded FLUJO improvement and a common acceptance contract.
 2. Provision one cloud development cell and an independently hosted watcher,
    with fixed instance limits, allocated resources and expiry.
