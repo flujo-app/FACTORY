@@ -15,7 +15,8 @@ The final clone/broker image is local Docker ID
 `sha256:e277a4b6cad24f25f45288ce094033d432d9b89676fdff52b4116303cb49c1d1`.
 Actual build child 24572 and acceptance child 37860 both closed at exit 0/null.
 Authenticated bound discovery used the original native snapshot protocol to
-capture and finalize a 4,191-byte, five-member archive. A fresh encrypted envelope
+capture and finalize a 4,191-byte archive with five declared workspace files
+plus its snapshot manifest. A fresh encrypted envelope
 restored a second native worker with distinct bootstrap credentials. Model,
 MCP, Flow, schedule and schedule-state data remained preserved; due active
 schedules stayed dormant, with zero conversations and schedule-run records.
