@@ -1,7 +1,8 @@
 # Factory qualification record
 
-Updated October 3, 2026. Local trusted coordinator; live Modal R2 launch build
-`5b73656`, with the complete suite recorded at runtime build `7691288`.
+Updated October 3, 2026. Local trusted coordinator; live Modal R3 launch build
+`15d6c78`, with the merged source suite passing **162/162**. The operator API
+continues to run its separately reported build `6fcd718`.
 
 ## Proven so far
 
@@ -84,8 +85,9 @@ and owned teardown. Evidence: `.factory/tests-owned-stop-and-admission.txt`.
 ## Paid resources and accounting
 
 The owner authorized **US$100 total** for the paid factory work. One shared
-`spending.sqlite` reserves $10 for Fly and $30 for each of two distinct Modal
-experiments; $70 is held and $30 remains unallocated. Holds are not charges.
+`spending.sqlite` reserves $10 for Fly and $30 for each of three distinct Modal
+experiments; **$100 is held and $0 remains unallocated**. Recorded partial
+charges total **16 cents**, with final spend unknown. Holds are not charges.
 Each new paid dispatch rechecks admission. Known local experiment/global
 exhaustion blocks further paid dispatch, while owned cleanup remains permitted.
 Reservation retirement does not free its ceiling before final billing evidence.
@@ -101,7 +103,7 @@ as a partial observation; final metered spend remains null, with the full $30
 hold unchanged. Provider report cutoff and local ingestion time are preserved
 separately. Evidence SHA-256:
 `b82061b272392d724c89fe264740453fd4af014ca26ad40d3aabb79be12230b7`.
-The staged meter fix adds exact recorded App eligibility and refuses ambiguous
+The committed meter fix adds exact recorded App eligibility and refuses ambiguous
 parent/child compute overlap rather than summing an unproven total.
 
 R2's local SDK observation reached its **4200-second** bound at **01:09:55 UTC**
@@ -123,8 +125,17 @@ result-retrieval/billing patch was applied. The merged checkout passed the compl
 **162/162 Node test results**; its focused qualification was independently
 **33/33**, including 46 Python cases. Evidence:
 `.factory/tests-v2-qualified.txt` and the isolated stage's immutable test report.
-Provider download performance and actual inference for this variant remain to be
-tested; the offline results do not establish either.
+The patch was committed as `15d6c78`. A fresh R3 experiment started its original
+prefetch at **01:19:27.510 UTC**, with distinct App/Volume/effect/reservation
+identities and the remaining $30 hold. An independent read-only witness at
+**01:21:03 UTC** confirmed the exact deployed App, one CPU prefetch runner/input,
+zero inference runners/inputs and the exact Volume's filesystem version 2.
+Evidence SHA-256:
+`81bdf5036b68fbf0906a894bbba571fd82b0e9618c69f0d858ff824c3db895e5`.
+Independent local inspection bound all six unchanged runtime source files,
+original request digests and the saved Flow's actual Process `maxTokens: 64`.
+Download completion, performance improvement and actual inference remain
+unproven; file-count observations and offline checks establish none of those.
 
 The ledger is local
 admission/accounting for registered factory reservations; it is not a provider
@@ -135,7 +146,7 @@ complete. Its 900-second CPU weight prefetch timed out, and direct generation an
 actual FLUJO Flow execution were never dispatched. The $30 reservation remains
 held. Original unknown-operation evidence is retained rather than replayed.
 
-The Modal App and owned weights Volume have been created. Independent control-plane
+The first Modal App and owned weights Volume were created. Independent control-plane
 observations matched the recorded App/Function identities. After the one stop
 command, the immediate inventory still showed a stopping App with one container;
 the stop receipt remained unknown. A fresh independent observation at
@@ -180,20 +191,22 @@ An identity-bound read-only observation at **00:18:11 UTC** confirmed that R2's
 weights Volume uses filesystem version 1. Version 1's random-write overhead is
 a plausible performance lead for this parallel download, not a demonstrated
 cause. Modal documents improved random access in version 2 and considers
-rebuildable model caches suitable for its beta; an isolated version-2 variant is
-being prepared without changing the current experiment. [Modal volume documentation](https://modal.com/docs/guide/volumes).
+rebuildable model caches suitable for its beta; the isolated version-2 variant
+was independently qualified and used for the fresh R3 experiment after R2
+retired. [Modal volume documentation](https://modal.com/docs/guide/volumes).
 File counts and a timed-out log observation do not prove download completion,
 failure or byte progress. No direct model call or native Modal-backed FLUJO Flow
 has yet been proven.
 
 Read-only inspection of the running compiled FLUJO adapter also found that the
-Flow path does not forward HTTP `max_tokens` into its Process node. R2 requests
-64 tokens but its configured model/server output bound of 1024 is the effective
-limit. The next staged fixture puts 64 directly on the node and binds its exact
-digest. Stricter smoke acceptance will require one assistant choice, a normal
+Flow path does not forward HTTP `max_tokens` into its Process node. R2's authored
+fixture requested 64 tokens over HTTP but would have used its configured
+model/server output bound of 1024. That Flow was never created or invoked.
+The committed R3 fixture puts 64 directly on the node and binds its exact
+digest. Stricter smoke acceptance requires one assistant choice, a normal
 stop, no tool/function calls, the expected returned model and the exact ready
-object. Any R2 generation result must be independently checked against those
-criteria; the old driver's own success alone is insufficient.
+object. The driver's own success alone is insufficient; raw response and
+identity-bound receipts require independent review.
 
 ## Remaining proofs
 

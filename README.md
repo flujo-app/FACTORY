@@ -14,7 +14,9 @@ Adapters reuse local Git and the existing `flujo-cloud` `ManagedCloud` service.
 The live Fly pilot passed with two real FLUJO workers, independent candidate
 review and verified owned retirement. The deterministic recovery pilot uses real
 local processes, SQLite and Git with fixed code fixtures. Modal inference and
-native Flow proof remain open after the first weight-download timeout. See
+native Flow proof remain open; a fresh v2-cache attempt is running after two
+uncompleted weight-download attempts. All $100 is held pending final billing;
+partial recorded charges are 16 cents. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
 ## Run locally
