@@ -12,11 +12,13 @@ admits an effect before dispatch and preserves uncertainty across interruption.
 Adapters reuse local Git and the existing `flujo-cloud` `ManagedCloud` service.
 
 The live Fly pilot passed with two real FLUJO workers, independent candidate
-review and verified owned retirement. The deterministic recovery pilot uses real
-local processes, SQLite and Git with fixed code fixtures. Modal inference and
-native Flow proof remain open; a fresh v2-cache attempt is running after two
-uncompleted weight-download attempts. All $100 is held pending final billing;
-partial recorded charges are 16 cents. See
+review and verified owned retirement. A real source-pinned FLUJO API documentation
+task also passed independent review and local Git delivery from fresh upstream.
+The deterministic recovery pilot uses real local processes, SQLite and Git with
+fixed code fixtures. Modal inference and native Flow proof remain open; R3's
+original v2-cache prefetch remains active as of October 3 at 02:20 UTC, despite
+provider container failures and replacements. All $100 is held pending final
+billing; partial recorded charges are 24 cents and final spend remains unknown. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
 ## Run locally
@@ -261,9 +263,14 @@ the witness can report that condition but cannot perform teardown.
 
 ### Source and image boundaries
 
-The existing shared FLUJO checkout is dirty. This factory does not use it as a
-clean development baseline or change its branches. Select and preserve a clean,
-explicit source revision for real FLUJO development.
+The existing shared FLUJO checkout is dirty; its checkout and running build were
+preserved. The one-file API documentation task used a fresh isolated worktree at
+upstream `d68492712315d30c856c8d2ba95b0a26a859bd18`. Independent review accepted
+candidate `ea66f1130e01d3208173cd850d40f85f319b3582`, and the reviewed local target
+`refs/heads/codex/factory-reviewed-api-token-limit-docs` received that exact commit
+through Git compare-and-swap. This corrected HTTP versus authored Flow token-limit
+documentation; it created no PR, push, upstream merge or runtime change. Runtime
+FLUJO improvements and upstream publication still require their own acceptance.
 
 The cloud bridge snapshots durable workspace state from a running native source
 and selects a compatible immutable worker image. Application-version or channel
@@ -282,10 +289,11 @@ prove independent authentication or inference availability.
 - One local SQLite authority; no distributed failover or consensus qualification.
 - Trusted local processes and filesystem; worker isolation and gateway-only
   external credentials need separate enforcement.
-- Deterministic local source fixture; no unattended roadmap execution or measured
-  factory self-improvement.
+- One real isolated documentation delivery and deterministic recovery fixtures;
+  no unattended roadmap execution or measured factory self-improvement.
 - Logical watcher/cell/message records; no independently hosted watchdog is
   established by the local pilot.
 - Provisioning adapter over existing `ManagedCloud`; the bounded Fly deployment,
   model calls and owned cleanup passed. General remote-result reconciliation,
-  automatic health recovery and source-repository delivery remain unqualified.
+  automatic health recovery, runtime-source improvement and upstream publication
+  remain unqualified.

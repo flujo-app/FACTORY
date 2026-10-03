@@ -125,8 +125,12 @@ The verified launch command from the FACTORY directory is:
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
-and three $30 Modal reservations, with $0 unallocated. As of October 3 at 01:49 UTC,
-partial recorded provider charges are 16 cents; final spend remains unknown.
+and three $30 Modal reservations: all $100 is held, with $0 unallocated. After the
+ingestion at 02:14 UTC on October 3, partial recorded provider charges are 24 cents
+(R1 4, R2 12, R3 8); every final charge field remains null and final spend remains
+unknown. R3's 8 cents conservatively rounds an owned-App US$0.07357657 observation
+for the completed [01:00, 02:00) UTC hour, observed at 02:09:02.300 UTC. It does not
+release the R3 hold or measure its entire experiment.
 The current HTTP budget DTO reports controller
 logical allocation only. The optional `snapshot.paidBudget` extension reads the
 separate paid ledger when the server starts with `--spending-ledger ABSOLUTE_PATH`.
@@ -155,11 +159,25 @@ The first visual PR may ignore this optional extension until its display contrac
 is independently qualified.
 
 The recovered Fly pilot passed with two real workers and confirmed owned
-retirement. The local Git crash/recovery proof also passed. Modal R3 is still in
-its original CPU prefetch stage after two retired attempts that did not complete
-weights. No Modal inference or native model/Flow execution has been proven yet.
+retirement. The local Git crash/recovery proof also passed. As of October 3 at
+02:20 UTC, Modal R3 remains in its original CPU prefetch after two retired attempts
+that did not complete weights. Rendered provider history records heartbeat
+timeouts, a SIGKILL/137 with a memory warning, and replacement containers; its
+fourth container was live at that observation. Provider replacement does not
+establish coordinator replay, a kernel OOM cause, complete weights or successful
+inference. No Modal inference or native model/Flow execution has been proven yet.
 The API's paused controller describes the Fly journal; it does not describe the
 separate Modal operation journal. Both providers share the paid admission ledger.
+
+A separate source-pinned FLUJO documentation task has now passed independent
+review and local Git compare-and-swap delivery: candidate
+`ea66f1130e01d3208173cd850d40f85f319b3582` from upstream `d6849271` changes only the
+chat-completions README's HTTP versus authored Flow token-limit guidance. Its own
+controller is paused at epoch 2 with zero unresolved effects. This separate task
+is not exposed by the API's currently configured Fly controller. Local delivery
+does not imply PR publication, upstream merge, runtime/model generation or a
+development-speed benchmark. The presentation schema and command capability stay
+unchanged.
 
 The brain-online owner pushed build
 `9b1daf9825d38b94b0a5da4ed3ba06b4d9feba4e`, adding the label “Controller admission”

@@ -83,6 +83,34 @@ the single-trial runtimes support no speedup claim. Independently audited eviden
 Report SHA-256:
 `906ab5174b74126ea4619dbcf69c6f35c48d50194b1e8655feef8250d44de55d`.
 
+A real source-pinned FLUJO task, `flow-token-limit-docs` in project
+`flujo-api-documentation`, completed independent acceptance and local delivery.
+Its isolated branch started from freshly fetched upstream
+`d68492712315d30c856c8d2ba95b0a26a859bd18`; candidate
+`ea66f1130e01d3208173cd850d40f85f319b3582` has that sole parent and changes only
+`src/app/v1/chat/completions/README.md`. It scopes POST/GET HTTP `max_tokens` to
+supported direct `model-*` completions, states that Flow requests ignore it,
+and explains authored Process-node `maxTokens` then bound-model setting then
+adapter default, per supported completion rather than a total Flow/tool budget.
+The direct-model and Process-property examples both use 64.
+
+The independent review bound the exact specification, attempt, candidate, diff
+and source behavior. JSON and syntax-only example checks passed; no example,
+runtime Flow or model generation was executed. A reviewed Git compare-and-swap
+delivered the exact candidate to
+`refs/heads/codex/factory-reviewed-api-token-limit-docs`, followed by an independent
+destination witness. This task's controller is paused at epoch 2 with zero
+unresolved effects. The dirty owner checkout and running instance were preserved.
+This qualifies one real documentation change through the common local acceptance
+and delivery contract; it does not establish a runtime improvement, upstream
+publication or development-speed benchmark. No new paid reservation was created.
+Delivery report: `.factory/flujo-token-docs-20261003/delivery-report.private.json`,
+SHA-256 `8798d6d1485fe08f3cf532588f7a323ddcdf1b9c5caee59bf87fb259636271a8`.
+Independent review SHA-256:
+`594e5c243d357e0c87ab01930599df7dda3d9c598bd75fc9efd29a3e22bd780f`.
+Final independent destination witness SHA-256:
+`bf317e511e69343d1d5797ec9ff9ba20eaa4da2b977e6beec0a9ce0f05c68c7c`.
+
 The complete source suite after build `7691288` passed **147/147 Node test results**,
 including policy and fake-SDK checks that invoke 28 Python cases. These cover
 cross-process budget/lease contention, crash recovery, Git compare-and-swap,
@@ -94,7 +122,8 @@ and owned teardown. Evidence: `.factory/tests-owned-stop-and-admission.txt`.
 The owner authorized **US$100 total** for the paid factory work. One shared
 `spending.sqlite` reserves $10 for Fly and $30 for each of three distinct Modal
 experiments; **$100 is held and $0 remains unallocated**. Recorded partial
-charges total **16 cents**, with final spend unknown. Holds are not charges.
+charges total **24 cents**: R1 4, R2 12 and R3 8. All final charge fields remain
+null, with final spend unknown. Holds are not charges.
 Each new paid dispatch rechecks admission. Known local experiment/global
 exhaustion blocks further paid dispatch, while owned cleanup remains permitted.
 Reservation retirement does not free its ceiling before final billing evidence.
@@ -122,7 +151,7 @@ confirmed stopped/zero, active App lookup absent, and exact Volume absence from
 complete inventory and noncreating lookup. Its full $30 hold is
 `retired-meter-pending`. Completed-hour App billing through **01:00 UTC exclusive**
 reports another **US$0.11033673**, recorded as **12 cents** conservatively rounded
-up. The ledger's combined recorded observations are now **16 cents**, with final
+up. At that point the combined recorded observations were **16 cents**, with final
 spend still null. This excludes R2's last partial hour and remaining charges.
 Evidence SHA-256:
 `ac5267638c43c92fa2b9fb4b22f4925bb76ee03324cf719104004b06452223b3`.
@@ -183,6 +212,28 @@ SIGKILL/137 evidence. [Modal heartbeat documentation](https://modal.com/docs/gui
 The immutable rendered-UI transcription was captured at **01:51:53.904 UTC**;
 its displayed observation minute is approximate. Evidence SHA-256:
 `a8152dd4cdfdc0976b12468e6b89dd7124560821a4bbb37b3e6a432a0d242fdd`.
+
+A later immutable rendered-UI note, captured at **02:20:59.288 UTC**, records R3's
+second container failing at **02:13:25.993 UTC** with another **900-second runner
+heartbeat timeout**. Its third container records **SIGKILL, exit 137** at
+**02:14:15.473 UTC**, with the provider's memory warning. A fourth container
+started at **02:14:19 UTC** and was live at the displayed 02:20 observation minute.
+The original first note is preserved. These are provider container replacements,
+not evidence of coordinator replay. Neither the warning nor exit 137 establishes
+a kernel OOM event, underlying cause, complete shard or successful inference.
+The original local driver remains live at this observation on unchanged build
+`15d6c78`, approaching its original approximately **02:29:27 UTC** bridge deadline.
+Evidence: `.factory/modal-20261002-r3/observer-later-container-failures.private.json`,
+SHA-256 `2c597f3864118d8d2443547761acf8a240b66a33176f2fa44c083adc3beed450`.
+
+R3's completed-hour owned-App billing observation at **02:09:02.300 UTC** covers
+**[01:00, 02:00) UTC** and reports **US$0.07357657**. The local coordinator ingested
+that same bound proof at **02:14 UTC** as **8 cents**, rounded upward. This nonfinal
+observation is not the charge for the whole running experiment. The full $30 R3 hold remains
+unchanged. Together with R1 and R2 this records **24 cents in conservatively rounded partial observations**, while
+all $100 remains held and final spend remains null. Provider cutoff, observation
+time and local ingestion are distinct. Evidence SHA-256:
+`c28a3c1892ebfac7e3e432b6dbf0ff152eb6b087ba520a894075d4c19b94c4eb`.
 
 The O owner separately reports two deliberately launched O runs, each with a
 127-cent reservation and confirmed cleanup of its model/tools sandboxes. Their
@@ -301,8 +352,9 @@ This tested source remains isolated while the original R3 runtime is active.
   peer communication. The successful child request was coordinator-mediated.
 - Independently hosted recovery and cross-host delivery ownership; a same-host
   watcher cannot recover from loss of the host itself.
-- A real source-pinned FLUJO improvement delivered from isolated branches through
-  the common acceptance and integration contract.
+- A runtime FLUJO improvement through source-pinned acceptance and delivery, plus
+  upstream publication. The completed one-file documentation task qualifies local
+  delivery, with no PR, push, upstream merge or runtime change.
 - Persistent task/cell lifecycle and verified-candidate handoff across control
   epochs, with truthful resource and billing status.
 - Measured self-improvement: comparable baseline/candidate delivery outcomes,
