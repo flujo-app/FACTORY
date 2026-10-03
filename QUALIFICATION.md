@@ -1,16 +1,20 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`26c8cc4637a8f89c2f4a83092cb5d35f735794fc`. Its complete isolated Node 24.19.0
-combination passed **335/335**, exit 0, with no failed, skipped, cancelled or
-todo results. The new automatic mutual-watch acceptance uses actual production
-CLI processes and native read-only controller/paid sources, alongside the
-existing controller, terminal-task, budget and peer checks, Modal wiring and
-genuine SDK HTTP continuation probes. Adoption matched eight qualified files
-and preserved 75 untouched tracked files byte for byte. The 73 runtime pins,
-all 29 accounting/history witnesses and eight dependencies remain bound to
-actual evidence. This adopts local source: the live controller, loaded API
-and paid reservations are unchanged.
+`56a2048485525e369a30e95e36c86397eea2b5ab`. Its complete isolated Node 24.19.0
+combination passed **358/358**, exit 0, with no failed, skipped, cancelled or
+todo results. A separate actual native FLUJO worker/ExecutionEngine/MCP acceptance
+also passed. Its model and cloud executor are fixtures; it establishes local
+native child-request admission, not deployed child autonomy or paid inference.
+Adoption matched eleven qualified files and preserved 81 untouched tracked
+files. All 92 candidate files, 3,636 Factory dependency files, nine native
+dependency witnesses, all 83 prior Root files, 29 accounting/history witnesses,
+eight earlier dependencies and 2,467 pinned FLUJO source files remained stable
+during qualification. The 81 runtime source pins match the tested candidate.
+The live controller, loaded API and real paid reservations are unchanged.
+
+Earlier automatic mutual-watch source `26c8cc4637a8f89c2f4a83092cb5d35f735794fc`
+retains its separate complete **335/335** qualification and exact adoption proof.
 
 Earlier HTTP continuation source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc`
 retains its separate complete **302/302** qualification and exact adoption proof.
@@ -40,6 +44,55 @@ with source, accounting/history and owner witnesses unchanged. See
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Native Flow capacity request and admission
+
+The private MCP tool accepts only request identity, role, positive logical
+allocation and purpose. A trusted local standing grant binds the exact task
+lease/specification/attempt/controller epoch, current peer credential and inbox
+floor, immutable template, expiry and lifetime quotas. One transaction reserves
+the child and admits its provisioning intent. A separate actual SpendingLedger
+hold gates dispatch; different controllers cannot reuse one hold for distinct
+admissions. Existing accepted/running/unknown effects are observed, never
+automatically relaunched. Ready receipts must match the app, worker, workspace,
+organization and region. Provision success alone does not enroll a native cell.
+
+The complete actual run used child PID 49492, exit 0, null signal and confirmed
+close at **10:56:46.092–10:58:59.267 UTC**. It retained the genuine SDK probes and
+four-process peer-watch acceptance with their raw logs and actual closures.
+Eighteen focused bridge checks also passed independently; they include real
+process races, pause/takeover/generation fences, shared-ledger accounting and
+deferred provider rejection after a local commit failure.
+
+Separate native acceptance used source-pinned FLUJO
+`549792e1839931e862e6a305eb0d9ce2b82ae905`, a fresh encrypted tiny workspace,
+real Next worker endpoints and the actual ExecutionEngine/MCP tool loop.
+Four deterministic loopback model turns produced two genuine capacity requests.
+The first request reached the production peer inbox despite a withheld ACK,
+then admitted one injected ManagedCloud provision. Store reopening and a new
+worker process preserved the original request/conversation and produced no
+second dispatch. A second acknowledged request became `not_applied/BUDGET`
+against a fixture ledger holding all $100. Native worker PIDs 36928 and 49816
+both closed with SIGTERM before final acceptance was sealed; the parent PID
+20620 closed with exit 0. No paid provider or real model was invoked.
+
+Evidence is retained under `.factory/native-capacity-20261003/`:
+
+- Frozen source: `016b6fe6ff65981c2ca173d03ae37fde326f2a7328cc7859cdab9febadd95a85`.
+- Combined qualification: `c7e1ba7fc271f181a0f300929ee9a24502b9e1cf2ac35e77d58ea741d4fccd8d`.
+- Native qualification: `1fb03304439e86b92f311308a3efc51ce0f4e823ea949c855d503a5c10cd60a7`.
+- Native acceptance: `21757e99b2a9cdf805eba1cfcd814002ae0acffa9f62bc9b05d30b6de8f77ed4`.
+- Native raw execution: `36b4d52ce27c358e50f04736c63c90f16d4b7eb84ff3ca6b52a52589d78c0cde`.
+
+Two preliminary native attempts were not qualification: one refused an expiry
+that extended past its peer credential; another failed startup because the test
+overlay omitted `tsconfig.build.json`. Both were repaired before the frozen
+successful execution. An evidence-copy permission refusal stopped adoption
+before source changes; the protected copy then matched the original bytes.
+See [NATIVE_CAPACITY.md](NATIVE_CAPACITY.md) for the runnable private commands and
+scope. Deployed child enrollment, remote transport/bootstrap, Modal GPU/native
+Flow inference, independent-host recovery and development-speed comparison remain
+open; existing paid holds are retained pending final billing.
 
 ### Native automatic mutual watching
 

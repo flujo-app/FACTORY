@@ -105,9 +105,17 @@ peer's narrative is data; it cannot become an instruction or permission merely
 because a trusted transport delivered it. Accept review evidence under a defined
 verifier policy, not a count of agreeing peers.
 
-MCP and FLUJO's HTTP interfaces are potential transport/tool surfaces. The task,
-identity, authorization, deduplication and recovery semantics still need an
-explicit cross-instance contract. Select the transport after that contract.
+The first native capacity interface is now implemented through a private MCP
+tool and the authenticated peer gateway. Source `56a2048` passed **358/358**
+complete checks plus actual native worker/ExecutionEngine acceptance with a
+synthetic model and injected executor. A Flow requests capacity; a trusted local
+standing grant binds its exact task/peer generation, template, quotas and expiry.
+The broker atomically admits the child and effect, then applies actual local paid
+admission before ManagedCloud dispatch. Lost-ACK/store/worker restart preserves
+one original intent; a fully held fixture budget refuses another dispatch.
+See [NATIVE_CAPACITY.md](NATIVE_CAPACITY.md). This does not establish deployed
+child enrollment, independent ownership/backlog, autonomous schedules or paid
+inference; those remain separate native-cell requirements.
 
 The first implemented transport is now the separate advisory peer gateway in
 [PEER_MESSAGING.md](PEER_MESSAGING.md). It persists sender intent, authenticates

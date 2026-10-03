@@ -19,7 +19,7 @@ type checking, lint, separate acceptance and local Git delivery. It prevents
 replayed Activities from corrupting Behavior outcome measurements; see
 [NATIVE_OUTCOME.md](NATIVE_OUTCOME.md) for exact source, evidence and limits.
 The deterministic recovery pilot uses real local processes, SQLite and Git with
-fixed code fixtures. Modal inference and native Flow proof remain open: R3's
+fixed code fixtures. Modal inference and Modal-backed native Flow proof remain open: R3's
 original v2-cache prefetch reached its bridge bound with an unknown outcome;
 owned App/Volume cleanup and a fresh provider absence witness then completed.
 All four paid reservations are `retired-meter-pending`, retaining the full $100
@@ -27,6 +27,19 @@ with $0 unallocated. Recorded observations conservatively round to 30 cents;
 they are neither exact total spend nor a strict monetary lower bound. Final spend
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
+
+Source `56a2048485525e369a30e95e36c86397eea2b5ab` connects a native FLUJO Flow
+to bounded child-capacity requests through a private MCP tool, authenticated
+peers and a trusted standing-grant broker. Child allocation, lifetime grant
+quota and provisioning intent commit together; actual SpendingLedger admission
+precedes ManagedCloud dispatch. Exact replay never relaunches an intent.
+The complete combination passed **358/358**. A fresh encrypted native worker
+executed two real Flow/MCP requests using a synthetic loopback model: one
+injected provision survived lost-ACK/store/process recovery without a second
+dispatch, and the next request was refused against a fully held fixture budget.
+All native workers closed. This proves local native request admission; deployed
+child enrollment/autonomy and paid inference remain open. See
+[NATIVE_CAPACITY.md](NATIVE_CAPACITY.md).
 
 Source `a283701933710bf39ea0673ab661064586e200f8` adds authenticated advisory
 peer messages with a durable outbox/inbox, fixed destinations, credential
