@@ -91,7 +91,20 @@ exhaustion blocks further paid dispatch, while owned cleanup remains permitted.
 Reservation retirement does not free its ceiling before final billing evidence.
 Cell allocations, reservations, estimated compute and actual charges are distinct.
 
-Provider charges and final invoices are not yet reconciled. The ledger is local
+Final invoices are not yet reconciled. An independent **00:45 UTC, October 3**
+billing query found one completed hourly row for the first Modal attempt's exact
+App: **US$0.03503811**, attributed to CPU and Memory. Function/Volume-only
+selection had omitted this available App row. Independent file/source identity
+review confirmed its original App/profile/workspace/environment binding. The
+ledger now records **4 cents**, rounded upward for conservative admission,
+as a partial observation; final metered spend remains null, with the full $30
+hold unchanged. Provider report cutoff and local ingestion time are preserved
+separately. Evidence SHA-256:
+`b82061b272392d724c89fe264740453fd4af014ca26ad40d3aabb79be12230b7`.
+The staged meter fix adds exact recorded App eligibility and refuses ambiguous
+parent/child compute overlap rather than summing an unproven total.
+
+The ledger is local
 admission/accounting for registered factory reservations; it is not a provider
 hard billing stop or an audit of unrelated account usage. The Fly apps have been
 removed. Independently audited retirement moved its reservation to
