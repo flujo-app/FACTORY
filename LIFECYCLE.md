@@ -1,23 +1,106 @@
-# Persistent task and cell closure — implementation proposal
+# Persistent task and cell closure — implemented subset and proposal
 
-Draft, 2026-10-02. This document comes from read-only inspection of `src/control.mjs`, `src/presentation.mjs`, and existing controller, retirement, Git-effect, and presentation tests. It does not change a controller database, resource, or source file.
+Updated 2026-10-03. The initial subset below is implemented in source commit
+`0948fdd9ff7f5d379982e6e7286fd220236a1993`. The later sections preserve the broader
+2026-10-02 proposal and its historical baseline analysis. Updating this document
+does not invoke a controller method, change a database or make a provider call.
 
-The next patch should add explicit logical closure after a worker retires, reclaim unused logical allocation once, and preserve reviewed work for another coordinator to deliver. Physical resource retirement, task completion, logical capacity release, final provider billing, and worker quiescence must remain separate facts.
+Physical resource retirement, task completion, logical capacity release, final
+provider billing and worker quiescence remain separate facts.
 
-## Current behavior and actual gaps
+## Implemented initial subset
+
+The trusted-local `FactoryControl` methods use existing task/cell states:
+
+```text
+releaseTask(taskId, { closureId, expectedAttempt, expectedOwner,
+                      expectedStatus: 'running', expectedTaskControlEpoch,
+                      expectedFactoryEpoch })
+retireCell(cellId, { closureId, expectedParent, expectedStatus,
+                    expectedAllocation, expectedSpent, expectedFactoryEpoch })
+```
+
+Both capture and validate a closed set of input fields, bind `closureId` to the
+exact request digest, and recheck current identities in one `BEGIN IMMEDIATE`
+transaction. Fresh closure uses the exact current factory epoch. Exact completed
+replay can observe the same recorded result across later factory epochs without
+another event, transfer or dispatch; conflicting closure bytes fail closed.
+
+`releaseTask` changes only an exactly matched running task with no submitted
+candidate/review and no causal open task, project-delivery or cleanup effects to
+ready. It clears current owner/token/expiry/control epoch while preserving the
+specification, branch, attempt and history. A new task claim increments the
+attempt and fences any old release replay. The recorded task epoch and current
+factory epoch are distinct inputs, so trusted-local closure can occur after pause.
+
+`retireCell` changes only non-root reserved/ready leaves that have **never been
+provision-bound**. Every recorded provision binding is refused, including a
+terminal never-started intent; actual provider absence cannot bypass this subset.
+Non-retired children, running owned tasks and causal accepted/running/unknown
+effects block closure. Logical allocation invariants use integer-safe sums; the
+cell's spent amount transfers to its parent exactly once, unused allocation and
+cell capacity are released, and the retired identity remains historical. Reviewed
+or delivered candidates, reviews, owner provenance and effects are preserved.
+
+Lease authority now requires a ready owner cell in addition to the existing
+attempt/control epoch/token/expiry checks. Cell retirement revokes its current
+task execution tokens and project integration expiry. It does not settle unknown
+effects, alter candidate hashes, mutate the shared paid ledger or establish
+worker/provider quiescence. New cells require new identities.
+
+This source was independently reviewed and qualified in the combined isolated
+**188/188** suite. Adoption matched the qualified bytes after line-ending
+normalization; no shared-suite rerun occurred. Qualification and exact adoption
+evidence are recorded in [QUALIFICATION.md](QUALIFICATION.md). No DTO enums were
+added, the running API was not restarted, and browser commands remain disabled.
+
+The real documentation task's `docs-builder` and `docs-reviewer` leaves were then
+logically retired. Independent audit confirmed exactly two original retirement
+events (15/16), both zero-allocation/spent leaves, root paused at epoch 2, zero
+open effects, one historical successful Git delivery, preserved task attempt 1
+and full specification/candidate/review/owner history. Paid accounting was
+unchanged and `workerQuiescence` remains unverified. Protected report:
+`.factory/flujo-token-docs-20261003/logical-retirement-report.private.json`, SHA-256
+`cc880cb140732000a33017ef742e6663fb7d5edca5c06a02d969ad3677353614`.
+The executed source-bound closure wrapper SHA-256 is
+`3bf44c228d2abe34cfff12185de7cfa5ca5a3a69a5e4658c2f5374e73a6084e9`.
+The protected independent adoption/closure/paid audit, published at
+**02:42:43.346 UTC**, is
+`.factory/integration-stage/run-2026-10-03T01-49-59-785Z-offline/independent-adoption-closure-paid-audit-88d56140-3690-4057-91ee-86154ca54a24.private.json`,
+SHA-256 `fa2c64fcb94e2d9c506fab0453715e12c9237e88981bf1b16d29fcd10abccbe4`.
+
+`completeOperationalTask`, `cancelTask`, completed/cancelled task DTO values,
+targeted draining and provider-bound cell retirement remain **proposals**. They
+are not authorized by the existing logical closure methods. The low-memory HTTP
+download path is adopted source preparation, with no cloud execution or proven
+performance improvement.
+
+## Historical baseline analysis and broader proposal
+
+The sections below retain the original pre-implementation analysis, source line
+references and proposed signatures. Descriptions of the old controller refer to
+that historical baseline, not current source. The implemented API and limits are
+defined above; broader completion/provider-evidence behavior below remains a
+proposal.
+
+### Historical behavior and gaps
 
 | Finding | Existing evidence | Implication |
 | --- | --- | --- |
-| Cells have no closure method. `retired` is already understood by capacity and budget queries. | `src/control.mjs:71–93`; `src/presentation.mjs:139–146` | A physically removed worker can remain ready and consume allocation/capacity indefinitely. Merely setting its status to retired would discard its logical spent amount unless that amount is transferred to its parent. |
-| Existing lease authority does not check the owner cell's status. | `src/control.mjs:122–129` | Adding cell retirement or a future draining state must also fence existing task and project tokens. Restricting only new claims is insufficient. |
+| Baseline cells had no closure method; `retired` was already understood by capacity and budget queries. | Historical `src/control.mjs:71–93`; `src/presentation.mjs:139–146` | The implemented subset now closes never-provision-bound leaves with exact-once spent transfer. Provider-bound closure remains open. |
+| Baseline lease authority did not check the owner cell's status. | Historical `src/control.mjs:122–129` | Current authority now requires a ready owner cell and retirement invalidates task/project execution authority. |
 | Enrollment accepts any status except retired. | `src/control.mjs:92` | A future draining state could be accidentally changed back to ready. Restrict enrollment to reserved/ready if such a state is ever introduced. |
 | Running operational tasks have no completed/cancelled transition. | `src/control.mjs:94–142`, `243–254` | Pausing correctly revokes admission but leaves old running rows and occupied branch identities. A provider's absence cannot itself prove that a task succeeded. |
 | Pause changes control epoch, not candidate/review history. | `src/control.mjs:167–173`, `267–268` | An unchanged verified Git candidate is already eligible for delivery under a fresh project lease after resume. Do not reset it or require another review merely because its producer retired. |
 | Open effects preserve uncertainty across retirement. | `test/retirement-regressions.test.mjs`; `test/review-regressions.test.mjs:135–180` | Successful cleanup is compatible with unresolved earlier work. A destroyed app cannot turn a running/unknown provision or model call into not_applied. |
 
-The stale ready cell and missing operational closure are persistence gaps. Retaining verified work and unknown effects during pause are intentional safety properties. A verified task should continue to be verified until delivered or explicitly abandoned; it is not a running execution.
+The historical stale-ready gap is now addressed for never-provision-bound cells.
+Provider-bound closure and operational completion/cancellation remain gaps.
+Retaining verified work and unknown effects during pause remains intentional. A
+verified task stays verified until delivered or explicitly abandoned; it is not a
+running execution.
 
-## Smallest next patch
+## Original patch proposal and remaining extensions
 
 Use the existing reserved/ready/retired cell states first. An atomic final retirement transaction can recheck tasks, effects, descendants, and allocation before changing ready/reserved to retired. It does not need an intermediate draining enum to handle the already-paused pilot. This also avoids adding a new cell value to the current DTO. For a busy continuously admitting service, a separate targeted drain operation can follow later; that operation would block admission while retaining allocation and capacity.
 
@@ -35,7 +118,12 @@ retireCell(cellId, { expectedParent, expectedAllocation, expectedSpent,
                    expectedFactoryEpoch, retirementEvidence })
 ```
 
-These are proposed signatures, not implemented APIs. Capture immutable input before any asynchronous evidence read. Revalidate the complete captured identity and all current database guards inside BEGIN IMMEDIATE. Permit these administrative cleanup/closure transitions while paused; they need the controller's existing trusted-local authority, not an obsolete worker lease. Avoid requiring unrelated projects or all factory effects to drain.
+These are the original proposed signatures, not the current API: `releaseTask`
+and `retireCell` now use the exact initial-subset fields shown above. The other
+methods and `retirementEvidence` path remain unimplemented. A future extension
+should capture immutable input before asynchronous evidence reads, revalidate
+inside `BEGIN IMMEDIATE`, and use trusted-local administrative authority while
+paused. Avoid requiring unrelated projects or all factory effects to drain.
 
 The task's recorded control epoch and the current factory epoch are separate CAS inputs. A task started before pause normally has an older task control epoch; that is an identity to preserve/check, not a reason to refuse cleanup. Never require that old task epoch to equal the current factory epoch. Exact completed closure replay may observe its recorded result across later factory epochs without granting a new transition.
 
@@ -75,7 +163,7 @@ The parent's immediate unallocated capacity grows by `cell.allocation - cell.spe
 
 Example: root allocates 4,000 cents to parent. Parent has 300 logical cents of its own consumption and two children allocated 1,500 and 800. They finish with 600 and 100 logical cents. Closing the leaves transfers 700 to parent.spent, which becomes 1,000. Root still holds the parent's 4,000. Closing parent transfers 1,000 to root.spent and releases 3,000 logical cents. Replaying any of those closures changes nothing.
 
-Keep the shared SpendingLedger entirely outside that transaction. Its started or retired-meter-pending reservation continues holding max(ceiling, observed charges); retirement does not cancel it, settle it, or replenish it. Only supported final billing releases the unused paid allowance. This preserves the current paidBudget lower-bound/null-final semantics independently of the cell tree.
+Keep the shared SpendingLedger entirely outside that transaction. Its started or retired-meter-pending reservation continues holding max(ceiling, observed charges); retirement does not cancel it, settle it, or replenish it. Only supported final billing releases the unused paid allowance. Conservatively rounded partial observations and unknown final spend remain independent of the logical cell tree; rounded cents must not be presented as an exact total or strict monetary lower bound.
 
 ## Causal effects and stale authority
 
@@ -90,13 +178,20 @@ Use recorded bindings and effect identity, not caller-selected app names, broad 
 
 Accepted never-started work can use the existing accepted → not_applied path only when cancellation wins before startEffect. Started/unknown work retains the existing negative reconciliation guard. The new trusted Git CAS refusal lane remains the narrow exception for an actual completed request-bound refusal; a cloud absence observation is not an equivalent proof.
 
-Add a ready-owner-cell check to authority() for both task and project leases. Continue using the existing owner/attempt/control epoch/token/expiry checks. Claims already require ready cells. Final cell retirement also expires project integration leases it owns, so a new coordinator can acquire a fresh project lease when its effect lane is clear. Do not change old effect owner epochs while settling completed operations.
+The initial subset has added the ready-owner-cell check to `authority()` for task
+and project leases while preserving the owner/attempt/control epoch/token/expiry
+checks. Final logical cell retirement expires project integration leases it owns,
+so a ready coordinator can acquire a fresh lease when its effect lane is clear.
+Do not change old effect owner epochs while settling completed operations.
 
 release/complete/cancel clear current task execution tokens and expiry. Preserve the attempt of review/verified candidates because review binds that exact attempt. Existing-identity effect observation after retirement or epoch change must never create fresh dispatch. Messages are advisory trusted-local records, not lease authority; an old message cannot reopen a closed task or authorize a call. Any future message-driven dispatcher must obtain current authority rather than treating an attempt field as permission.
 
 Root cannot be retired, rolled into a parent, or removed by these methods. Retired cell IDs and their app bindings are permanent: creating future workers requires new identities. Exact reservation replay may observe the historical retired row but cannot enroll it again.
 
-## Resource evidence and reviewed-work handoff
+## Proposed provider evidence and reviewed-work handoff
+
+Provider-bound retirement in this section is future work. Current `retireCell`
+rejects every provision-bound identity even when provider cleanup is confirmed.
 
 A successful logical closure must describe the scope of resource evidence honestly:
 
@@ -109,17 +204,29 @@ Before deleting remote storage, copy candidates and review evidence into durable
 
 After producer retirement, leave verified unchanged. Resume, acquire a fresh project lease from a ready coordinator, and use executeGitDelivery with a fresh effect key and the original reviewed repository/ref/baseline/candidate. Existing admission rechecks the candidate and review file hashes. If the target advanced, genuine CAS refusal clears only that delivery intent; rebasing or changing bytes requires a new independently reviewed task/candidate. A succeeded delivery awaiting deliverTask should be finalized from its exact receipt, including while paused, before any abandonment decision.
 
-## DTO and release plan
+## Proposed DTO extensions and release plan
 
 Cell retired, cleared task leaseExpiry/owner for released running tasks, logical root spend transfer, and normal closure events fit the current presentation shape. No credential/path/receipt/event-details projection should be added. Numeric revision and opaque cursor continue tracking controller events; heartbeat-only observations may still share a revision. paidBudget revision remains independent.
 
 The new completed/cancelled task values do not fit current strict allowlists (`src/presentation.mjs:150`). Writing them first would make snapshot return 503; deployed BFF clients can also reject unknown enum values. Coordinate presentation and all active staff clients before the controller begins writing either value. Existing TEXT columns and active_branch partial index already support terminal values without a physical SQLite table migration, but that does not make the DTO addition compatible with old readers. Either deploy additive enum support to all readers first, or version the DTO and explicitly migrate consumers. Keep the read-only API's commands capability false.
 
-If that coordination is not ready, land only retireCell plus releaseTask first, using existing status values. This safely reclaims cell capacity and queues unfinished tasks; it is an interim handoff, not operational completion. Add the explicit terminal task statuses in the coordinated follow-up. Do not disguise completion as rejected/delivered or silently reset tasks to ready.
+The compatible `retireCell` plus `releaseTask` subset has now landed using existing
+status values. It reclaims eligible logical capacity and permits explicit task
+handoff; it is not operational completion. Explicit terminal task statuses belong
+in the coordinated follow-up. Do not disguise completion as rejected/delivered or
+silently reset tasks to ready.
 
-Implement controller methods and dedicated lifecycle tests first; keep retirement-evidence qualification in the runtime adapter boundary. Add orchestration calls only after owned provider retirement is confirmed, using explicit per-task outcomes and leaves before parents. This proposal does not call those methods against the pilot's actual database.
+The initial controller methods and dedicated lifecycle cases are qualified; actual
+logical closure of the documentation leaves is recorded above. Provider-evidence
+qualification still belongs at the trusted adapter boundary. Future provider-bound
+orchestration must use explicit task outcomes and leaves before parents, after
+owned retirement is confirmed. This document itself performs no orchestration.
 
-## Meaningful qualification cases
+## Original qualification plan
+
+This historical plan mixes the implemented subset with remaining extensions.
+Operational completion/cancellation and new DTO-enum rollout cases below are
+still proposals; the initial subset's executed qualification is recorded above.
 
 1. Two real SQLite connections/processes race to retire the same leaf: one transfer/event, identical exact replay, conflicting evidence rejected. Reopen and replay again with no further release.
 2. Nested example above: leaf-first conservation, no root descendant double count, final unused release correct, maxCells slot available for a new identity. Reject root retirement and parent closure with a non-retired child.

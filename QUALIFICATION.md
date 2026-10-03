@@ -1,8 +1,11 @@
 # Factory qualification record
 
-Updated October 3, 2026. Local trusted coordinator; live Modal R3 launch build
-`15d6c78`, with the merged source suite passing **162/162**. The operator API
-continues to run its separately reported build `6fcd718`.
+Updated October 3, 2026. Current runtime source comes from
+`0948fdd9ff7f5d379982e6e7286fd220236a1993`, adopting the reviewed lifecycle/HTTP
+combination after R3 ended. Its **188/188** suite ran once in the isolated qualified
+stage, not again in the shared checkout. R3 used unchanged launch build `15d6c78`
+(whose earlier source suite passed **162/162**) and ended without inference proof.
+The operator API continues to run its separately reported build `6fcd718`.
 
 ## Proven so far
 
@@ -111,6 +114,24 @@ Independent review SHA-256:
 Final independent destination witness SHA-256:
 `bf317e511e69343d1d5797ec9ff9ba20eaa4da2b977e6beec0a9ce0f05c68c7c`.
 
+After qualified source adoption, the original `docs-builder` and `docs-reviewer`
+leaves were logically retired through the new `retireCell` method. Both had zero
+allocation/spent and no provision bindings. Independent audit confirmed exactly
+two original `cell_retired` events (sequences 15/16), root logical allocation/spent
+zero, controller paused at epoch 2, no open effects and one historical successful
+Git delivery. Delivered task attempt 1, specification, candidate, review, file
+hashes and producer history remain intact. Paid policy/reservations/events remain
+unchanged; the audit matched their coherent digest
+`6e93379f0556b78c91845026b828e8db4fc97a3d21896f53eef5551c5a955f80`.
+This is logical closure of never-provision-bound cells, not provider retirement
+or verified worker quiescence. Protected report:
+`.factory/flujo-token-docs-20261003/logical-retirement-report.private.json`, SHA-256
+`cc880cb140732000a33017ef742e6663fb7d5edca5c06a02d969ad3677353614`.
+The protected independent adoption/closure/paid audit was published at
+**02:42:43.346 UTC**:
+`.factory/integration-stage/run-2026-10-03T01-49-59-785Z-offline/independent-adoption-closure-paid-audit-88d56140-3690-4057-91ee-86154ca54a24.private.json`,
+SHA-256 `fa2c64fcb94e2d9c506fab0453715e12c9237e88981bf1b16d29fcd10abccbe4`.
+
 The complete source suite after build `7691288` passed **147/147 Node test results**,
 including policy and fake-SDK checks that invoke 28 Python cases. These cover
 cross-process budget/lease contention, crash recovery, Git compare-and-swap,
@@ -123,7 +144,10 @@ The owner authorized **US$100 total** for the paid factory work. One shared
 `spending.sqlite` reserves $10 for Fly and $30 for each of three distinct Modal
 experiments; **$100 is held and $0 remains unallocated**. Recorded partial
 charges total **24 cents**: R1 4, R2 12 and R3 8. All final charge fields remain
-null, with final spend unknown. Holds are not charges.
+null, with final spend unknown. These are conservatively rounded partial
+observations, not exact total spend or a strict monetary lower bound. All four
+reservations are now `retired-meter-pending`; paid revision 17 retains the full
+10,000-cent hold and zero unallocated cents. Holds are not charges.
 Each new paid dispatch rechecks admission. Known local experiment/global
 exhaustion blocks further paid dispatch, while owned cleanup remains permitted.
 Reservation retirement does not free its ceiling before final billing evidence.
@@ -221,7 +245,7 @@ started at **02:14:19 UTC** and was live at the displayed 02:20 observation minu
 The original first note is preserved. These are provider container replacements,
 not evidence of coordinator replay. Neither the warning nor exit 137 establishes
 a kernel OOM event, underlying cause, complete shard or successful inference.
-The original local driver remains live at this observation on unchanged build
+The original local driver remained live at this observation on unchanged build
 `15d6c78`, approaching its original approximately **02:29:27 UTC** bridge deadline.
 Evidence: `.factory/modal-20261002-r3/observer-later-container-failures.private.json`,
 SHA-256 `2c597f3864118d8d2443547761acf8a240b66a33176f2fa44c083adc3beed450`.
@@ -234,6 +258,29 @@ unchanged. Together with R1 and R2 this records **24 cents in conservatively rou
 all $100 remains held and final spend remains null. Provider cutoff, observation
 time and local ingestion are distinct. Evidence SHA-256:
 `c28a3c1892ebfac7e3e432b6dbf0ff152eb6b087ba520a894075d4c19b94c4eb`.
+
+R3's original bridge reached its bound at **02:29:27.667 UTC**, retaining the
+original prefetch as unknown. The original `stop-app` succeeded around
+**02:30:16 UTC** with explicit zero containers; the original owned Volume deletion
+succeeded at **02:30:24 UTC**. The driver ended with exit 1 and
+`requires-reconciliation`, without inference success. A fresh actual provider
+witness between **02:30:48.157 and 02:31:11.303 UTC** confirmed the exact App
+stopped/zero, active App lookup absent, and owned Volume ID and name absent.
+Provider witness SHA-256:
+`fd6ab7dc2aea725d91a9e6eca11cd85d0a562468e41f020542743c1bc903e9ac`.
+
+The original-operation audit matched all six old source hashes and five exact
+intents, preserving the unknown prefetch. No proxy-token creation, direct
+generation, native model or Flow operation was admitted. Physical cleanup does
+not turn that unknown download into a confirmed success or failure. Audit SHA-256:
+`45f337c7c84e4badd637af5d2d0a889f991bcd4acbc56a2727f7792923212320`.
+Original report SHA-256:
+`b5e1252767f700ba155c53ceaece2cd5befdd67c6119cffe186d42820a4aacf8`.
+Retirement report SHA-256:
+`57fde4e0fc8dd7fcbacb68f8fb275cfb8fc76d38fb67f71fb29af06efd0bc94b`.
+R3 now joins the other three reservations in `retired-meter-pending`, retaining
+its full $30 hold. No new paid attempt is admitted and no HTTP-variant cloud
+execution follows from source adoption.
 
 The O owner separately reports two deliberately launched O runs, each with a
 127-cent reservation and confirmed cleanup of its model/tools sandboxes. Their
@@ -313,10 +360,10 @@ stop, no tool/function calls, the expected returned model and the exact ready
 object. The driver's own success alone is insufficient; raw response and
 identity-bound receipts require independent review.
 
-## Remaining proofs
+## Adopted source qualification
 
-Two compatible follow-ups have passed isolated review but are not yet applied to
-the shared runtime while R3 runs. The logical lifecycle patch supports task
+Two compatible follow-ups passed isolated review and were applied only after
+R3's original run ended and owned retirement was witnessed. The lifecycle patch supports task
 release and retirement only for never-provision-bound leaves, preserving reviewed
 work and paid holds. Its author passed 76 affected checks; an independent reviewer
 passed 32 lifecycle/adversarial cases. Patch SHA-256:
@@ -335,7 +382,7 @@ Patch SHA-256:
 `fb982f97eef5986781c34e222f882fa9fbe72fc464dad44ca4bb981a3ccf7f3a`.
 Independent report SHA-256:
 `eddbafc221ad2f0e5444f289a9289d04a6858f0710e999d6ad26efba08cbbd16`.
-The full allowance remains held; preparing either patch does not admit another
+The full allowance remains held; adopting either patch does not admit another
 paid experiment. Combined isolated qualification passed **188/188 Node results**,
 exit 0, with no skipped or cancelled tests. A pre-test preload setup failure is
 preserved separately. A subsequent non-rerunning independent audit verified the
@@ -346,7 +393,29 @@ Combined patch SHA-256:
 `d7620687dc89d2853eeec59487ddb3aedf93b098aeded9e2caba9ed052337544`.
 Artifact manifest SHA-256:
 `1eaa7fed6bf592e423c41a88cd77bb1fa3d3f11a02c769578653e3cddf86f897`.
-This tested source remains isolated while the original R3 runtime is active.
+Current source commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` contains those exact
+11 reviewed files. Root's post-adoption proof and independent current validation
+matched the 47 qualified stage files and 44 compared shared source files after
+line-ending normalization. No shared suite was rerun or extra runtime source
+changed. Post-adoption proof:
+`.factory/integration-stage/run-2026-10-03T01-49-59-785Z-offline/root-adoption-byte-verification.private.json`,
+SHA-256 `18e404b495883689e8d7f0b9d9370f76512b4c253a1bbe751491fa7eec2e0416`.
+The corrected source-bound logical-closure wrapper SHA-256 is
+`3bf44c228d2abe34cfff12185de7cfa5ca5a3a69a5e4658c2f5374e73a6084e9`;
+it executed the documented local closure after validation. The low-memory HTTP
+path has not been cloud executed, and its performance is not proven.
+
+An authenticated local API witness at **02:38:50 UTC** confirms process build
+`6fcd718592ebf86b2d546f0eaab2cb5b159a4140`, schema 1, Fly-controller revision 89,
+paused admission and `commands: false`. The independent paid revision is 17:
+four retired-meter-pending reservations, 10,000 held cents, zero unallocated,
+24 conservatively rounded partial cents, final spend null and billing incomplete.
+This API still exposes only the Fly execution controller; the separate Modal and
+documentation journals are absent. No API restart or enum/command change occurred.
+Protected API witness SHA-256:
+`783750aa183be89c5295f87e6db00e9ccfec8ee11eb102fd5080e268ef0a427b`.
+
+## Remaining proofs
 
 - Native remote peer enrollment, autonomous child provisioning and authenticated
   peer communication. The successful child request was coordinator-mediated.
@@ -355,18 +424,20 @@ This tested source remains isolated while the original R3 runtime is active.
 - A runtime FLUJO improvement through source-pinned acceptance and delivery, plus
   upstream publication. The completed one-file documentation task qualifies local
   delivery, with no PR, push, upstream merge or runtime change.
-- Persistent task/cell lifecycle and verified-candidate handoff across control
-  epochs, with truthful resource and billing status.
+- Operational completion/cancellation and provider-bound task/cell closure across
+  control epochs, with truthful resource and billing status. Initial task release,
+  never-provision-bound leaf retirement and reviewed-work preservation are implemented.
+- Modal-backed direct inference and actual native FLUJO Flow execution. Offline
+  HTTP download qualification does not establish either.
 - Measured self-improvement: comparable baseline/candidate delivery outcomes,
   protected evaluations, explicit activation and rollback. More workers or a
   successful model request do not establish improved development speed.
 
-The independently reviewed [lifecycle proposal](LIFECYCLE.md) describes the next
-compatible patch: logical leaf retirement and task release, ready-cell authority
-checks, causal effect guards and exact allocation conservation. It preserves
-reviewed work and paid billing holds. It is a proposal rather than an implemented
-closure API; additional completed/cancelled task states first require coordinated
-strict interface-contract changes.
+The [lifecycle document](LIFECYCLE.md) distinguishes the implemented initial
+subset—task release, never-provision-bound leaf retirement, ready-cell authority,
+causal guards and allocation conservation—from the broader proposal. Provider-bound
+retirement and additional completed/cancelled task states remain proposed and
+require qualified resource evidence and coordinated strict interface changes.
 
 The shared FLUJO source, owner default-model binding, paused hackathon automations
 and unrelated cloud resources were not reset or resumed by these experiments.

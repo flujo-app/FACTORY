@@ -125,10 +125,11 @@ The verified launch command from the FACTORY directory is:
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly
-and three $30 Modal reservations: all $100 is held, with $0 unallocated. After the
-ingestion at 02:14 UTC on October 3, partial recorded provider charges are 24 cents
-(R1 4, R2 12, R3 8); every final charge field remains null and final spend remains
-unknown. R3's 8 cents conservatively rounds an owned-App US$0.07357657 observation
+and three $30 Modal reservations. All four are now `retired-meter-pending`; paid
+revision 17 retains all $100, with $0 unallocated. Recorded observations round
+conservatively to 24 cents (R1 4, R2 12, R3 8); every final charge field remains null
+and final spend remains unknown. This is not exact total spend or a strict monetary
+lower bound. R3's 8 cents conservatively rounds an owned-App US$0.07357657 observation
 for the completed [01:00, 02:00) UTC hour, observed at 02:09:02.300 UTC. It does not
 release the R3 hold or measure its entire experiment.
 The current HTTP budget DTO reports controller
@@ -148,8 +149,10 @@ The available paid DTO exposes `availability: "available"`, `schemaVersion: 1`,
 ISO/null `createdAt`, `startedAt`, `retiredAt`, `settledAt`, `cancelledAt`,
 `observedAt`. No digests, raw invoices, account identifiers or paths are exposed.
 
-`knownMeteredCents` is a lower bound from recorded observations;
-`meteredSpendCents` stays null while a started reservation has incomplete final
+`knownMeteredCents` sums recorded observations in cents. These may be conservatively
+rounded upward, so do not label the value exact spend or a strict monetary lower
+bound. `meteredSpendCents` stays null while a started or retired-meter-pending
+reservation has incomplete final
 billing. `unallocatedCents` describes admission capacity. These figures cover
 registered factory reservations, not an entire provider account. No App-specific
 provider hard cap is implied. Missing configuration or unreadable paid state
@@ -159,11 +162,14 @@ The first visual PR may ignore this optional extension until its display contrac
 is independently qualified.
 
 The recovered Fly pilot passed with two real workers and confirmed owned
-retirement. The local Git crash/recovery proof also passed. As of October 3 at
-02:20 UTC, Modal R3 remains in its original CPU prefetch after two retired attempts
-that did not complete weights. Rendered provider history records heartbeat
+retirement. The local Git crash/recovery proof also passed. Modal R3's original
+prefetch reached its bridge bound at 02:29:27.667 UTC on October 3 and remains
+unknown. Its original App stop and owned Volume deletion succeeded; an exact
+provider witness at 02:30:48.157–02:31:11.303 UTC confirmed stopped/zero and App/Volume
+absence. Its driver ended with exit 1, `requires-reconciliation`, and no inference.
+Earlier rendered provider history records heartbeat
 timeouts, a SIGKILL/137 with a memory warning, and replacement containers; its
-fourth container was live at that observation. Provider replacement does not
+fourth container was live at the historical 02:20 observation. Provider replacement does not
 establish coordinator replay, a kernel OOM cause, complete weights or successful
 inference. No Modal inference or native model/Flow execution has been proven yet.
 The API's paused controller describes the Fly journal; it does not describe the
@@ -178,6 +184,22 @@ is not exposed by the API's currently configured Fly controller. Local delivery
 does not imply PR publication, upstream merge, runtime/model generation or a
 development-speed benchmark. The presentation schema and command capability stay
 unchanged.
+
+The task's builder and reviewer cells were subsequently logically retired under
+the qualified lifecycle subset. Independent audit confirmed the exact events,
+preserved delivered-task evidence and unchanged paid records. This does not verify
+process/provider quiescence. The initial lifecycle methods use existing DTO states;
+provider-bound retirement and completed/cancelled task enums remain future work.
+
+FACTORY source `0948fdd` now includes the reviewed lifecycle and low-memory HTTP
+patches. Their 188/188 suite executed once in the isolated stage, and adoption was
+verified against its source bytes. The HTTP path has not run in the cloud. This
+source adoption did not restart the API or enable commands. A fresh authenticated
+GET at 02:38:50 UTC confirmed API build `6fcd718`, schema 1, paused Fly revision 89,
+`commands: false`, paid revision 17 and the recorded figures above, with billing
+incomplete. Separate Modal and documentation execution journals remain outside
+this configured endpoint. Protected witness SHA-256:
+`783750aa183be89c5295f87e6db00e9ccfec8ee11eb102fd5080e268ef0a427b`.
 
 The brain-online owner pushed build
 `9b1daf9825d38b94b0a5da4ed3ba06b4d9feba4e`, adding the label “Controller admission”

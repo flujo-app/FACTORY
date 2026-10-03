@@ -15,11 +15,23 @@ The live Fly pilot passed with two real FLUJO workers, independent candidate
 review and verified owned retirement. A real source-pinned FLUJO API documentation
 task also passed independent review and local Git delivery from fresh upstream.
 The deterministic recovery pilot uses real local processes, SQLite and Git with
-fixed code fixtures. Modal inference and native Flow proof remain open; R3's
-original v2-cache prefetch remains active as of October 3 at 02:20 UTC, despite
-provider container failures and replacements. All $100 is held pending final
-billing; partial recorded charges are 24 cents and final spend remains unknown. See
+fixed code fixtures. Modal inference and native Flow proof remain open: R3's
+original v2-cache prefetch reached its bridge bound with an unknown outcome;
+owned App/Volume cleanup and a fresh provider absence witness then completed.
+All four paid reservations are `retired-meter-pending`, retaining the full $100
+with $0 unallocated. Recorded observations conservatively round to 24 cents;
+they are neither exact total spend nor a strict monetary lower bound. Final spend
+remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
+
+Source commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` adopts the independently
+reviewed logical lifecycle subset and low-memory HTTP preparation. The combined
+188/188 qualification ran once in its isolated stage; adoption matched those
+source bytes after line-ending normalization, with no shared-suite rerun. The
+HTTP download variant has not run in the cloud. Logical closure is implemented
+for task release and never-provision-bound leaf cells; provider-bound closure
+remains future work. The operator API still runs build `6fcd718` for the Fly
+controller, with commands disabled.
 
 ## Run locally
 
@@ -171,6 +183,10 @@ allowance across providers, using integer cents and serialized admission. The
 first experiment reserved $10 for Fly and $30 for Modal. Two further, distinct
 Modal experiments each hold $30; all $100 is reserved and $0 remains unallocated. Current
 results and billing status are recorded in [QUALIFICATION.md](QUALIFICATION.md).
+All four reservations are now retired pending final billing, with the full holds
+unchanged. The latest paid revision is 17; its 24 recorded cents are conservatively
+rounded partial observations, not exact total spend. No fresh paid experiment is
+admitted by the source update.
 Each paid dispatch rechecks its reservation; known experiment or global exhaustion
 blocks new paid work. Owned cleanup remains possible. Retirement keeps funds held
 until final billing evidence arrives; it cannot release uncertain charges. The
@@ -271,6 +287,10 @@ candidate `ea66f1130e01d3208173cd850d40f85f319b3582`, and the reviewed local tar
 through Git compare-and-swap. This corrected HTTP versus authored Flow token-limit
 documentation; it created no PR, push, upstream merge or runtime change. Runtime
 FLUJO improvements and upstream publication still require their own acceptance.
+The task's `docs-builder` and `docs-reviewer` cells were then logically retired
+using the qualified controller subset. Independent audit confirmed the exact
+closure events, preserved delivered work and unchanged billing records.
+Provider/process quiescence remains unverified.
 
 The cloud bridge snapshots durable workspace state from a running native source
 and selects a compatible immutable worker image. Application-version or channel
