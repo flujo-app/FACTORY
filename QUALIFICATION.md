@@ -1,6 +1,7 @@
 # Factory qualification record
 
-October 2, 2026. Local trusted coordinator; source build `7691288`.
+Updated October 3, 2026. Local trusted coordinator; live Modal R2 launch build
+`5b73656`, with the complete suite recorded at runtime build `7691288`.
 
 ## Proven so far
 
@@ -44,6 +45,28 @@ also read this actual endpoint successfully; anonymous access was rejected and
 customer access excluded. Its frontend work is
 [brain-online PR 34](https://github.com/flujo-app/brain-online/pull/34).
 See [the interface contract](C:/Users/Moe/Documents/ChatGPT/FACTORY/BRAIN_ONLINE_INTEGRATION.md).
+
+Independent review cleared brain-online build
+`b811bbd2dd8f7682e9c5598845c8f23a84badf1d`: **23/23** targeted mounted-host,
+avatar and bridge checks passed. Refresh responses denying authorization now
+clear prior factory facts and inspection state; changing the authenticated
+subject invalidates old profile reads and remounts the factory view. Seven of
+the owner's nine mounted-host cases failed against the preceding build and
+passed after the fix. This records reviewed source and local validation, not a
+merged or deployed PR.
+
+A saved real-Git before/after comparison uses identical specification, candidate,
+review, delivery request and destination. An external winner advanced the target
+before either trial. Baseline `d70bd69` leaves the completed preflight refusal
+unknown and blocks fresh integration ownership; current `27671ca` settles that
+genuine refusal as `not_applied` and admits the successor lease. The candidate
+remains verified and undelivered, with the same external winner and unchanged
+reflog. Safely blocked ownership requests changed **1 → 0**. This is one recovery
+case, not an atomic-race experiment or an overall development-speed benchmark;
+the single-trial runtimes support no speedup claim. Independently audited evidence:
+`.factory/git-refusal-comparison/run-2026-10-03T00-13-58-096Z-602c0ee3`.
+Report SHA-256:
+`906ab5174b74126ea4619dbcf69c6f35c48d50194b1e8655feef8250d44de55d`.
 
 The complete source suite after build `7691288` passed **147/147 Node test results**,
 including policy and fake-SDK checks that invoke 28 Python cases. These cover
@@ -110,6 +133,16 @@ bound. Focused offline validation passed 19/19. Its deployment completed in
 10,232 ms. An independent provider observation at **00:00:41 UTC, October 3**
 confirmed one prefetch runner/input and zero inference runners/inputs. This
 establishes its actual running CPU stage, not completed weights or inference.
+
+An identity-bound read-only observation at **00:18:11 UTC** confirmed that R2's
+weights Volume uses filesystem version 1. Version 1's random-write overhead is
+a plausible performance lead for this parallel download, not a demonstrated
+cause. Modal documents improved random access in version 2 and considers
+rebuildable model caches suitable for its beta; an isolated version-2 variant is
+being prepared without changing the current experiment. [Modal volume documentation](https://modal.com/docs/guide/volumes).
+File counts and a timed-out log observation do not prove download completion,
+failure or byte progress. No direct model call or native Modal-backed FLUJO Flow
+has yet been proven.
 
 ## Remaining proofs
 
