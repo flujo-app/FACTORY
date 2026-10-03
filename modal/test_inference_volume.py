@@ -61,7 +61,7 @@ class InferenceVolumeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): module.checked_weights()
         self.assertEqual(calls[-1], "hydrate")
 
-    def download(self, *, environment=None, hub_version="0.36.0", xet_version="1.6.0", stale_constants=False, failure=None):
+    def download(self, *, environment=None, hub_version="0.36.0", xet_version="1.6.0", stale_constants=False, failure=None, artifact_failure=None):
         module, calls, functions, environments, _ = self.definition()
         captured = []
         fake_hub = ModuleType("huggingface_hub")
@@ -77,14 +77,22 @@ class InferenceVolumeTests(unittest.TestCase):
             if name == "hf-xet" and xet_version is not None: return xet_version
             raise PackageNotFoundError(name)
         env = {**environments[-1], **(environment or {})}
-        with patch.dict("sys.modules", {"huggingface_hub": fake_hub}), patch.dict(os.environ, env), patch.object(module, "version", metadata):
+        def artifacts(model_path, config):
+            self.assertEqual(model_path, module.MODEL_PATH)
+            self.assertIs(config, module.CONFIG)
+            calls.append("validate-artifacts")
+            if artifact_failure: raise artifact_failure
+            return {"mocked": True}
+        with patch.dict("sys.modules", {"huggingface_hub": fake_hub}), patch.dict(os.environ, env), \
+                patch.object(module, "version", metadata), patch.object(module, "validate_model_artifacts", artifacts):
             try: result = module.prefetch()
             except Exception as error: return error, calls, captured, functions
         return result, calls, captured, functions
 
     def test_anonymous_single_thread_http_download_binds_revision_patterns_and_private_metadata(self):
         result, calls, captured, functions = self.download(environment={"HF_TOKEN": "private-inherited-token"})
-        self.assertEqual(calls[-2:], ["hydrate", "commit"])
+        self.assertEqual(calls[-3:], ["hydrate", "validate-artifacts", "commit"])
+        self.assertEqual(result["artifactProof"], {"mocked": True})
         self.assertEqual(captured, [{"repo_id": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242", "local_dir": "/models/c03e6d358207e414f1eca0bb1891e29f1db0e242",
             "allow_patterns": ["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"], "max_workers": 1, "token": False}])
@@ -116,6 +124,14 @@ class InferenceVolumeTests(unittest.TestCase):
         result, calls, captured, _ = self.download(failure=failure)
         self.assertIs(result, failure)
         self.assertEqual(len(captured), 1)
+        self.assertNotIn("commit", calls)
+
+    def test_artifact_failure_does_not_commit_or_claim_cached_weights(self):
+        failure = RuntimeError("offline simulated incomplete model")
+        result, calls, captured, _ = self.download(artifact_failure=failure)
+        self.assertIs(result, failure)
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(calls[-1], "validate-artifacts")
         self.assertNotIn("commit", calls)
 
 

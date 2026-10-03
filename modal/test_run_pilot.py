@@ -97,6 +97,7 @@ class BridgeTests(unittest.TestCase):
                     test.calls.append("prefetch-call")
                     return test.prefetch_result or {"state": "weights-cached", "volumeId": test.volume_id, "volumeFsVersion": test.volume_version,
                         "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
+                        "artifactProof": pilot.expected_artifact_proof(pilot.CONFIG),
                         "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": "1.6.0", "xetDisabled": True, "hfTransferDisabled": True}}
                 return SimpleNamespace(hydrate=lambda: SimpleNamespace(object_id="fu-owned", get_web_url=lambda: "https://factory--serve.modal.run", remote=remote))
 
@@ -108,7 +109,7 @@ class BridgeTests(unittest.TestCase):
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
 
-    def payload(self, operation, state="running", *, legacy_download=False):
+    def payload(self, operation, state="running", *, legacy_download=False, legacy_artifacts=False):
         request = {"operation": operation, "runId": "offline-run", "appName": "factory-offline-model",
                    "volumeName": "factory-offline-weights", "profile": "fake-profile", "environment": "main",
                    "workspaceName": "factory-account", "runDirectory": str(self.root)}
@@ -116,6 +117,9 @@ class BridgeTests(unittest.TestCase):
             request["volumeFsVersion"] = 2
         if operation in {"deploy", "prefetch"} and not legacy_download:
             request["prefetchDownload"] = dict(pilot.CONFIG["prefetchDownload"])
+        if operation in {"prepare", "deploy", "prefetch"} and not legacy_artifacts:
+            expected = pilot.expected_artifact_proof(pilot.CONFIG)
+            request["modelArtifactValidation"] = {key: expected[key] for key in ("schemaVersion", "manifestSha256", "validatorSha256")}
         payload = {**request, "request": request, "effectKey": operation, "journalPath": str(self.root / "modal.sqlite")}
         encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         connection = sqlite3.connect(payload["journalPath"])
@@ -134,6 +138,8 @@ class BridgeTests(unittest.TestCase):
                 value.setdefault("volumeFsVersion", 2)
                 if "prefetchDownload" in payload:
                     value.setdefault("prefetchDownload", payload["prefetchDownload"])
+                if "modelArtifactValidation" in payload:
+                    value.setdefault("modelArtifactValidation", payload["modelArtifactValidation"])
         pilot.write_json(self.root / "resources.private.json", value)
 
     def meter_payload(self):
@@ -527,6 +533,7 @@ class BridgeTests(unittest.TestCase):
         request = self.payload("prefetch")
         valid = {"state": "weights-cached", "volumeId": "vo-owned", "volumeFsVersion": 2,
                  "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
+                 "artifactProof": pilot.expected_artifact_proof(pilot.CONFIG),
                  "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None, "xetDisabled": True, "hfTransferDisabled": True}}
         cases = [{"revision": "a" * 40}, {"model": "other/model"},
                  *[{"download": {**valid["download"], **change}} for change in ({"transport": "xet"}, {"maxWorkers": True},
@@ -541,6 +548,62 @@ class BridgeTests(unittest.TestCase):
         self.prefetch_result = {**valid, "rawDiagnostic": "private-server-path"}
         result = pilot.operate(request)
         self.assertEqual(result, valid)
+
+    def test_fresh_deploy_and_prefetch_require_current_validator_intents(self):
+        for operation in ("deploy", "prefetch"):
+            with self.subTest(operation=operation):
+                request = self.payload(operation, legacy_artifacts=True)
+                self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+                with self.assertRaises(ValueError): pilot.operate(request)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.volume_lookups, [])
+
+    def test_prepare_validates_artifact_sources_before_any_sdk_lookup(self):
+        request = self.payload("prepare", legacy_artifacts=True)
+        with patch.object(self.fake.Workspace, "from_context") as lookup:
+            with self.assertRaises(ValueError): pilot.operate(request)
+        lookup.assert_not_called()
+
+    def test_prepare_returns_verified_expected_identity_without_claiming_weights(self):
+        self.app_absent = True
+        result = pilot.operate(self.payload("prepare"))
+        expected = pilot.expected_artifact_proof(pilot.CONFIG)
+        self.assertEqual(result["modelArtifactValidation"],
+                         {key: expected[key] for key in ("schemaVersion", "manifestSha256", "validatorSha256")})
+        self.assertNotIn("artifactProof", result)
+        self.assertNotIn("weightsCached", result)
+        self.assertEqual(self.calls, [])
+
+    def test_artifact_identity_must_match_intent_and_recorded_deployment(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+        request["modelArtifactValidation"] = {**request["modelArtifactValidation"], "validatorSha256": "a" * 64}
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned", modelArtifactValidation={})
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+
+    def test_unverified_or_mismatched_artifact_receipt_cannot_checkpoint_ready_weights(self):
+        expected = pilot.expected_artifact_proof(pilot.CONFIG)
+        variants = [None, {}, {**expected, "validatorSha256": "a" * 64},
+                    {**expected, "manifestSha256": "a" * 64}, {**expected, "revision": "a" * 40},
+                    {**expected, "schemaVersion": True}, {**expected, "verifiedBytes": expected["tensorBytes"]},
+                    {**expected, "tensorBytes": expected["verifiedBytes"]}, {**expected, "shardCount": 3},
+                    {**expected, "fileCount": 12}, {**expected, "extra": "private-path"}]
+        for receipt in variants:
+            with self.subTest(receipt=receipt):
+                request = self.payload("prefetch")
+                self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+                self.prefetch_result = {"state": "weights-cached", "volumeId": "vo-owned", "volumeFsVersion": 2,
+                    "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"], "artifactProof": receipt,
+                    "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None,
+                                 "xetDisabled": True, "hfTransferDisabled": True}}
+                with self.assertRaises(ValueError): pilot.operate(request)
+                resources = json.loads((self.root / "resources.private.json").read_text())
+                self.assertNotIn("weightsCached", resources)
+                self.assertNotIn("artifactProof", resources)
 
     def test_wrong_prefetch_result_cannot_checkpoint_cached_weights(self):
         request = self.payload("prefetch")

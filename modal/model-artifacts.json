@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+  "revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+  "license": "Apache-2.0",
+  "source": {
+    "tree": {
+      "url": "https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B-Instruct/tree/c03e6d358207e414f1eca0bb1891e29f1db0e242?recursive=true&expand=true",
+      "sha256": "ebefec78fc211fe7433557dbdf83c20de243a31a527e1a92d97cbc377b863f29"
+    },
+    "revision": {
+      "url": "https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B-Instruct/revision/c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "sha256": "5e60cf36e2192372972491ad378744a935b95222fea041c09c478f2715b4f00d"
+    }
+  },
+  "files": [
+    {
+      "name": "LICENSE",
+      "size": 11343,
+      "algorithm": "git-blob-sha1",
+      "digest": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab"
+    },
+    {
+      "name": "README.md",
+      "size": 6392,
+      "algorithm": "git-blob-sha1",
+      "digest": "f29baca4ff38a69df22ec441e22f7ac8dfac277b"
+    },
+    {
+      "name": "config.json",
+      "size": 663,
+      "algorithm": "git-blob-sha1",
+      "digest": "1a2ea88621f4248fccfb575beaf64c1ea5d9587f"
+    },
+    {
+      "name": "generation_config.json",
+      "size": 242,
+      "algorithm": "git-blob-sha1",
+      "digest": "b7849b3dad857bc1e227afd6ca21d1e4cb3f8f82"
+    },
+    {
+      "name": "merges.txt",
+      "size": 1671839,
+      "algorithm": "git-blob-sha1",
+      "digest": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0"
+    },
+    {
+      "name": "model-00001-of-00004.safetensors",
+      "size": 4877660776,
+      "algorithm": "sha256",
+      "digest": "0b6f069918b07c064cbba8ae4f00f529aa9bbf84b7cdfcb7fc2694a40f6aa8ef"
+    },
+    {
+      "name": "model-00002-of-00004.safetensors",
+      "size": 4932751008,
+      "algorithm": "sha256",
+      "digest": "c3d46733e7aa054ea7b063fbccd0a5a08446e7bd1814bef26936c5aa1331da62"
+    },
+    {
+      "name": "model-00003-of-00004.safetensors",
+      "size": 4330865200,
+      "algorithm": "sha256",
+      "digest": "9fe45dacee087385b3d2d6dd27a7413a8a56d95f145772facc148fa86fc73446"
+    },
+    {
+      "name": "model-00004-of-00004.safetensors",
+      "size": 1089994880,
+      "algorithm": "sha256",
+      "digest": "5aa6e5cbe642377fd441fb4e60e83cca96b2bcd9820e245b9ea06d94653f17f2"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "size": 27752,
+      "algorithm": "git-blob-sha1",
+      "digest": "6ca5084b88f1a95fef37f1b94c6e87ff69422bb7"
+    },
+    {
+      "name": "tokenizer.json",
+      "size": 7031645,
+      "algorithm": "git-blob-sha1",
+      "digest": "443909a61d429dff23010e5bddd28ff530edda00"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "size": 7305,
+      "algorithm": "git-blob-sha1",
+      "digest": "acee076f49bf3c0298e15de0909d1da7b392f0c3"
+    },
+    {
+      "name": "vocab.json",
+      "size": 2776833,
+      "algorithm": "git-blob-sha1",
+      "digest": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+  ],
+  "index": {
+    "name": "model.safetensors.index.json",
+    "totalSize": 15231233024,
+    "tensorCount": 339,
+    "shards": [
+      "model-00001-of-00004.safetensors",
+      "model-00002-of-00004.safetensors",
+      "model-00003-of-00004.safetensors",
+      "model-00004-of-00004.safetensors"
+    ]
+  }
+}

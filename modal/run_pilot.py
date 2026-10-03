@@ -72,7 +72,7 @@ def require_admission(payload):
     if payload["operation"] not in MUTATIONS:
         return
     request = payload["request"]
-    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion", "prefetchDownload"):
+    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion", "prefetchDownload", "modelArtifactValidation"):
         if request.get(key) != payload.get(key):
             raise ValueError("Bridge arguments differ from the durable intent.")
     if Path(payload["journalPath"]).resolve() != Path(payload["runDirectory"], "modal.sqlite").resolve() or not re.fullmatch(r"[a-z0-9_-]{1,80}", payload.get("effectKey", "")):
@@ -130,6 +130,28 @@ def required_download_profile(payload, resources=None):
     if resources is not None and resources.get("prefetchDownload") != profile:
         raise ValueError("Deployed download profile differs from the admitted prefetch.")
     return profile
+
+
+def exact_artifact_fields(value, expected):
+    return (isinstance(value, dict) and set(value) == set(expected)
+            and all(type(value[key]) is type(item) and value[key] == item for key, item in expected.items()))
+
+
+def expected_artifact_proof(config):
+    # Original retirement operations must not depend on the new validator.
+    from model_artifacts import expected_artifact_proof as expected
+    return expected(config)
+
+
+def required_artifact_validation(payload, resources=None):
+    expected = expected_artifact_proof(CONFIG)
+    identity = {key: expected[key] for key in ("schemaVersion", "manifestSha256", "validatorSha256")}
+    supplied = payload.get("modelArtifactValidation")
+    if not exact_artifact_fields(supplied, identity):
+        raise ValueError("The pinned model artifact validator differs from the admitted intent.")
+    if resources is not None and not exact_artifact_fields(resources.get("modelArtifactValidation"), identity):
+        raise ValueError("The deployed model artifact validator differs from the admitted prefetch.")
+    return identity, expected
 
 
 def owned_billing_observation(rows, resources, start, end):
@@ -267,6 +289,8 @@ def require_stop_reconciliation(payload, resources):
 
 def operate(payload):
     operation = verify_input(payload)
+    if operation == "prepare":
+        artifact_identity, _ = required_artifact_validation(payload)
     profile = payload.get("profile") or active_profile()
     for variable in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "MODAL_SERVER_URL"):
         os.environ.pop(variable, None)
@@ -291,6 +315,7 @@ def operate(payload):
                 return True
         return {"state": "prepared", "profile": profile, "workspaceName": workspace.name,
                 "environment": "main", "credentialsAccepted": True,
+                "modelArtifactValidation": artifact_identity,
                 "appAbsent": absent(lambda: modal.App.lookup(payload["appName"], environment_name="main")),
                 "volumeAbsent": absent(lambda: modal.Volume.from_name(payload["volumeName"], environment_name="main", create_if_missing=False).hydrate())}
 
@@ -305,6 +330,7 @@ def operate(payload):
         return {"state": "volume-created", "volumeId": volume.object_id, "volumeFsVersion": version}
     if operation == "deploy":
         download_profile = required_download_profile(payload)
+        artifact_identity, _ = required_artifact_validation(payload)
         resources = checkpoint(payload)
         volume = owned_weights(modal, payload, resources)
         try:
@@ -316,7 +342,8 @@ def operate(payload):
         os.environ["FACTORY_MODAL_VOLUME_ID"] = volume.object_id
         inference = importlib.import_module("inference")
         inference.app.deploy(environment_name="main", strategy="recreate", tag=payload["runId"])
-        checkpoint(payload, {"appId": inference.app.app_id, "appDeployed": True, "prefetchDownload": download_profile})
+        checkpoint(payload, {"appId": inference.app.app_id, "appDeployed": True, "prefetchDownload": download_profile,
+                             "modelArtifactValidation": artifact_identity})
         serve = modal.Function.from_name(payload["appName"], "serve", environment_name="main").hydrate()
         prefetch = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         result = {"appId": inference.app.app_id, "serveFunctionId": serve.object_id,
@@ -326,6 +353,7 @@ def operate(payload):
     resources = checkpoint(payload)
     if operation == "prefetch":
         download_profile = required_download_profile(payload, resources)
+        _, expected_artifacts = required_artifact_validation(payload, resources)
         volume = owned_weights(modal, payload, resources)
         function = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         if function.object_id != resources.get("prefetchFunctionId"):
@@ -344,8 +372,11 @@ def operate(payload):
         native_version = downloaded["hfXetVersion"]
         if native_version is not None and (not isinstance(native_version, str) or not re.fullmatch(r"[A-Za-z0-9.!+-]{1,80}", native_version)):
             raise ValueError("Native dependency metadata was not confirmed.")
-        checkpoint(payload, {"weightsCached": True})
-        return {key: result[key] for key in ("state", "model", "revision", "volumeId", "volumeFsVersion", "download")}
+        artifact_proof = result.get("artifactProof")
+        if not exact_artifact_fields(artifact_proof, expected_artifacts):
+            raise ValueError("Complete pinned model artifact validation was not confirmed.")
+        checkpoint(payload, {"weightsCached": True, "artifactProof": artifact_proof})
+        return {key: result[key] for key in ("state", "model", "revision", "volumeId", "volumeFsVersion", "download", "artifactProof")}
     if operation == "create-proxy-token":
         if not resources.get("appDeployed") or not resources.get("serveFunctionId") or not resources.get("weightsCached"):
             raise ValueError("Proxy-token creation requires the recorded ready inference deployment.")

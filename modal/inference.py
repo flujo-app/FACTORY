@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 import modal
+from model_artifacts import validate_model_artifacts
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
@@ -21,6 +22,12 @@ if CONFIG.get("prefetchDownload") != DOWNLOAD_PROFILE:
 POLICY_PATH = HERE / "factory_policy.py"
 if not POLICY_PATH.is_file():
     POLICY_PATH = Path("/opt/factory/factory_policy.py")
+ARTIFACT_HELPER_PATH = HERE / "model_artifacts.py"
+ARTIFACT_MANIFEST_PATH = HERE / "model-artifacts.json"
+if not ARTIFACT_HELPER_PATH.is_file():
+    ARTIFACT_HELPER_PATH = Path("/opt/factory/model_artifacts.py")
+if not ARTIFACT_MANIFEST_PATH.is_file():
+    ARTIFACT_MANIFEST_PATH = Path("/opt/factory/model-artifacts.json")
 
 
 def resource_name(variable):
@@ -50,14 +57,17 @@ image = (
           "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "0", "VLLM_LOGGING_LEVEL": "WARNING"})
     .add_local_file(POLICY_PATH, "/opt/factory/factory_policy.py")
     .add_local_file(CONFIG_PATH, "/opt/factory/config.json")
+    .add_local_file(ARTIFACT_HELPER_PATH, "/opt/factory/model_artifacts.py")
+    .add_local_file(ARTIFACT_MANIFEST_PATH, "/opt/factory/model-artifacts.json")
 )
 download_image = modal.Image.debian_slim(python_version=CONFIG["pythonVersion"]).uv_pip_install(
     f'huggingface_hub=={DOWNLOAD_PROFILE["hubVersion"]}'
-).env({"FACTORY_MODAL_APP_NAME": APP_NAME, "FACTORY_MODAL_VOLUME_NAME": VOLUME_NAME, "FACTORY_MODAL_VOLUME_ID": VOLUME_ID,
+).env({"PYTHONPATH": "/opt/factory", "FACTORY_MODAL_APP_NAME": APP_NAME, "FACTORY_MODAL_VOLUME_NAME": VOLUME_NAME, "FACTORY_MODAL_VOLUME_ID": VOLUME_ID,
        "HF_HUB_DISABLE_TELEMETRY": "1", "HF_HUB_DISABLE_XET": "1",
        "HF_XET_HIGH_PERFORMANCE": "0", "HF_HUB_ENABLE_HF_TRANSFER": "0"}).add_local_file(
     CONFIG_PATH, "/opt/factory/config.json"
-)
+).add_local_file(ARTIFACT_HELPER_PATH, "/opt/factory/model_artifacts.py").add_local_file(
+    ARTIFACT_MANIFEST_PATH, "/opt/factory/model-artifacts.json")
 
 
 def checked_weights():
@@ -96,9 +106,10 @@ def prefetch():
                       local_dir=MODEL_PATH,
                       allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"],
                       max_workers=DOWNLOAD_PROFILE["maxWorkers"], token=False)
+    artifact_proof = validate_model_artifacts(MODEL_PATH, CONFIG)
     volume.commit()
     return {"state": "weights-cached", "model": CONFIG["model"], "revision": CONFIG["revision"],
-            "volumeId": VOLUME_ID, "volumeFsVersion": CONFIG["volumeFsVersion"],
+            "volumeId": VOLUME_ID, "volumeFsVersion": CONFIG["volumeFsVersion"], "artifactProof": artifact_proof,
             "download": {**DOWNLOAD_PROFILE, "hubVersion": hub_version, "hfXetVersion": xet_version,
                          "xetDisabled": True, "hfTransferDisabled": True}}
 
@@ -114,8 +125,7 @@ def prefetch():
 @modal.web_server(8000, startup_timeout=CONFIG["startupTimeoutSeconds"], requires_proxy_auth=True)
 def serve():
     checked_weights()
-    if not Path(MODEL_PATH, "config.json").is_file():
-        raise RuntimeError("Factory model weights have not been prefetched.")
+    validate_model_artifacts(MODEL_PATH, CONFIG)
     command = [sys.executable, "-m", "vllm.entrypoints.openai.api_server",
                "--model", MODEL_PATH, "--served-model-name", CONFIG["servedModel"],
                "--host", "0.0.0.0", "--port", "8000", "--dtype", "bfloat16",
@@ -124,7 +134,7 @@ def serve():
                "--gpu-memory-utilization", str(CONFIG["gpuMemoryUtilization"]),
                "--generation-config", "vllm", "--override-generation-config",
                json.dumps({"max_new_tokens": CONFIG["maxOutputTokens"]}),
-               "--enforce-eager", "--disable-log-requests", "--disable-log-stats",
+               "--enforce-eager", "--no-enable-log-requests", "--disable-log-stats",
                "--disable-uvicorn-access-log", "--uvicorn-log-level", "warning",
                "--middleware", "factory_policy.FactoryPolicyMiddleware"]
     # Engine/bootstrap diagnostics can include local paths and requests. Only

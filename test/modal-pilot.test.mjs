@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, unlink } from 'node:fs/promises';
 import { ModalJournal, completionEvidence, prepareModalPilot, runModalPilot } from '../scripts/modal-pilot.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
@@ -24,7 +25,8 @@ async function fixture(t, settings = {}) {
   const driver = async payload => {
     calls.push(payload.operation);
     payloads.push(structuredClone(payload));
-    if (payload.operation === 'prepare') return { state: 'prepared', profile: 'fake-profile', workspaceName: 'factory-account', environment: 'main', credentialsAccepted: true, appAbsent: true, volumeAbsent: true };
+    if (payload.operation === 'prepare') return { state: 'prepared', profile: 'fake-profile', workspaceName: 'factory-account', environment: 'main', credentialsAccepted: true, appAbsent: true, volumeAbsent: true,
+      modelArtifactValidation: settings.badArtifactPreflight ? {} : payload.modelArtifactValidation };
     if (payload.operation === settings.sdkFailure || settings.sdkFailures?.includes(payload.operation)) throw new Error('private raw token diagnostic');
     resourceState = { ...resourceState, ...await readFile(path.join(runDirectory, 'resources.private.json'), 'utf8').then(JSON.parse).catch(() => ({})) };
     resourceState = { ...resourceState, runId: payload.runId, appName: payload.appName, volumeName: payload.volumeName,
@@ -121,6 +123,18 @@ test('prepare stays read-only and inventories the owned source without creating 
   await assert.rejects(readFile(path.join(f.options.runDirectory, 'modal.sqlite')), { code: 'ENOENT' });
 });
 
+test('unverified validator preflight prevents paid reservation and resource admission', async t => {
+  const f = await fixture(t, { badArtifactPreflight: true });
+  const report = await runModalPilot(f.options, f.dependencies);
+  assert.equal(report.state, 'requires-reconciliation');
+  assert.equal(report.failureCode, 'MODEL_ARTIFACT_VALIDATOR_UNVERIFIED');
+  assert.deepEqual(f.calls, ['prepare']);
+  assert.equal(f.httpCalls.length, 0);
+  await assert.rejects(readFile(f.options.spendingPath), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(f.options.runDirectory, 'manifest.private.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(f.options.runDirectory, 'modal.sqlite')), { code: 'ENOENT' });
+});
+
 test('fresh run defaults isolate storage and reservation while explicit identities remain supported', async t => {
   const f = await fixture(t), { runDirectory, ...input } = f.options;
   const fresh = await prepareModalPilot({ ...input, runId: 'modal-next-attempt' }, f.dependencies);
@@ -162,25 +176,34 @@ test('direct and actual FLUJO Flow complete before independently verified fixtur
   assert.equal(JSON.parse(journal.get('flujo-generation').request_json).flowDigest, digest(createdFlow));
 });
 
-test('fresh manifest and immutable deploy/prefetch intents bind HTTP one-thread profile without public metadata leakage', async t => {
+test('fresh manifest and deploy/prefetch intents bind HTTP profile and exact validator sources privately', async t => {
   const f = await fixture(t);
   await runModalPilot(f.options, f.dependencies);
   const expected = { transport: 'http', maxWorkers: 1, hubVersion: '0.36.0' };
   const manifest = JSON.parse(await readFile(path.join(f.options.runDirectory, 'manifest.private.json'), 'utf8'));
   assert.deepEqual(manifest.prefetchDownload, expected);
+  const sourceSha = async filename => createHash('sha256').update(await readFile(new URL(`../modal/${filename}`, import.meta.url))).digest('hex');
+  const validation = { schemaVersion: 1, manifestSha256: await sourceSha('model-artifacts.json'),
+    validatorSha256: await sourceSha('model_artifacts.py') };
+  assert.deepEqual(manifest.modelArtifactValidation, validation);
   const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
   for (const operation of ['deploy', 'prefetch']) {
     const intent = journal.get(operation), request = JSON.parse(intent.request_json);
     assert.deepEqual(request.prefetchDownload, expected);
+    assert.deepEqual(request.modelArtifactValidation, validation);
     assert.equal(intent.request_digest, digest(request));
     assert.deepEqual(f.payloads.find(item => item.operation === operation).prefetchDownload, expected);
+    assert.deepEqual(f.payloads.find(item => item.operation === operation).modelArtifactValidation, validation);
   }
   // Native dependency metadata belongs to the SDK's private success receipt,
   // while the coordinator retains its existing sanitized result projection.
   assert.equal(journal.get('prefetch').result.download, undefined);
-  assert.ok(f.notifications.every(event => !('download' in event) && !('prefetchDownload' in event)));
+  assert.equal(journal.get('prefetch').result.artifactProof, undefined);
+  assert.ok(f.notifications.every(event => !('download' in event) && !('prefetchDownload' in event)
+    && !('modelArtifactValidation' in event) && !('artifactProof' in event)));
   for (const operation of ['stop-app', 'delete-volume', 'delete-proxy-token']) {
     assert.equal(JSON.parse(journal.get(operation).request_json).prefetchDownload, undefined);
+    assert.equal(JSON.parse(journal.get(operation).request_json).modelArtifactValidation, undefined);
   }
 });
 
@@ -188,12 +211,12 @@ test('legacy download intents and manifest stay byte-identical through cleanup a
   const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
   await runModalPilot(f.options, f.dependencies);
   const manifestPath = path.join(f.options.runDirectory, 'manifest.private.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); delete manifest.prefetchDownload;
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); delete manifest.prefetchDownload; delete manifest.modelArtifactValidation;
   await writeFile(manifestPath, JSON.stringify(manifest));
   const manifestBytes = await readFile(manifestPath, 'utf8');
   const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
   for (const operation of ['deploy', 'prefetch']) {
-    const request = JSON.parse(journal.get(operation).request_json); delete request.prefetchDownload;
+    const request = JSON.parse(journal.get(operation).request_json); delete request.prefetchDownload; delete request.modelArtifactValidation;
     journal.db.prepare('UPDATE modal_operations SET request_json=?, request_digest=? WHERE key=?').run(JSON.stringify(request), digest(request), operation);
   }
   const original = ['deploy', 'prefetch'].map(operation => journal.get(operation));

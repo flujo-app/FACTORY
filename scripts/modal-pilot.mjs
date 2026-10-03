@@ -127,6 +127,15 @@ function noAttachments(value) {
 
 async function contextFor(options, dependencies) {
   const config = JSON.parse(await readFile(CONFIG_PATH, 'utf8'));
+  let modelArtifactValidation;
+  if (!options.cleanupOnly) {
+    const [manifest, validator] = await Promise.all([
+      readFile(path.join(ROOT, 'modal', 'model-artifacts.json')),
+      readFile(path.join(ROOT, 'modal', 'model_artifacts.py')),
+    ]);
+    modelArtifactValidation = Object.freeze({ schemaVersion: 1,
+      manifestSha256: sha(manifest), validatorSha256: sha(validator) });
+  }
   let managed = dependencies.managed, privateFiles = dependencies.privateFiles;
   if (!managed || !privateFiles) {
     const directory = path.dirname(options.modulePath);
@@ -134,7 +143,7 @@ async function contextFor(options, dependencies) {
     privateFiles ??= await import(pathToFileURL(path.join(directory, 'private-files.mjs')).href);
     managed ??= new loaded.ManagedCloud({ progress: () => {} });
   }
-  return { config, managed, privateFiles, fetchImpl: dependencies.fetchImpl ?? fetch,
+  return { config, modelArtifactValidation, managed, privateFiles, fetchImpl: dependencies.fetchImpl ?? fetch,
     clock: dependencies.clock ?? Date.now, driver: dependencies.driver ?? pythonDriver(options, config) };
 }
 
@@ -217,9 +226,12 @@ export async function prepareModalPilot(input = {}, dependencies = {}) {
   if (!context.config.prefetchDownload || digest(context.config.prefetchDownload) !== digest({ transport: 'http', maxWorkers: 1, hubVersion: '0.36.0' })) fail('INVALID_DOWNLOAD_PROFILE');
   modalBridgeTimeoutMs('prefetch', context.config);
   const local = await sourceContext(options, context);
-  const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']), volumeFsVersion: context.config.volumeFsVersion });
+  const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']),
+    volumeFsVersion: context.config.volumeFsVersion, modelArtifactValidation: context.modelArtifactValidation });
   if (modal.state !== 'prepared' || !modal.credentialsAccepted || modal.environment !== 'main' || !modal.profile || !modal.workspaceName) fail('MODAL_PROFILE_UNVERIFIED');
-  return { mode: 'prepare-read-only', options, config: context.config, profile: modal.profile, workspaceName: modal.workspaceName, source: local.identity,
+  if (digest(modal.modelArtifactValidation) !== digest(context.modelArtifactValidation)) fail('MODEL_ARTIFACT_VALIDATOR_UNVERIFIED');
+  return { mode: 'prepare-read-only', options, config: context.config, modelArtifactValidation: context.modelArtifactValidation,
+    profile: modal.profile, workspaceName: modal.workspaceName, source: local.identity,
     originalModelCount: local.originalModelCount, originalFlowCount: local.originalFlowCount,
     appAbsent: modal.appAbsent, volumeAbsent: modal.volumeAbsent, ceilingCents: 3000,
     plannedConnection: 'Transient direct and actual FLUJO Flow smoke, then owned retirement and fixture removal.',
@@ -283,6 +295,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
   let journal, spending, ownsSpending = false, startedAt = context.clock(), failure = null, prepared, source, finalReport;
   let runVolumeFsVersion = context.config.volumeFsVersion;
   let runDownloadProfile = context.config.prefetchDownload === undefined ? undefined : Object.freeze({ ...context.config.prefetchDownload });
+  let runArtifactValidation = context.modelArtifactValidation;
   let runFlow = modalFlow(options);
   const attemptId = randomUUID();
   const events = [], cleanup = [], privateEvents = path.join(options.runDirectory, 'events.private.jsonl');
@@ -297,7 +310,8 @@ export async function runModalPilot(input = {}, dependencies = {}) {
   const requestFor = operation => ({ operation, runId: options.runId, appName: options.appName, volumeName: options.volumeName,
     environment: options.environment, profile: prepared.profile, workspaceName: prepared.workspaceName, runDirectory: options.runDirectory,
     ...(runVolumeFsVersion === undefined ? {} : { volumeFsVersion: runVolumeFsVersion }),
-    ...(['deploy', 'prefetch'].includes(operation) && runDownloadProfile !== undefined ? { prefetchDownload: runDownloadProfile } : {}) });
+    ...(['deploy', 'prefetch'].includes(operation) && runDownloadProfile !== undefined ? { prefetchDownload: runDownloadProfile } : {}),
+    ...(['deploy', 'prefetch'].includes(operation) && runArtifactValidation !== undefined ? { modelArtifactValidation: runArtifactValidation } : {}) });
   const perform = async (key, operation, operationRequest, action, { paid = false } = {}) => {
     const request = { ...requestFor(operation), ...operationRequest };
     const admission = journal.admit(key, operation, request);
@@ -382,6 +396,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
       const manifest = JSON.parse(await privateRead(manifestPath));
       runVolumeFsVersion = manifest.volumeFsVersion;
       runDownloadProfile = manifest.prefetchDownload;
+      runArtifactValidation = manifest.modelArtifactValidation;
       if (runVolumeFsVersion !== undefined && ![1, 2].includes(runVolumeFsVersion)) fail('CLEANUP_OWNERSHIP_CONFLICT');
       const originalOptions = { ...manifest.options, cleanupOnly: true, through: options.through };
       if (manifest.format !== 'factory-modal-pilot' || manifest.runId !== options.runId
@@ -403,10 +418,12 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     }
     if (await exists(manifestPath)) fail('EXISTING_RUN_REQUIRES_CLEANUP_OR_RECONCILIATION');
     prepared = await prepareModalPilot(options, { ...dependencies, ...context });
+    if (digest(prepared.modelArtifactValidation) !== digest(runArtifactValidation)) fail('MODEL_ARTIFACT_VALIDATOR_CHANGED');
     if (!prepared.appAbsent || !prepared.volumeAbsent) fail('RESOURCE_IDENTITY_ALREADY_EXISTS');
     source = (await sourceContext(options, context)).source;
     await privateJson(manifestPath, { format: 'factory-modal-pilot', version: 1, runId: options.runId,
-      startedAt, options, volumeFsVersion: runVolumeFsVersion, prefetchDownload: runDownloadProfile, profile: prepared.profile, workspaceName: prepared.workspaceName, source: prepared.source, desiredState: 'retired',
+      startedAt, options, volumeFsVersion: runVolumeFsVersion, prefetchDownload: runDownloadProfile,
+      modelArtifactValidation: runArtifactValidation, profile: prepared.profile, workspaceName: prepared.workspaceName, source: prepared.source, desiredState: 'retired',
       model: select(context.config, ['model', 'revision', 'servedModel', 'license']), state: 'admitted' }, true);
     await privateJson(path.join(options.runDirectory, 'redeployable-fixture.private.json'), {
       model: { ...fixtureModel(options, context.config, 'https://replace-with-owned-endpoint.modal.run', ''), displayName: 'Factory Modal Coder (retired)' },
