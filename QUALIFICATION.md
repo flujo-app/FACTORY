@@ -171,6 +171,19 @@ download completion nor a general stall. The running R3 image was not altered.
 Dashboard transcription SHA-256:
 `92836e5ded49d09628f6f88cf583e2b60e0ae8c0e4a06db8cf909e1e1cb02f08`.
 
+Later rendered provider history showed R3's first container failed at
+**01:43:30.358 UTC** with **Runner heartbeat timeout: 900 seconds**, after failed
+heartbeats and a provider cancellation request. A replacement container started
+at **01:43:33 UTC** and was live at the subsequent inspection. The original
+coordinator prefetch remained running; no coordinator retry was issued. The
+recorded reason is heartbeat timeout, with its underlying cause unproven.
+Modal documents prolonged GIL holding and incomplete process shutdown as typical
+application causes; neither is established here. This is separate from R2's
+SIGKILL/137 evidence. [Modal heartbeat documentation](https://modal.com/docs/guide/troubleshooting#heartbeat-timeout).
+The immutable rendered-UI transcription was captured at **01:51:53.904 UTC**;
+its displayed observation minute is approximate. Evidence SHA-256:
+`a8152dd4cdfdc0976b12468e6b89dd7124560821a4bbb37b3e6a432a0d242fdd`.
+
 The O owner separately reports two deliberately launched O runs, each with a
 127-cent reservation and confirmed cleanup of its model/tools sandboxes. Their
 254 cents remain held pending billing; observed and final charges are unavailable.
@@ -272,7 +285,17 @@ Patch SHA-256:
 Independent report SHA-256:
 `eddbafc221ad2f0e5444f289a9289d04a6858f0710e999d6ad26efba08cbbd16`.
 The full allowance remains held; preparing either patch does not admit another
-paid experiment. Combined isolated qualification is pending.
+paid experiment. Combined isolated qualification passed **188/188 Node results**,
+exit 0, with no skipped or cancelled tests. A pre-test preload setup failure is
+preserved separately. A subsequent non-rerunning independent audit verified the
+two exact input patches, the 11 changed files, saved TAP/execution result, and all
+47 staged source hashes. Source differences from the individual stages are only
+CRLF-to-LF normalization; unchanged shared files retain their original raw hashes.
+Combined patch SHA-256:
+`d7620687dc89d2853eeec59487ddb3aedf93b098aeded9e2caba9ed052337544`.
+Artifact manifest SHA-256:
+`1eaa7fed6bf592e423c41a88cd77bb1fa3d3f11a02c769578653e3cddf86f897`.
+This tested source remains isolated while the original R3 runtime is active.
 
 - Native remote peer enrollment, autonomous child provisioning and authenticated
   peer communication. The successful child request was coordinator-mediated.
