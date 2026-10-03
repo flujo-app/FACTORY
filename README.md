@@ -159,12 +159,14 @@ selection was confirmed; `2` means selection was unconfirmed or the workspace wa
 absent; `1` means the preflight itself could not be confirmed. This is preparation
 evidence, not a running-worker acceptance result.
 
-## Planned isolated live pilot
+## Isolated live pilot operation
 
 The spending intent is **at most US$100 across the paid cloud work**, including
 the Modal/open-weight model path. `src/spending.mjs` conserves one durable USD
 allowance across providers, using integer cents and serialized admission. The
-first experiment reserves $10 for Fly and $30 for Modal, leaving $60 unallocated.
+first experiment reserved $10 for Fly and $30 for Modal. A second, distinct Modal
+experiment adds another $30 hold; $30 currently remains unallocated. Current
+results and billing status are recorded in [QUALIFICATION.md](QUALIFICATION.md).
 Each paid dispatch rechecks its reservation; known experiment or global exhaustion
 blocks new paid work. Owned cleanup remains possible. Retirement keeps funds held
 until final billing evidence arrives; it cannot release uncertain charges. The
@@ -282,6 +284,6 @@ prove independent authentication or inference availability.
   factory self-improvement.
 - Logical watcher/cell/message records; no independently hosted watchdog is
   established by the local pilot.
-- Provisioning adapter over existing `ManagedCloud`; live deployment, durable
-  remote-result reconciliation, health monitoring and owned cleanup remain to be
-  exercised in the isolated cloud run.
+- Provisioning adapter over existing `ManagedCloud`; the bounded Fly deployment,
+  model calls and owned cleanup passed. General remote-result reconciliation,
+  automatic health recovery and source-repository delivery remain unqualified.
