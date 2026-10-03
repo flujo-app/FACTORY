@@ -1,8 +1,16 @@
 # Factory qualification record
 
-Updated October 3, 2026. Qualified controller/provider runtime source is
-`8dce857df549f29c69e566fa7d927196cb324c3c`, adding qualified provider-bound
-logical cell retirement. Its frozen combination passed **288/288** with exit 0,
+Updated October 3, 2026. Current qualified runtime source is
+`ac8b51fbf2833d347a0d96ed7f422a0bd82412bc`. Its complete isolated Node 24.19.0
+combination passed **302/302**, exit 0, with no failed, skipped, cancelled or
+todo results. This includes the existing controller, budget and peer tests,
+the Modal wiring tests and genuine SDK HTTP continuation probes. Local adoption
+matched all ten changed files exactly and preserved 57 untouched runtime files
+byte for byte; all 29 accounting/history pins remained unchanged.
+
+Earlier controller/provider source `8dce857df549f29c69e566fa7d927196cb324c3c`
+added qualified provider-bound logical cell retirement. Its frozen combination
+passed **288/288** with exit 0,
 all 54 source pins stable and all 29 protected accounting/history pins unchanged
 during qualification. The two original Fly worker cells were then logically
 retired at events 90/91, with paid accounting unchanged. Earlier model-startup
@@ -25,6 +33,63 @@ with source, accounting/history and owner witnesses unchanged. See
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Modal HTTP continuation guard
+
+Source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc` validates a resumed HTTP
+response before Hub 0.36.0 can append its body. The final request must retain the
+SDK's exact offset and match its expected total size, including after redirects
+and native retry. Fresh preparation, deployment and prefetch bind the guard's
+raw source hash. The durable intent comparison preserves JSON value types;
+`schemaVersion: true` cannot admit an integer `1` payload. The success receipt
+has an exact identity and observed-header counter. Complete artifact validation
+is still required before declaring cached weights. Original cleanup omits the
+new field and does not require the guard.
+
+Real Hub 0.36.0 and Requests 2.34.2 used eight-byte loopback fixtures in isolated
+Python processes. Two unguarded probes reproduced an ignored Range growing
+an existing three-byte partial to eleven, and a wrong-start 206 returning eight incorrect bytes
+as success. Twenty guarded probes rejected invalid continuations before append
+and preserved valid redirects, a genuine streamed timeout and recursive resume.
+These fixtures prove SDK control flow, not the cause of any historical cloud
+failure or mounted model readiness.
+
+The complete run executed once from **08:21:26.055 to 08:22:48.923 UTC**, with
+explicit TAP output: **302/302**, exit 0, zero skipped/cancelled/todo results.
+All 77 candidate source files, 64 original root source pins, 29 accounting/history
+pins and eight SDK/helper dependencies were unchanged during execution. Adoption
+then verified ten exact changed raw files, 57 unchanged root raw files and all
+67 current runtime files against the tested source after LF normalization.
+No provider resource, paid reservation, model cache or existing API process was
+changed. The API on port 4344 still has its earlier loaded build `8f5a940`.
+
+The first focused run remains failed: the real SDK suites passed, but two new
+fake-bridge fixtures left SQLite handles open and failed Windows temporary-file
+cleanup. Its actual spec output was 42 results, 41 pass and one fail; the initial
+collector lacked explicit TAP and correctly retained null parsed totals. The
+final source closes those fixture connections and commits their transactions;
+the complete run uses explicit TAP. The first unexecuted source freeze and the
+failed execution were preserved alongside the final result.
+
+Protected evidence is in `.factory/modal-http-range-20261003`:
+
+- Complete execution under
+  `modal-range-b0c5cce5-7495-4940-9c86-4b15ff265711-r3/combined-4080d96e-ee17-46c9-94a2-d4d7a155875e/execution.private.json`,
+  SHA-256 `8a96fbc3524a4d2c02d9b34e00ae7a9454ad1a4aa802ef21373e2d29c1024edc`.
+- Root qualification readback: `root-qualification-review.private.json`,
+  SHA-256 `cc4e633c2e78cbc03c892fb956ca5391a7f5c05364c6048b11bcb98db5f6a1f7`.
+- Actual source adoption: `adoption.private.json`,
+  SHA-256 `d569eb9fd6fdb5a759160883cce27aec9be9b3a3d801be64f4a7aeb3a3818ce3`.
+- Independent destination/Git/qualification readback:
+  `destination-qualification-independent-audit-493147fb-f9b9-4ed5-95e0-efe30df9f480.private.json`,
+  SHA-256 `aa271966dd1894fab81f1cbd2c0d8b7e88676c3af4ef9ea3395fb0b97d28a6d6`.
+- Byte-exact preservation map: `copy-map.private.json`,
+  SHA-256 `1521ecf39b77c3d9168503374ede1626192119364ebd5393c5aeb943729b6136`,
+  covering 419 files / 5,613,674 bytes, including 16 strict private JSON records.
+
+This is local source qualification. A newly admitted Modal run must still prove
+mounted artifacts, GPU startup, generation and native Flow within available
+paid capacity. No new cloud attempt is admitted by this adoption.
 
 ### Durable advisory peer communication
 
@@ -296,6 +361,17 @@ SHA-256 `f3a8aaa4a09564a8c3e402e09c177ca8ca9ce03901aac86b92c7432116b6c9e8`.
 These completed-hour rows do not establish complete build, storage, egress,
 adjustment attribution or final invoices. No ceiling, retirement, settlement,
 reservation or cloud workload was changed by the observation ingestion.
+
+A further read-only billing audit was sealed at **07:55:44.999 UTC**. Completed
+Modal hours through **07:00 UTC exclusive** showed the same owned gross amounts;
+no new partial observation was warranted. Workspace credits and allowances did
+not establish attributable final charges. Fly credentials identified the user,
+but the organization reads were unauthorized. The ledger stayed revision 19,
+all US$100 held, with final spend unknown; all 29 accounting/history witnesses
+stayed unchanged. There was no observation, settlement, release or provider
+resource action. Protected audit:
+`.factory/paid-finality-recheck-b2bba3b1-9f40-47f9-87c2-96ec5193cf97/finality-audit.private.json`,
+SHA-256 `32d5bf50d944bbe565fe5ecea606f3e8496e94824561c46ead8de10eb3523850`.
 
 Final invoices are not yet reconciled. An independent **00:45 UTC, October 3**
 billing query found one completed hourly row for the first Modal attempt's exact

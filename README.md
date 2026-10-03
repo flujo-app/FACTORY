@@ -41,6 +41,15 @@ the 64 source and 29 accounting/history witnesses unchanged. The observations
 describe persisted history. Deployed peers, independent-host recovery and
 autonomous enrollment remain open. See [PEER_MESSAGING.md](PEER_MESSAGING.md).
 
+Source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc` rejects invalid HTTP
+continuations before the pinned Hub SDK appends bytes, including across redirects
+and native retries. It binds an exact guard identity to new Modal intents and
+receipts while preserving original cleanup. Its complete source combination
+passed **302/302** on Node 24.19.0, including genuine tiny-body SDK probes and
+the existing controller, budget and peer tests. Source adoption preserved all
+57 untouched runtime files and 29 accounting/history files. This is local
+qualification; mounted Modal weights, GPU startup and native Flow remain open.
+
 Source commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` adopts the independently
 reviewed logical lifecycle subset and low-memory HTTP preparation. The combined
 188/188 qualification ran once in its isolated stage; adoption matched those
@@ -100,6 +109,14 @@ $100. Actual API checks project the new state under its existing loaded build
 Requirements: Node.js **24 or newer**, Git on `PATH`, and a local filesystem for
 the controller database. There are no npm runtime dependencies to install.
 
+The full test suite additionally needs Python and the installed Modal SDK for
+its definition checks. The genuine HTTP probes require explicit
+`FACTORY_PYTHON`, `FACTORY_HUB_SITE` and `FACTORY_PRIVATE_MODULE` inputs: an
+absolute base interpreter, owned site-packages containing Hub 0.36.0 and Requests,
+and the trusted private-files module. Missing inputs fail rather than skip.
+See [the Modal test instructions](modal/README.md) for the isolated probe scope.
+Set these inputs before the complete test commands below.
+
 From this directory, with a suitable default Node:
 
 ```powershell
@@ -115,6 +132,9 @@ The bundled runtime available on this machine is:
 
 ```powershell
 $factoryNode = 'C:\Users\Moe\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+$env:FACTORY_PYTHON = 'C:\Users\Moe\AppData\Local\Programs\Python\Python313\python.exe'
+$env:FACTORY_HUB_SITE = 'C:\Users\Moe\Documents\ChatGPT\FACTORY\.factory\model-local-20261003-r2\venv\Lib\site-packages'
+$env:FACTORY_PRIVATE_MODULE = 'C:\Users\Moe\Documents\GitHub\flujo-cloud\lib\private-files.mjs'
 & $factoryNode --test
 & $factoryNode scripts/pilot.mjs .\evidence\local-pilot-01
 ```
