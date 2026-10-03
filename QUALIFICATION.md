@@ -1,17 +1,22 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`56a2048485525e369a30e95e36c86397eea2b5ab`. Its complete isolated Node 24.19.0
-combination passed **358/358**, exit 0, with no failed, skipped, cancelled or
-todo results. A separate actual native FLUJO worker/ExecutionEngine/MCP acceptance
-also passed. Its model and cloud executor are fixtures; it establishes local
-native child-request admission, not deployed child autonomy or paid inference.
-Adoption matched eleven qualified files and preserved 81 untouched tracked
-files. All 92 candidate files, 3,636 Factory dependency files, nine native
-dependency witnesses, all 83 prior Root files, 29 accounting/history witnesses,
-eight earlier dependencies and 2,467 pinned FLUJO source files remained stable
-during qualification. The 81 runtime source pins match the tested candidate.
+`a05ae09e7faeba40d8d24470a924cf9e4b4b5f49`. Its complete isolated Node 24.19.0
+combination passed **383/383**, exit 0, with no failed, skipped, cancelled or
+todo results. Separate actual native FLUJO acceptance also passed: a fresh child
+executed its assigned Flow, lost the completed response, restarted with its
+controller, and recovered with one POST and one fixture-model invocation.
+Adoption matched nine qualified changed files and preserved 91 untouched Root
+files. All 100 candidate files, 3,636 Factory dependencies, nine native dependency
+witnesses, all 92 prior Root files, 29 accounting/history witnesses, eight earlier
+dependencies and 2,467 pinned FLUJO source files remained stable during execution.
+All 88 runtime source pins match the tested candidate after LF normalization;
+older Root CRLF files retain their original raw bytes. Raw pins and the complete
+100-file tested candidate are retained separately.
 The live controller, loaded API and real paid reservations are unchanged.
+
+Earlier native capacity source `56a2048485525e369a30e95e36c86397eea2b5ab`
+retains its separate **358/358** suite and native Flow/MCP admission proof.
 
 Earlier automatic mutual-watch source `26c8cc4637a8f89c2f4a83092cb5d35f735794fc`
 retains its separate complete **335/335** qualification and exact adoption proof.
@@ -44,6 +49,67 @@ with source, accounting/history and owner witnesses unchanged. See
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Assigned native child mission and recovery
+
+A trusted private origin authenticates a provision-bound child's native workspace,
+restored snapshot, compatibility, selected Flow hash and unique name routing.
+The controller commits enrollment and task claim together. Its immutable mission
+packet binds the task/specification/attempt, branch, baseline and acceptance.
+One lifetime effect key prevents a changed output destination or later lease from
+obtaining another POST. The running effect commits before external invocation;
+final paid/controller writer fences surround that invocation. Native observation
+can recover a completed original conversation after restart; absent, failed,
+interrupted or incomplete state cannot authorize a retry.
+
+Actual native acceptance used parent PID 26536, confirmed exit 0/null signal,
+and two distinct native worker processes, 25676 and 18932, each with an actual
+SIGTERM close. Its encrypted tiny workspace used clean pinned FLUJO
+`549792e1839931e862e6a305eb0d9ce2b82ae905`. Exactly one native POST and one
+deterministic loopback model invocation survived a dropped completed response,
+controller/store restart and worker restart. A fully held fixture ledger then
+refused another assignment without a model call. The original software task
+remained running, with no candidate/review or accepted-delivery claim.
+
+The final complete source suite used actual child PID 52596, exit 0/null signal
+and confirmed close, **383/383**. It retained genuine SDK HTTP and native peer-watch
+subprocess witnesses. New checks cover durable running visibility from a separate
+SQLite reader, commit failure after invocation, mission identity reuse, recorded
+retirement, paid refusal and native ID/packet/Flow mismatch.
+
+Two earlier native diagnostics remain failures: a missing fixture creation
+timestamp correctly caused a hash refusal before POST; a 72-character conversation
+ID reached native storage rejection before any model invocation. Both workers
+closed. The final fixture has explicit timestamps and storage-safe 64-character
+conversation IDs, while permanent request/effect digests retain their full hashes.
+
+Final freeze SHA `16f94f13cdd8cb0b9056ca0d13e61415c83123c7cb52d68240840bd4f375cf27`
+and independent source review SHA
+`14e524454070eda6a893a47bd35a2715ed5da2470d6d24e42db4eb052016faa3`
+bind this candidate. Native acceptance SHA
+`a649965352625cb4e9f8e8092c4895983d9412cd07452f3d04502f95c0abe22a`
+and execution SHA
+`f81aa902c012905c6d2bcae70b4680f541e664c31f302ebd7161ad56bdb4f41a`
+bind its actual closures and private original result. Raw captures, failed
+diagnostics, qualification producers and adoption are retained under
+`.factory/native-missions-20261003`.
+
+This proves local native assignment/execution/recovery. Direct routing remains
+trusted private configuration; it does not independently establish a deployed
+Fly app's provenance. Flow hashing precedes execution, while the native conversation
+API does not attest an executed graph hash. Its GET may repair recovery metadata
+but never resumes the Flow. The model and provisioning record are fixtures;
+deployed autonomous enrollment/backlog, paid Modal inference, independent-host
+recovery and a development-speed comparison remain open. See
+[NATIVE_MISSIONS.md](NATIVE_MISSIONS.md).
+
+The fresh authenticated Modal billing read at **11:20 UTC**, through completed
+hour **11:00 UTC**, left owned cumulative rounded observations at 4/13/13 cents.
+Complete attributable final billing remains unavailable. Its protected audit SHA
+`aea33a5bfb3e90e87c2c8affef2362cda0b27f1cfe62d6e55ab10fd56bcfec2f`
+records one closed query and unchanged accounting revision 19: $100 held,
+$0 unallocated, final total unknown. No paid launch, settlement or hold release
+occurred during this implementation.
 
 ### Native Flow capacity request and admission
 

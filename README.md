@@ -28,6 +28,16 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
+Source `a05ae09e7faeba40d8d24470a924cf9e4b4b5f49` adds assigned native missions:
+authenticated child preparation, atomic enrollment/task claim, one durable Flow
+dispatch and recovery of the original result. The complete source suite passed
+**383/383**. Separate acceptance restored a fresh native child, dropped its
+completed response, restarted controller and worker, and recovered with exactly
+one POST and one fixture-model call. Both actual workers closed. The software
+task still requires independent review and delivery. This is local native
+execution proof with a provisioning fixture; cloud autonomy and Modal inference
+remain open. See [NATIVE_MISSIONS.md](NATIVE_MISSIONS.md).
+
 Source `56a2048485525e369a30e95e36c86397eea2b5ab` connects a native FLUJO Flow
 to bounded child-capacity requests through a private MCP tool, authenticated
 peers and a trusted standing-grant broker. Child allocation, lifetime grant

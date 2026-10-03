@@ -244,6 +244,16 @@ autonomous factory peer needs its own enrollment, ownership, authorized schedule
 backlog and child-provisioning contract. Do not enable cloned schedules to create
 that peer accidentally.
 
+The local assigned-mission slice is now qualified at source
+`a05ae09e7faeba40d8d24470a924cf9e4b4b5f49`: authenticated native preparation,
+provision-bound enrollment/claim, one durable Flow POST and original-result
+recovery after controller and worker restart. Its fresh native acceptance used
+one fixture-model invocation; the provisioning record was also a fixture. It
+does not yet provide a deployed peer's independent backlog or planner, or prove
+Modal-backed inference. Native worker startup still suppresses cloned schedules.
+See [NATIVE_MISSIONS.md](NATIVE_MISSIONS.md) for the runnable private dispatcher
+and exact limits.
+
 FLUJO's existing local WorkItems, leases, Behaviors, learning mechanisms and remote
 execution are candidates for reuse. Cross-host ownership, network task exchange,
 fleet budgets and recovery need explicit qualification before claiming a
