@@ -15,6 +15,13 @@ its historical **270/270** qualification. The earlier lifecycle/HTTP adoption at
 The original API on port 4343 was subsequently observed unreachable. The read-only
 API on port 4344 was restored at build `8f5a940` with the existing journal registry.
 
+Paid accounting has since advanced to revision 19 through two nonfinal
+observations, retaining all US$100. A real local pinned-model download was
+explicitly interrupted with its partials preserved; a reviewed resume is running.
+The full public artifact scan remains pending. See
+[LOCAL_MODEL_PREPARATION.md](LOCAL_MODEL_PREPARATION.md). This local operation
+does not establish mounted Modal weights, GPU boot, inference or native Flow.
+
 ## Proven so far
 
 A native FLUJO runtime task delivered candidate
@@ -173,15 +180,39 @@ and owned teardown. Evidence: `.factory/tests-owned-stop-and-admission.txt`.
 The owner authorized **US$100 total** for the paid factory work. One shared
 `spending.sqlite` reserves $10 for Fly and $30 for each of three distinct Modal
 experiments; **$100 is held and $0 remains unallocated**. Recorded partial
-charges total **24 cents**: R1 4, R2 12 and R3 8. All final charge fields remain
+charges total **30 cents**: R1 4, R2 13 and R3 13. All final charge fields remain
 null, with final spend unknown. These are conservatively rounded partial
 observations, not exact total spend or a strict monetary lower bound. All four
-reservations are now `retired-meter-pending`; paid revision 17 retains the full
+reservations are now `retired-meter-pending`; paid revision 19 retains the full
 10,000-cent hold and zero unallocated cents. Holds are not charges.
 Each new paid dispatch rechecks admission. Known local experiment/global
 exhaustion blocks further paid dispatch, while owned cleanup remains permitted.
 Reservation retirement does not free its ceiling before final billing evidence.
 Cell allocations, reservations, estimated compute and actual charges are distinct.
+
+The authenticated read-only Modal billing observation completed at
+**05:51:30.876 UTC** and reports completed hours from **23:00 UTC, October 2**
+through **05:00 UTC exclusive, October 3**. Exact owned App CPU/Memory totals are
+R1 $0.03503811, R2 $0.12889593 and R3 $0.12691620. Upward rounding per reservation
+gives 4/13/13 cents; workspace credits and allowances are excluded. The raw
+provider response is bound by SHA-256
+`a48e6cf29bdec7797f730d0badbfe85998bd2dbe4eb6efd3803c8c3adcf0496f`.
+After independent helper review, the root executor appended only observations
+18/19 for R2/R3. Its report is
+`.factory/paid-finality-recheck-0f29ea38-8689-4451-950a-d764bc442cb2/partial-meter-ingestion-report.private.json`,
+SHA-256 `ba2d9430fe965f9aa922e7244ad7710c8ff40f46c2e8a513b74837d5346d5c1a`.
+Independent actual post-ingestion audit at SHA-256
+`e8b09ea6fb169ef200c2711d1ba0c549e12d2aa43574564afe3975fe885c549c`
+confirmed the original 17 events, all non-observation reservation fields and all
+27 non-ledger witnesses stayed unchanged. The local API on port 4344 then
+returned HTTP 200 with paid revision 19, 30 partial cents, all 10,000 cents held,
+zero unallocated and final spend null; all 29 protected file bytes were stable.
+That API witness is
+`.factory/viewer/modal-observation-witnesses/paid19-api-92aeab00-cc2d-4ae4-a2e4-12b1686b0823.evidence.private.json`,
+SHA-256 `f3a8aaa4a09564a8c3e402e09c177ca8ca9ce03901aac86b92c7432116b6c9e8`.
+These completed-hour rows do not establish complete build, storage, egress,
+adjustment attribution or final invoices. No ceiling, retirement, settlement,
+reservation or cloud workload was changed by the observation ingestion.
 
 Final invoices are not yet reconciled. An independent **00:45 UTC, October 3**
 billing query found one completed hourly row for the first Modal attempt's exact

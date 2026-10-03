@@ -23,7 +23,7 @@ fixed code fixtures. Modal inference and native Flow proof remain open: R3's
 original v2-cache prefetch reached its bridge bound with an unknown outcome;
 owned App/Volume cleanup and a fresh provider absence witness then completed.
 All four paid reservations are `retired-meter-pending`, retaining the full $100
-with $0 unallocated. Recorded observations conservatively round to 24 cents;
+with $0 unallocated. Recorded observations conservatively round to 30 cents;
 they are neither exact total spend nor a strict monetary lower bound. Final spend
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
@@ -57,6 +57,12 @@ and after the final run. Earlier unstable/interrupted qualification attempts are
 preserved separately. Actual model bytes, GPU boot, inference and native Flow
 remain unproven. See the [model definition](modal/README.md) and
 [qualification record](QUALIFICATION.md).
+
+Actual local pinned-weight preparation is now running with a reviewed resume
+protocol and preserved partial files. The first shard is downloaded; complete
+snapshot validation is pending. This admits no new paid cloud work. See
+[LOCAL_MODEL_PREPARATION.md](LOCAL_MODEL_PREPARATION.md) for its current evidence
+and the separate remaining Modal/GPU/Flow requirements.
 
 The read-only API was restored on `127.0.0.1:4344` at build `8f5a940`; an actual
 authenticated check again returned three journals and 15 operations without
@@ -225,7 +231,7 @@ first experiment reserved $10 for Fly and $30 for Modal. Two further, distinct
 Modal experiments each hold $30; all $100 is reserved and $0 remains unallocated. Current
 results and billing status are recorded in [QUALIFICATION.md](QUALIFICATION.md).
 All four reservations are now retired pending final billing, with the full holds
-unchanged. The latest paid revision is 17; its 24 recorded cents are conservatively
+unchanged. The latest paid revision is 19; its 30 recorded cents are conservatively
 rounded partial observations, not exact total spend. No fresh paid experiment is
 admitted by the source update.
 Each paid dispatch rechecks its reservation; known experiment or global exhaustion
