@@ -122,6 +122,18 @@ protocol recovery and advisory integration; deployed peers and independently
 hosted failover still need acceptance. Exact evidence is in
 [QUALIFICATION.md](QUALIFICATION.md).
 
+Automatic mutual watching is now implemented and locally qualified in source
+`26c8cc4637a8f89c2f4a83092cb5d35f735794fc` (**335/335** complete checks). Two native
+`peer watch` processes continuously probe each other's authenticated health and
+read-only controller/paid projection. Meaningful changes persist atomically in
+the existing outbox; restart automatically retries the exact original message.
+The actual rehearsal confirms quiet unchanged polls, a native change, peer outage
+and both-process restart after an inbox commit with a lost ACK. Revision floors
+survive interruption and regressed current state becomes unavailable. This is
+same-host advisory recovery; deployment across independent hosts and automatic
+native enrollment still need acceptance. Exact evidence is in
+[QUALIFICATION.md](QUALIFICATION.md).
+
 ## Watching is separate from taking over
 
 A watcher reports a missing heartbeat, failed readiness check or stalled task.

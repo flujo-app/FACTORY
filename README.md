@@ -41,6 +41,19 @@ the 64 source and 29 accounting/history witnesses unchanged. The observations
 describe persisted history. Deployed peers, independent-host recovery and
 autonomous enrollment remain open. See [PEER_MESSAGING.md](PEER_MESSAGING.md).
 
+Source `26c8cc4637a8f89c2f4a83092cb5d35f735794fc` adds automatic authenticated
+mutual watching through `peer watch`: each native process probes the other
+peer's own read-only controller and paid projection, persists meaningful changes
+and retries exact original advisory messages after interruption. The complete
+combination passed **335/335**; actual two-process acceptance showed unchanged
+poll silence, a native state change, a missing peer, both-process restart and
+replay of one original message after a deliberately lost ACK. Local detection was
+about one second and reciprocal recovery about 1.29 seconds in this trial.
+It creates no control or spending authority. Independent-host deployment, native
+enrollment, Modal GPU/native Flow and a development-speed comparison remain open.
+See [PEER_MESSAGING.md](PEER_MESSAGING.md) and
+[QUALIFICATION.md](QUALIFICATION.md).
+
 Source `5293cfb22adde92d64ac27e3441b9b43f1d881c4` adds explicit operation completion
 and task cancellation. Completion requires an immutable operation contract and
 exact recorded success receipts; cancellation preserves acceptance, candidate

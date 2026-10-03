@@ -1,14 +1,16 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`5293cfb22adde92d64ac27e3441b9b43f1d881c4`. Its complete isolated Node 24.19.0
-combination passed **324/324**, exit 0, with no failed, skipped, cancelled or
-todo results. This includes the existing controller, budget and peer tests,
-the Modal wiring and genuine SDK HTTP continuation probes, plus terminal-task
-identity, race, retention and presentation cases. Local adoption matched six
-qualified files exactly and preserved 63 untouched runtime files byte for byte;
-all 29 accounting/history and eight dependency pins remained unchanged. This
-adopts source only: the original controller and loaded API are unchanged.
+`26c8cc4637a8f89c2f4a83092cb5d35f735794fc`. Its complete isolated Node 24.19.0
+combination passed **335/335**, exit 0, with no failed, skipped, cancelled or
+todo results. The new automatic mutual-watch acceptance uses actual production
+CLI processes and native read-only controller/paid sources, alongside the
+existing controller, terminal-task, budget and peer checks, Modal wiring and
+genuine SDK HTTP continuation probes. Adoption matched eight qualified files
+and preserved 75 untouched tracked files byte for byte. The 73 runtime pins,
+all 29 accounting/history witnesses and eight dependencies remain bound to
+actual evidence. This adopts local source: the live controller, loaded API
+and paid reservations are unchanged.
 
 Earlier HTTP continuation source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc`
 retains its separate complete **302/302** qualification and exact adoption proof.
@@ -38,6 +40,69 @@ with source, accounting/history and owner witnesses unchanged. See
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Native automatic mutual watching
+
+Source `26c8cc4637a8f89c2f4a83092cb5d35f735794fc` changes the peer CLI, gateway,
+message store and protocol guide, and adds health, watcher, watch-state modules
+and one test file. The fixed authenticated health route directly observes the
+configured other peer. Own presentation sources are bounded loopback reads;
+only closed controller/cell and USD accounting aggregates travel. Paid billing
+finality, logical allocation and gateway reachability remain distinct.
+
+An immutable watch-owned outbox chain serves as the checkpoint. One transaction
+compares the exact predecessor ID/digest, rejects a stale probe and admits a
+changed observation. It suppresses timestamp-only noise, carries independent
+controller/paid revision floors, quarantines regression, validates all history
+in pages and retains original pending message bytes and expiry across restart
+and credential rotation. Pending backpressure keeps delivery reconciliation
+running. Messages grant no task, controller, deployment or spending authority.
+
+The actual full run passed **335/335** with child PID 20476,
+exit 0, null signal and confirmed close, at
+**10:11:54.067–10:13:43.666 UTC**. It bound 83 candidate files,
+all 79 pre-adoption Root files and all 29+8 protected/dependency witnesses before
+and after. Real SDK probes retained two baseline and 20 guarded tiny-body cases.
+
+The native acceptance used two production watcher processes, followed by two
+new processes after intentional application termination; all four SIGTERM
+closes and eight raw logs were captured and rehashed. Both peers completed
+at least three unchanged signed polls without another observation row. A
+synchronous native controller pause and paid observation produced one new
+message. A proxy drained the real receiver ACK after inbox COMMIT and withheld
+it from the sender. After both processes restarted, the sender reconciled the
+exact original ID/body/digest/destination/timestamps/expiry, preserving the
+receiver sequence and acceptance time, with one enqueue, one inbox event and
+one acknowledgment event. Automatic outage observation retained revision floors
+while showing no current trusted source.
+
+This trial measured 0.98 s from native change to committed observation,
+1.00 s from peer closure to outage admission, and
+1.28 s from both replacements ready to original ACK resolution
+(1.29 s to reciprocal healthy state). These are same-host protocol
+latencies, with no independent-host HA or development-speed claim. No provider
+request, new paid reservation, live API restart or controller write occurred.
+
+Protected evidence under `.factory/mutual-watch-20261003/`:
+
+- Frozen source: `frozen-source-r2.private.json`, SHA-256
+  `5057f2495498db2c50676d9214a820bccc49663d3f4890b3f56086b973bc5530`.
+- Focused execution: `focused-c932d59b-6fcd-466a-b507-e99e00307a33/execution.private.json`,
+  **22/22**, SHA-256 `1ce844820c59cfce31cdbc97c4362f134f4cbb2a1dbf28064711305f19af92dc`.
+- Complete execution: `combined-1cccadeb-4b85-46be-aea3-f9d5de3b9494/execution.private.json`,
+  SHA-256 `e82e52d71b549ff5ffb8a8c5b963ff73c3e832c5c47919e1344e03cfbff30b29`.
+- Native full-run acceptance: SHA-256
+  `8fdda899902ae70a69fa3a2ee91415e92ad4156c683c688b12537aa5e0ab4f18`, with raw child logs and owned SQLite fixtures retained.
+- Independent Root readback: `root-qualification-review.private.json`, SHA-256
+  `a1021dd18ba4eca967ea37b518b7c1ed13b316b9adba6f531706e9308e649fd6`.
+- Exact local adoption: `adoption.private.json`, SHA-256
+  `cc6ccfa487b6f7c49f689acc36689abdaf743575a5a32f2bced83a771f185f06`.
+
+The original unexecuted freeze is retained. R2 only fixes the qualification
+producer's failed-after-capture JSON representation and final runner binding;
+all 83 source rows match. The focused and complete runs both tested that same
+source. Remote enrollment/deployment, independent-host rescue, mounted Modal
+weights, GPU generation, native Flow and comparative delivery speed remain open.
 
 ### Explicit operational completion and cancellation
 
