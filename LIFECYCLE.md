@@ -71,9 +71,9 @@ The protected independent adoption/closure/paid audit, published at
 `.factory/integration-stage/run-2026-10-03T01-49-59-785Z-offline/independent-adoption-closure-paid-audit-88d56140-3690-4057-91ee-86154ca54a24.private.json`,
 SHA-256 `fa2c64fcb94e2d9c506fab0453715e12c9237e88981bf1b16d29fcd10abccbe4`.
 
-`completeOperationalTask`, `cancelTask`, completed/cancelled task DTO values
-and targeted draining remain **proposals**. They
-are not authorized by the existing logical closure methods. The low-memory HTTP
+The initial subset did not add operational completion or cancellation. Those
+methods and their task DTO values are now implemented in `5293cfb`, described
+below; targeted draining remains a proposal. The low-memory HTTP
 download path is adopted source preparation, with no cloud execution or proven
 performance improvement.
 
@@ -126,6 +126,53 @@ held under paid revision 17. The existing presentation process correctly project
 the new state under its actual loaded build `8f5a940`. Exact evidence is in
 [QUALIFICATION.md](QUALIFICATION.md).
 
+## Implemented explicit task outcomes
+
+Source `5293cfb22adde92d64ac27e3441b9b43f1d881c4` adds trusted-local methods:
+
+```text
+completeOperationalTask(taskId, { closureId, expectedAttempt, expectedOwner,
+  expectedStatus, expectedTaskControlEpoch, expectedFactoryEpoch,
+  completionEffectKeys })
+cancelTask(taskId, { closureId, expectedAttempt, expectedOwner,
+  expectedStatus, expectedTaskControlEpoch, expectedFactoryEpoch, reason })
+```
+
+Completion permits ready/running tasks only with immutable `taskType: 'operation'`,
+an exact `{kind: 'provision' | 'retire', cellId, app}` descriptor and acceptance
+`{scope: 'recorded-controller-operation-receipts-only'}`. A delivery target or
+submitted candidate/review is refused. The single named successful effect must
+match permanent cell/app bindings, task attempt, original owner/control epoch
+and original admission/settlement events. Every present app/worker receipt
+identity must match. Retirement also binds its original provisioning effect.
+A released-ready task needs the original claim/release provenance.
+
+Cancellation permits ready/running/review/verified with reason `abandoned`,
+`acceptance-unmet` or `operation-failed`. It preserves specification/digest,
+candidate, review, branch and original attempt; it establishes no specification
+acceptance or reviewed software delivery. Successful delivery awaiting
+`deliverTask` must be finalized first. Both methods reject causal open effects,
+check exact task/factory identities inside `BEGIN IMMEDIATE`, and clear current
+owner/token/expiry/control epoch. Closure IDs conflict across all closure types.
+Exact terminal replay checks retained evidence and returns the original result
+without another event or execution authority, including across later epochs.
+
+The cloud pilot creates future launch tasks with the explicit operation contract
+and completes them after their exact provisioning receipt succeeds. Unknown
+operations remain unresolved. The original launch task is an untyped software
+task whose acceptance remains unmet: its truthful closure is cancellation, not
+retroactive operational completion. Its specification was not rewritten.
+
+The full combination passed **324/324**. Two real processes also rehearsed the
+original task's cancellation on a private database copy with exact replay and a
+read-only API. Event 92 exists only in that copy. Live revision 91 and the running
+launch task are unchanged; the existing port 4344 process still loads `8f5a940`.
+The presentation source accepts exactly `completed` and `cancelled` as additive
+task enums under schema 1. Brain reader source is qualified; active O reader
+rollout and replacement-API qualification remain prerequisites for live writes.
+Commands remain disabled. Worker quiescence and paid finality remain separate
+facts. Exact source and execution evidence is in [QUALIFICATION.md](QUALIFICATION.md).
+
 ## Historical baseline analysis and broader proposal
 
 The sections below retain the original pre-implementation analysis, source line
@@ -170,9 +217,9 @@ retireCell(cellId, { expectedParent, expectedAllocation, expectedSpent,
                    expectedFactoryEpoch, retirementEvidence })
 ```
 
-These are the original proposed signatures, not the current API: `releaseTask`
-and `retireCell` now use the exact initial-subset fields shown above. The other
-methods and original JSON `retirementEvidence` argument remain unimplemented. The
+These are the original proposed signatures, not the current API: all implemented
+methods use the exact contracts described above, including a cancellation reason.
+The original JSON `retirementEvidence` argument remains unimplemented. The
 current provider path uses a separate method and opaque capability, described
 above. A future extension
 should capture immutable input before asynchronous evidence reads, revalidate
@@ -189,7 +236,12 @@ The task's recorded control epoch and the current factory epoch are separate CAS
 | reserved/ready → retired, via retireCell | Non-root leaf; no non-retired children; owned running tasks explicitly released/completed/cancelled; causal effects terminal; exact bound resource retirement qualified; allocation invariants valid. | Cell identity, parent, allocation, final logical spent, purpose, heartbeat and messages remain historical. Transfer logical spent to parent exactly once. |
 | review → review; verified → verified during producer retirement | Artifact/evidence remains durably available. No worker execution token is retained. | Original producer owner ID, candidate/review hashes, specDigest and review.attempt stay unchanged. Producer ID is historical provenance, not active execution authority. |
 
-Operational task classification must be explicit. For new launch/cleanup tasks, record an immutable specification field such as `taskType: 'operation'`; completion checks that type and named task-bound success receipts. Existing pilot launch tasks lack that field: support a separately identified trusted-local legacy operational closure with exact existing provisioning/cleanup keys and an auditable closure event. Do not rewrite their specification or spec_digest to retrofit a type. A failed operation may be cancelled or released; it must not be completed merely because its resources no longer exist.
+Operational task classification must be explicit. The implementation requires
+the immutable operation type and receipt-scoped acceptance described above.
+The original proposal considered a legacy operational lane; it was not added.
+Existing software acceptance cannot be reinterpreted as provisioning success or
+rewritten to retrofit a type. A failed operation may be cancelled or released;
+it must not be completed merely because its resources no longer exist.
 
 For local-only operational tasks, define their own bounded completion-evidence contract when they are introduced. Do not require a provider receipt for unrelated local work or let a generic success string bypass source review. The first completion implementation can remain specific to the existing launch/cleanup operations.
 
@@ -260,16 +312,22 @@ Before deleting remote storage, copy candidates and review evidence into durable
 
 After producer retirement, leave verified unchanged. Resume, acquire a fresh project lease from a ready coordinator, and use executeGitDelivery with a fresh effect key and the original reviewed repository/ref/baseline/candidate. Existing admission rechecks the candidate and review file hashes. If the target advanced, genuine CAS refusal clears only that delivery intent; rebasing or changing bytes requires a new independently reviewed task/candidate. A succeeded delivery awaiting deliverTask should be finalized from its exact receipt, including while paused, before any abandonment decision.
 
-## Proposed DTO extensions and release plan
+## DTO extensions and release plan
 
 Cell retired, cleared task leaseExpiry/owner for released running tasks, logical root spend transfer, and normal closure events fit the current presentation shape. No credential/path/receipt/event-details projection should be added. Numeric revision and opaque cursor continue tracking controller events; heartbeat-only observations may still share a revision. paidBudget revision remains independent.
 
-The new completed/cancelled task values do not fit current strict allowlists (`src/presentation.mjs:150`). Writing them first would make snapshot return 503; deployed BFF clients can also reject unknown enum values. Coordinate presentation and all active staff clients before the controller begins writing either value. Existing TEXT columns and active_branch partial index already support terminal values without a physical SQLite table migration, but that does not make the DTO addition compatible with old readers. Either deploy additive enum support to all readers first, or version the DTO and explicitly migrate consumers. Keep the read-only API's commands capability false.
+The source presentation allowlist now accepts completed/cancelled. Older deployed
+presentation and BFF readers still reject those values; writing them before
+coordinated rollout can make the live view unavailable. Qualify presentation and
+all active staff clients before live terminal writes. Existing TEXT columns and
+the active_branch partial index support terminal values without a physical table
+migration, but that does not make old readers compatible. Keep the read-only
+API's commands capability false.
 
 The compatible `retireCell` plus `releaseTask` subset has now landed using existing
 status values. It reclaims eligible logical capacity and permits explicit task
-handoff; it is not operational completion. Explicit terminal task statuses belong
-in the coordinated follow-up. Do not disguise completion as rejected/delivered or
+handoff; it is not operational completion. Explicit terminal task statuses are
+implemented in source and await coordinated live adoption. Do not disguise completion as rejected/delivered or
 silently reset tasks to ready.
 
 The initial controller methods and dedicated lifecycle cases are qualified; actual
@@ -281,8 +339,9 @@ parents. This document itself performs no orchestration.
 ## Original qualification plan
 
 This historical plan mixes the implemented subset with remaining extensions.
-Operational completion/cancellation and new DTO-enum rollout cases below are
-still proposals; the initial subset's executed qualification is recorded above.
+Operational completion/cancellation and local DTO cases are qualified in the
+324-test combination above. Deployed reader rollout, targeted draining and broader
+provider-evidence cases remain separate work.
 
 1. Two real SQLite connections/processes race to retire the same leaf: one transfer/event, identical exact replay, conflicting evidence rejected. Reopen and replay again with no further release.
 2. Nested example above: leaf-first conservation, no root descendant double count, final unused release correct, maxCells slot available for a new identity. Reject root retirement and parent closure with a non-retired child.

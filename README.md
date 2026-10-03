@@ -41,6 +41,19 @@ the 64 source and 29 accounting/history witnesses unchanged. The observations
 describe persisted history. Deployed peers, independent-host recovery and
 autonomous enrollment remain open. See [PEER_MESSAGING.md](PEER_MESSAGING.md).
 
+Source `5293cfb22adde92d64ac27e3441b9b43f1d881c4` adds explicit operation completion
+and task cancellation. Completion requires an immutable operation contract and
+exact recorded success receipts; cancellation preserves acceptance, candidate
+and review history. Neither establishes reviewed software delivery. The complete
+combination passed **324/324** with actual exit 0 and process closure. Adoption
+matched six qualified files and preserved 63 untouched runtime files and all
+29 accounting/history witnesses. A rehearsal cancelled the original launch task
+on a private database copy only. The live controller remains revision 91 with
+that task running, and the port 4344 API remains loaded at `8f5a940`. Brain's
+reader source is qualified; active O readers and a replacement API still need
+qualification before live terminal writes. See [LIFECYCLE.md](LIFECYCLE.md) and
+[QUALIFICATION.md](QUALIFICATION.md).
+
 Source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc` rejects invalid HTTP
 continuations before the pinned Hub SDK appends bytes, including across redirects
 and native retries. It binds an exact guard identity to new Modal intents and

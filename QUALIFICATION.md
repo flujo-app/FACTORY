@@ -1,12 +1,17 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`ac8b51fbf2833d347a0d96ed7f422a0bd82412bc`. Its complete isolated Node 24.19.0
-combination passed **302/302**, exit 0, with no failed, skipped, cancelled or
+`5293cfb22adde92d64ac27e3441b9b43f1d881c4`. Its complete isolated Node 24.19.0
+combination passed **324/324**, exit 0, with no failed, skipped, cancelled or
 todo results. This includes the existing controller, budget and peer tests,
-the Modal wiring tests and genuine SDK HTTP continuation probes. Local adoption
-matched all ten changed files exactly and preserved 57 untouched runtime files
-byte for byte; all 29 accounting/history pins remained unchanged.
+the Modal wiring and genuine SDK HTTP continuation probes, plus terminal-task
+identity, race, retention and presentation cases. Local adoption matched six
+qualified files exactly and preserved 63 untouched runtime files byte for byte;
+all 29 accounting/history and eight dependency pins remained unchanged. This
+adopts source only: the original controller and loaded API are unchanged.
+
+Earlier HTTP continuation source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc`
+retains its separate complete **302/302** qualification and exact adoption proof.
 
 Earlier controller/provider source `8dce857df549f29c69e566fa7d927196cb324c3c`
 added qualified provider-bound logical cell retirement. Its frozen combination
@@ -33,6 +38,82 @@ with source, accounting/history and owner witnesses unchanged. See
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Explicit operational completion and cancellation
+
+Qualified source `5293cfb22adde92d64ac27e3441b9b43f1d881c4` has exactly six
+changes from `1e0b68861e50cf36dcfa969c89fee80a7cc1629d`: controller, cloud pilot,
+presentation, cloud-pilot tests and two new terminal-task test files.
+`completeOperationalTask` accepts only explicitly typed immutable provisioning
+or retirement operations with receipt-scoped acceptance and exact task, attempt,
+owner, historical epoch, cell/app binding and successful-effect provenance.
+`cancelTask` records an explicit abandonment reason while retaining immutable
+specification, candidate/review and attempt history. Both fence causal open
+effects and pending successful delivery, clear execution authority, and replay
+the original terminal result without another event or renewed authority.
+
+The final full run recorded **324/324**, actual child PID 32624, exit 0, null
+signal, confirmed close and stable before/after witnesses at
+**09:19:16.736–09:21:18.043 UTC**. All 79 frozen files were bound to their raw
+source copies; 69 runtime files, the 29 original accounting/history witnesses
+and eight dependencies were checked separately. The genuine SDK probes retained
+their actual two baseline and 20 guarded cases. This is local behavior and
+integration qualification; it measures neither development-speed improvement
+nor mounted Modal weights, GPU startup, generation or native Flow execution.
+
+Protected evidence under `.factory/operational-closure-20261003/`:
+
+- Final source: `frozen-source-r2.private.json`, SHA-256
+  `f5d9f51deb0509c914ce6a05feff20ed2f1f26eab2917bfb71915d04fd49becd`.
+- Actual full execution:
+  `combined-335f86e7-6c34-4ef9-93ce-1bb0cc03c584/execution.private.json`, SHA-256
+  `79e207f9cf2cee6232b7acc08070bb2ab45b3a964afdba1f746fd1839c00f2a2`.
+  Its raw TAP SHA-256 is
+  `297c5713a20cae58c5dae2c903f16d76004424c0642c820e19b8482736f1b970`.
+- Root independent full readback: `root-qualification-review-r2.private.json`,
+  SHA-256 `7d2f41d1c256098d62915fc79445f209ec22692673a60c0960afac4f5c0679c3`.
+- Independent adoption-producer review:
+  `adoption-r2-producer-independent-review.private.json`, SHA-256
+  `667656ac003a3e75c4caff0d0858c8c8a9d7766aaf01c46c0767620f183dad84`.
+- Exact six-file adoption: `adoption-r2.private.json`, SHA-256
+  `e90dccc431ccf4022730d00928e2eeb69303f709fa9398135db47c65dba6396d`.
+
+The first captured focused run passed 52 of 53: a delivery test fixture omitted
+the required effect kind and was correctly refused. Its corrected focused run
+passed 53/53. An earlier full combination also passed 324/324; adoption then
+stopped before commit because the normal staged whitespace check found an extra
+EOF blank line. That stopped record remains preserved. R2 removes exactly one
+terminal LF from the test file and retains all production bytes; the final full
+qualification above covers that exact source. No whitespace gate was weakened.
+
+Two actual closed Node processes rehearsed cancellation against a private,
+initially byte-identical copy of the original controller. The copy recorded one
+cancellation event 92, exact replay produced no second event, all original 91
+events and unrelated rows remained intact, and a real read-only API projected
+the result while refusing writes. Rehearsal evidence:
+`rehearsal-original-c890c2fe-33a0-4d44-a141-c62e90b01916/execution.private.json`,
+SHA-256 `bdb366c979ac682c2adeb0abc3edd9fd67d06c99f029a74df5b60628c1355c69`.
+It binds the earlier full source; R2 changes only that test-file EOF byte.
+
+The original `launch-parent` specification describes software acceptance and
+lacks the new operation type. Provisioning cannot satisfy that acceptance.
+The intended terminal outcome is cancellation for `acceptance-unmet`, preserving
+the original specification; no legacy completion or specification rewrite was
+added. The actual controller remains revision 91, paused at epoch 4, with
+`launch-parent` running. Port 4344 remains loaded build `8f5a940`. Paid revision
+19 retains all US$100, zero available capacity, 30 rounded nonfinal partial cents
+and null final spend. No live terminal transition, API restart or paid/provider
+mutation occurred.
+
+Brain owner evidence on committed source
+`8205fbcad467bdb27d952d30e4ae3e5ca11f02aa` reports 41 passing Windows/Linux
+checks and controlled terminal-state browser fixtures. Root verified the exact
+owner record hash, retaining its scope in
+`brain-reader-owner-evidence.private.json`, SHA-256
+`5d4ce9336ba838289afca3fb3950077d2db857876b8ba6bf03c6bbc8ab5d87c9`.
+Root did not rerun those owner tests. The active O readers on ports 43861/43863
+still need their frozen proposal admitted and qualified; replacement-API
+qualification is also required before a live terminal write.
 
 ### Modal HTTP continuation guard
 
@@ -827,9 +908,11 @@ Protected HTTP witness SHA-256:
 - Activation and upstream publication of the delivered native FLUJO runtime
   improvement. The outcome repair passed source-pinned acceptance and local
   delivery; no PR, push, upstream merge or deployed runtime activation occurred.
-- Operational completion/cancellation and broader provider-evidence closure for
-  failed or unresolved provisioning outcomes. Initial task release, unprovisioned
-  leaf retirement and the narrow successful-Fly-teardown closure are implemented.
+- Live activation of the qualified terminal-task source after coordinated reader
+  rollout; targeted draining and broader provider-evidence closure for failed or
+  unresolved provisioning outcomes. Initial task release, explicit typed operation
+  completion/cancellation, unprovisioned leaf retirement and the narrow successful
+  Fly teardown are implemented in source.
 - Mounted Modal model validation, GPU/engine startup, direct inference and actual
   native FLUJO Flow execution. Successful local artifact checks establish the
   snapshot bytes at their observed time; they do not establish those cloud results.
@@ -840,8 +923,8 @@ Protected HTTP witness SHA-256:
 The [lifecycle document](LIFECYCLE.md) distinguishes the implemented initial
 subset—task release, never-provision-bound leaf retirement, qualified successful
 Fly teardown, ready-cell authority, causal guards and allocation conservation—from
-broader proposals. Additional completed/cancelled task states still require
-coordinated strict interface changes.
+broader proposals. Completed/cancelled task values are qualified in source;
+their live use still requires coordinated adoption by active strict readers.
 
 The shared FLUJO source, owner default-model binding, paused hackathon automations
 and unrelated cloud resources were not reset or resumed by these experiments.

@@ -63,6 +63,22 @@ request digest and timestamps. Tokens, token hashes, source filesystem paths,
 artifact paths, raw specifications, response bodies and receipt payloads are
 excluded. The implementation and tests define the exact DTO field names.
 
+Source `5293cfb22adde92d64ac27e3441b9b43f1d881c4` adds exactly `completed` and
+`cancelled` to task status under schemaVersion 1, with the same fields and
+read-only capability. Completed means qualified recorded operational receipts;
+it establishes neither software review/delivery nor worker quiescence. Cancelled
+means explicit abandonment or unmet acceptance; candidate/review history remains
+available. Neither belongs in active-work or software-delivery counts.
+
+Brain reader source `8205fbcad467bdb27d952d30e4ae3e5ca11f02aa` is qualified by its
+owner with 41 passing Windows/Linux checks and controlled browser fixtures. Its
+actual existing-state API witness still reports loaded build `8f5a940`, revision
+91; no live terminal row was written. Older O readers on ports 43861/43863 and a
+replacement FACTORY API remain rollout gates. Qualify every active reader before
+live writes; source compatibility alone does not qualify deployed assets. Exact
+owner evidence and the separate FACTORY 324-test result are recorded in
+[QUALIFICATION.md](QUALIFICATION.md).
+
 `GET /v1/snapshot` is an alias for this configured single factory, with the same
 authentication and response identity. The browser adapter must still validate
 the expected `factoryId`. Responses retain the `snapshot` envelope rather than
@@ -205,7 +221,8 @@ the qualified lifecycle subset. Independent audit confirmed the exact events,
 preserved delivered-task evidence and unchanged paid records. This does not verify
 process/provider quiescence. The initial lifecycle methods use existing DTO states;
 The later narrow provider-bound Fly closure uses the same existing states.
-Completed/cancelled task enums remain future work.
+That initial subset did not add terminal task enums. They are now qualified in
+source as described above; coordinated live adoption remains pending.
 
 FACTORY source `0948fdd` now includes the reviewed lifecycle and low-memory HTTP
 patches. Their 188/188 suite executed once in the isolated stage, and adoption was
