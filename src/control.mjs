@@ -21,6 +21,18 @@ function canonical(value) {
 }
 export function digest(value) { return createHash('sha256').update(canonical(value)).digest('hex'); }
 function tokenHash(value) { return createHash('sha256').update(String(value)).digest('hex'); }
+function capacityRecord(row) {
+  if (!row) return null;
+  const record = JSON.parse(row.details), { grantDigest, ...binding } = record;
+  if (record.format !== 'factory-capacity-grant' || record.schemaVersion !== 1
+      || digest(binding) !== grantDigest || record.policy.grantId !== row.subject) fail('CAPACITY_GRANT', 'Capacity grant history is inconsistent.');
+  return record;
+}
+function capacityTargets(grant, request) {
+  const suffix = digest({ grantId: grant.policy.grantId, requestId: request.requestId });
+  return { key: 'capacity.' + suffix, cellId: 'capacity.' + suffix,
+    app: grant.policy.template.appPrefix + '-' + suffix.slice(0,24) };
+}
 function evidence(path) {
   if (!isAbsolute(path)) fail('INVALID', 'Evidence path must be absolute.');
   return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
@@ -198,10 +210,10 @@ export class FactoryControl {
       this.event('initialized', 'root', policy); return this.control();
     });
   }
-  reserveCell({ cellId, parentId = 'root', role = 'developer', budgetCents, purpose }) {
+  reserveCell(input) { return this.transaction(() => this.#reserveCell(input)); }
+  #reserveCell({ cellId, parentId = 'root', role = 'developer', budgetCents, purpose }) {
     id(cellId); id(parentId); integer(budgetCents, 'budgetCents');
     if (!['developer','verifier','watcher','coordinator'].includes(role) || typeof purpose !== 'string' || !purpose.trim()) fail('INVALID', 'Role and purpose are required.');
-    return this.transaction(() => {
       const control = this.active();
       const existing = this.db.prepare('SELECT * FROM cells WHERE id=?').get(cellId);
       if (existing) {
@@ -217,6 +229,102 @@ export class FactoryControl {
       this.db.prepare('INSERT INTO cells(id,parent_id,depth,role,allocation,status,purpose,heartbeat) VALUES(?,?,?,?,?,?,?,?)').run(cellId,parentId,parent.depth+1,role,budgetCents,'reserved',purpose,this.clock());
       this.event('cell_reserved', cellId, { parentId, role, budgetCents });
       return this.db.prepare('SELECT * FROM cells WHERE id=?').get(cellId);
+  }
+  /** Trusted-local standing policy. Peer payloads cannot issue or replace it. */
+  issueCapacityGrant(lease, record) {
+    const { grantDigest, ...binding } = record;
+    id(record.policy?.grantId); integer(record.policy?.generation, 'generation', 1);
+    if (record.format !== 'factory-capacity-grant' || record.schemaVersion !== 1 || digest(binding) !== grantDigest
+        || record.policy.generation !== record.transport?.generation) fail('CAPACITY_GRANT', 'An exact capacity policy binding is required.');
+    return this.transaction(() => {
+      this.#capacityAuthority(lease, record);
+      integer(record.inboxFloor, 'inboxFloor');
+      const previous = this.capacityGrant(record.policy.grantId);
+      if (previous?.policy.generation === record.policy.generation) {
+        const { inboxFloor: oldFloor, grantDigest: oldDigest, ...oldPolicy } = previous;
+        const { inboxFloor: newFloor, grantDigest: newDigest, ...newPolicy } = record;
+        if (digest(oldPolicy) !== digest(newPolicy)) fail('CONFLICT', 'Capacity grant generation is bound to another policy.');
+        return previous; // Original eligibility floor is never refreshed on restart.
+      }
+      if (previous && record.policy.generation !== previous.policy.generation + 1) fail('CAPACITY_GRANT_GENERATION', 'A capacity grant must advance exactly one generation.');
+      this.#capacityQuota(record, null);
+      this.event('capacity_grant_issued', record.policy.grantId, record);
+      return record;
+    });
+  }
+  capacityGrant(grantId) {
+    return capacityRecord(this.db.prepare("SELECT subject,details FROM events WHERE type='capacity_grant_issued' AND subject=? ORDER BY seq DESC LIMIT 1").get(id(grantId)));
+  }
+  #capacityAuthority(lease, grant) {
+    const task = this.authority(lease), a = grant.authority, p = grant.policy;
+    if (lease.scope !== 'task' || a.taskId !== lease.scopeId || a.parentId !== lease.cellId
+        || a.attempt !== lease.epoch || a.controlEpoch !== lease.controlEpoch || a.specDigest !== task.spec_digest
+        || digest(JSON.parse(task.specification)) !== task.spec_digest) fail('CAPACITY_AUTHORITY', 'Capacity grant does not match the exact task attempt.');
+    if (!Number.isSafeInteger(p.expiresAt) || p.expiresAt <= this.clock() || p.expiresAt > task.expires) fail('CAPACITY_GRANT_EXPIRED', 'Capacity grant must remain inside its task lease.');
+  }
+  #capacityQuota(grant, additionalBudget) {
+    const p = grant.policy;
+    integer(p.maxChildren, 'maxChildren', 1); integer(p.maxBudgetCents, 'maxBudgetCents');
+    let count = 0, budget = 0n;
+    for (const row of this.db.prepare("SELECT details FROM events WHERE type='capacity_admitted' AND subject=?").iterate(p.grantId)) {
+      const admission = JSON.parse(row.details);
+      integer(admission.request.budgetCents, 'admitted budget');
+      budget += BigInt(admission.request.budgetCents); count++;
+    }
+    if (count + (additionalBudget === null ? 0 : 1) > p.maxChildren
+        || budget + BigInt(additionalBudget ?? 0) > BigInt(p.maxBudgetCents)) fail('CAPACITY_GRANT_QUOTA', 'Standing grant count or logical budget is exhausted.');
+  }
+  #capacityBound(lease, { grantId, generation, grantDigest }) {
+    const grant = this.capacityGrant(grantId);
+    if (!grant || grant.policy.generation !== generation || grant.grantDigest !== grantDigest) fail('CAPACITY_GRANT_GENERATION', 'Capacity grant is missing or superseded.');
+    this.#capacityAuthority(lease, grant);
+    return grant;
+  }
+  /** Child allocation, unique provision binding, quota debit and causal inbox identity share one COMMIT. */
+  admitCapacityProvision(lease, input) {
+    return this.transaction(() => {
+      const grant = this.#capacityBound(lease, input), request = closureInput(input.request,['requestId','role','budgetCents','purpose']);
+      id(request.requestId); integer(request.budgetCents,'budgetCents',1);
+      if (!grant.policy.allowedRoles.includes(request.role) || typeof request.purpose !== 'string' || !request.purpose.trim()
+          || request.purpose.length > 512 || request.budgetCents > grant.policy.paid.ceilingCents) fail('CAPACITY_REQUEST', 'Request exceeds its standing grant.');
+      if (digest(input.nativeProof) !== digest(grant.policy.native)) fail('CAPACITY_NATIVE', 'Native snapshot identity does not match the grant.');
+      id(input.messageId); integer(input.inboxSequence,'inboxSequence',1);
+      if (input.inboxSequence <= grant.inboxFloor || !/^[a-f0-9]{64}$/.test(input.messageDigest ?? '')) fail('CAPACITY_INBOX_FLOOR', 'A post-issuance committed request is required.');
+      const target = capacityTargets(grant, request), provisionRequest = { cellId:target.cellId,app:target.app,...grant.policy.template };
+      delete provisionRequest.appPrefix;
+      const admission = { schemaVersion:1, grantId:input.grantId, generation:input.generation, grantDigest:input.grantDigest,
+        request, nativeProof:input.nativeProof, messageId:input.messageId, messageDigest:input.messageDigest, inboxSequence:input.inboxSequence,
+        ...target, provisionRequest, requestDigest:digest(provisionRequest) };
+      const previous = this.db.prepare("SELECT details FROM events WHERE type='capacity_admitted' AND subject=? AND json_extract(details,'$.request.requestId')=?").get(input.grantId,request.requestId);
+      if (previous) {
+        if (canonical(JSON.parse(previous.details)) !== canonical(admission)) fail('CONFLICT', 'Capacity request identity is permanently bound to its original input.');
+        const effect = this.effect(target.key), cell = this.db.prepare('SELECT * FROM cells WHERE id=?').get(target.cellId);
+        if (effect.kind !== 'provision' || effect.request_digest !== admission.requestDigest || effect.owner !== lease.cellId
+            || effect.owner_epoch !== lease.epoch || effect.control_epoch !== lease.controlEpoch || effect.scope_id !== lease.scopeId
+            || !cell || cell.parent_id !== lease.cellId || cell.role !== request.role || cell.allocation !== request.budgetCents || cell.purpose !== request.purpose
+            || ['cell:'+target.cellId,'app:'+target.app].some(binding => this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get(binding)?.effect_key !== target.key)) fail('CAPACITY_HISTORY', 'Original capacity binding is inconsistent.');
+        return { fresh:false, admission, effect };
+      }
+      if (this.db.prepare('SELECT key FROM effects WHERE key=?').get(target.key)
+          || this.db.prepare('SELECT id FROM cells WHERE id=?').get(target.cellId)) fail('CONFLICT', 'Capacity target already has another intent.');
+      this.#capacityQuota(grant, request.budgetCents);
+      this.#reserveCell({ cellId:target.cellId,parentId:lease.cellId,role:request.role,budgetCents:request.budgetCents,purpose:request.purpose });
+      const accepted = this.#admitEffect(lease,{key:target.key,kind:'provision',request:provisionRequest});
+      if (!accepted.fresh) fail('CONFLICT','Capacity effect already exists.');
+      this.event('capacity_admitted', input.grantId, admission);
+      return { fresh:true, admission, effect:accepted.effect };
+    });
+  }
+  startCapacityProvision(lease, binding) {
+    return this.transaction(() => {
+      this.#capacityBound(lease,binding);
+      const row = this.effect(binding.key);
+      if (row.state !== 'accepted' || row.kind !== 'provision' || row.scope !== 'task' || row.scope_id !== lease.scopeId
+          || row.owner !== lease.cellId || row.owner_epoch !== lease.epoch || row.control_epoch !== lease.controlEpoch) fail('EFFECT','An unstarted matching capacity effect is required.');
+      const recorded = this.db.prepare("SELECT details FROM events WHERE type='capacity_admitted' AND subject=? AND json_extract(details,'$.key')=?").get(binding.grantId,binding.key);
+      if (!recorded || JSON.parse(recorded.details).grantDigest !== binding.grantDigest) fail('CAPACITY_HISTORY','Capacity admission history is missing.');
+      this.db.prepare('UPDATE effects SET state=?,updated=? WHERE key=?').run('running',this.clock(),binding.key);
+      return this.effect(binding.key);
     });
   }
   enrollCell(cellId) { return this.transaction(() => { this.active(); const cell = this.db.prepare('SELECT * FROM cells WHERE id=?').get(id(cellId)); if (!cell || cell.status === 'retired') fail('CELL', 'Cell is unavailable.'); this.db.prepare('UPDATE cells SET status=?,heartbeat=? WHERE id=?').run('ready',this.clock(),cellId); this.event('cell_enrolled',cellId); return { cellId, status: 'ready' }; }); }
@@ -423,10 +531,10 @@ export class FactoryControl {
       this.event('integration_claimed',projectId,{cellId,epoch}); return {scope:'project',scopeId:projectId,cellId,epoch,controlEpoch:control.epoch,expires,token};
     });
   }
-  admitEffect(lease, { key, kind, request, taskId=null }) {
+  admitEffect(lease, input) { return this.transaction(() => this.#admitEffect(lease, input)); }
+  #admitEffect(lease, { key, kind, request, taskId=null }) {
     id(key); if (!['provision','flow_call','retire','delivery'].includes(kind)) fail('INVALID','Unknown effect kind.');
     const hash=digest(request);
-    return this.transaction(() => {
       const owner=this.authority(lease);
       const previous=this.db.prepare('SELECT * FROM effects WHERE key=?').get(key);
       if (previous) {
@@ -463,7 +571,6 @@ export class FactoryControl {
       this.db.prepare('INSERT INTO effects(key,scope,scope_id,task_id,owner,owner_epoch,control_epoch,kind,request_digest,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(key,lease.scope,lease.scopeId,taskId??(lease.scope==='task'?lease.scopeId:null),owner.owner,lease.epoch,lease.controlEpoch,kind,hash,'accepted',now,now);
       if(kind==='provision') for(const target of ['cell:'+request.cellId,'app:'+request.app]) this.db.prepare('INSERT INTO effect_bindings VALUES(?,?)').run(target,key);
       this.event('effect_accepted',key,{kind,scope:lease.scope,scopeId:lease.scopeId,requestDigest:hash}); return {fresh:true,effect:this.effect(key)};
-    });
   }
   effect(key) { const row=this.db.prepare('SELECT * FROM effects WHERE key=?').get(id(key)); if (!row) fail('EFFECT','Effect not found.'); return {...row,receipt:row.receipt?JSON.parse(row.receipt):null}; }
   /** Trusted local shutdown authority, restricted to an app already admitted for provisioning. */
