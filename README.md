@@ -14,6 +14,10 @@ Adapters reuse local Git and the existing `flujo-cloud` `ManagedCloud` service.
 The live Fly pilot passed with two real FLUJO workers, independent candidate
 review and verified owned retirement. A real source-pinned FLUJO API documentation
 task also passed independent review and local Git delivery from fresh upstream.
+An isolated native FLUJO outcome repair then passed **213/213** targeted checks,
+type checking, lint, separate acceptance and local Git delivery. It prevents
+replayed Activities from corrupting Behavior outcome measurements; see
+[NATIVE_OUTCOME.md](NATIVE_OUTCOME.md) for exact source, evidence and limits.
 The deterministic recovery pilot uses real local processes, SQLite and Git with
 fixed code fixtures. Modal inference and native Flow proof remain open: R3's
 original v2-cache prefetch reached its bridge bound with an unknown outcome;

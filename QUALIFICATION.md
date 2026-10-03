@@ -17,6 +17,21 @@ API on port 4344 was restored at build `8f5a940` with the existing journal regis
 
 ## Proven so far
 
+A native FLUJO runtime task delivered candidate
+`549792e1839931e862e6a305eb0d9ce2b82ae905` from exact upstream baseline `d684927`.
+It repairs evicted-identity replay in cumulative Behavior outcome metrics,
+quarantines incomplete legacy history, and keeps terminal projection retryable
+without repeating Flow work. The frozen combination passed **213/213 across 18
+suites**, full type checking and zero-warning lint; separate acceptance bound the
+source, specification, attempt and evidence. Its reviewed local ref was delivered
+through actual Git CAS, then its separate zero-allocation task controller paused
+and logically retired both roles. Owner and historical paid/provider pins stayed
+unchanged. Independent actual-destination/controller/preservation audit passed
+with SHA-256 `14f7be38f06a34c0bfd909da68cfded6a491aebe64e1c37e3ec5d14d5398a776`.
+This qualifies a local runtime change; rented inference, deployment
+and development-speed measurement remain open. See
+[NATIVE_OUTCOME.md](NATIVE_OUTCOME.md).
+
 The offline recovery pilot uses real Git, SQLite and separate Node processes. It
 records an integration intent, kills the process after the Git mutation and
 before its receipt, reopens the coordinator, observes the exact destination,
