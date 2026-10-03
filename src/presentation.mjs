@@ -6,11 +6,13 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createModalObservationReader } from './modal-observation.mjs';
 
 const runFile = promisify(execFile);
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const CAPABILITIES = Object.freeze({ snapshot: true, events: true, commands: false });
+const MODAL_CAPABILITIES = Object.freeze({ observation: true, commands: false });
 const OPEN_EFFECTS = new Set(['accepted', 'running', 'unknown']);
 const ROW_LIMIT = 10_000;
 const PAID_SCOPE = 'registered-factory-paid-reservations';
@@ -238,12 +240,15 @@ function jsonResponse(response, status, payload) {
 }
 
 /** Operator-only single-authority projection. No command endpoint, tenancy or customer isolation claim. */
-export function createPresentationServer({ databasePath, spendingLedgerPath, factoryId, token, buildRevision = 'unknown', clock = Date.now, eventPageSize = 100 } = {}) {
+export function createPresentationServer({ databasePath, spendingLedgerPath, modalJournals = [], factoryId, token, buildRevision = 'unknown', clock = Date.now, eventPageSize = 100 } = {}) {
   requireValue(typeof databasePath === 'string' && path.isAbsolute(databasePath), 'PRESENTATION_INPUT_INVALID', 400);
   requireValue(spendingLedgerPath === undefined || (typeof spendingLedgerPath === 'string' && path.isAbsolute(spendingLedgerPath)), 'PRESENTATION_INPUT_INVALID', 400);
   identifier(factoryId); validateViewerToken(token);
   requireValue(buildRevision === 'unknown' || /^[a-f0-9]{40}$/.test(buildRevision), 'PRESENTATION_INPUT_INVALID', 400);
   requireValue(Number.isSafeInteger(eventPageSize) && eventPageSize >= 1 && eventPageSize <= 500, 'PRESENTATION_INPUT_INVALID', 400);
+  let readModalObservation;
+  try { readModalObservation = createModalObservationReader(modalJournals); }
+  catch { throw new PresentationError('MODAL_JOURNAL_CONFIG_INVALID', 400); }
   const tokenDigest = createHash('sha256').update(token).digest();
   let highestRevision = 0;
   let highestPaidRevision = 0;
@@ -256,13 +261,23 @@ export function createPresentationServer({ databasePath, spendingLedgerPath, fac
       if (!timingSafeEqual(tokenDigest, givenDigest)) return jsonResponse(response, 401, { error: { code: 'UNAUTHORIZED' } });
       if (request.method !== 'GET') return jsonResponse(response, 405, { error: { code: 'METHOD_NOT_ALLOWED' } });
       const url = new URL(request.url, 'http://127.0.0.1');
-      const alias = /^\/v1\/(snapshot|events)$/.exec(url.pathname);
-      const scoped = /^\/v1\/factories\/([^/]+)\/(snapshot|events)$/.exec(url.pathname);
+      const alias = /^\/v1\/(snapshot|events|modal-runs)$/.exec(url.pathname);
+      const scoped = /^\/v1\/factories\/([^/]+)\/(snapshot|events|modal-runs)$/.exec(url.pathname);
       if (!alias && (!scoped || decodeURIComponent(scoped[1]) !== factoryId)) return jsonResponse(response, 404, { error: { code: 'FACTORY_NOT_FOUND' } });
       const operation = alias?.[1] ?? scoped[2];
       const allowedQuery = operation === 'events' ? ['after', 'limit'] : [];
       requireValue([...url.searchParams.keys()].every(key => allowedQuery.includes(key))
         && allowedQuery.every(key => url.searchParams.getAll(key).length <= 1), 'INVALID_QUERY', 400);
+      if (operation === 'modal-runs') {
+        const observedAt = iso(clock());
+        const paidBudget = readPaidBudget(spendingLedgerPath, observedAt, highestPaidRevision);
+        const payload = { schemaVersion: 1, factoryId, observedAt, buildRevision,
+          scope: 'registered-modal-operation-journals', capabilities: MODAL_CAPABILITIES,
+          modalRuns: readModalObservation(observedAt), paidBudget };
+        requireValue(!JSON.stringify(payload).includes(token));
+        if (paidBudget.availability === 'available') highestPaidRevision = Math.max(highestPaidRevision, paidBudget.revision);
+        return jsonResponse(response, 200, payload);
+      }
       const after = operation === 'events' && url.searchParams.has('after') ? decodeCursor(url.searchParams.get('after')) : 0;
       const limitText = url.searchParams.get('limit');
       requireValue(limitText === null || /^(?:[1-9][0-9]{0,2})$/.test(limitText), 'INVALID_QUERY', 400);
