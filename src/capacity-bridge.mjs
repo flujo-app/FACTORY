@@ -27,9 +27,12 @@ function native(value) {
   return structuredClone(value);
 }
 function policy(value) {
-  exact(value,['schemaVersion','grantId','generation','expiresAt','maxChildren','maxBudgetCents','allowedRoles','template','paid','native']);
-  requireValue(value.schemaVersion===1); id(value.grantId); integer(value.generation,1); integer(value.expiresAt,1);
-  integer(value.maxChildren,1); requireValue(value.maxChildren<=1000); integer(value.maxBudgetCents);
+  const fields=['schemaVersion','grantId','generation','expiresAt','maxChildren','maxBudgetCents','allowedRoles','template','paid','native'];
+  exact(value,value?.schemaVersion===2?[...fields,'growthMode']:fields);
+  requireValue(value.schemaVersion===1 || value.schemaVersion===2); id(value.grantId); integer(value.generation,1); integer(value.expiresAt,1);
+  if (value.schemaVersion===2) requireValue(value.growthMode==='budget-only' && value.maxChildren===null);
+  else { integer(value.maxChildren,1); requireValue(value.maxChildren<=1000); }
+  integer(value.maxBudgetCents);
   requireValue(Array.isArray(value.allowedRoles) && value.allowedRoles.length>=1 && value.allowedRoles.length<=4
     && new Set(value.allowedRoles).size===value.allowedRoles.length && value.allowedRoles.every(role=>ROLES.includes(role)));
   exact(value.template,['source','workspace','image','org','region','appPrefix','flowIds']);
@@ -47,7 +50,8 @@ function policy(value) {
 }
 /** Private trusted input. Never accept a grant or lease from a peer envelope/model argument. */
 export function validateCapacityGrant(input) {
-  exact(input,['schemaVersion','grantId','generation','lease','expiresAt','maxChildren','maxBudgetCents','allowedRoles','template','paid'],['native']);
+  const keys=['schemaVersion','grantId','generation','lease','expiresAt','maxChildren','maxBudgetCents','allowedRoles','template','paid'];
+  exact(input,input?.schemaVersion===2?[...keys,'growthMode']:keys,['native']);
   const {lease,...fields}=input;
   exact(lease,['scope','scopeId','cellId','epoch','controlEpoch','expires','token']);
   requireValue(lease.scope==='task'); id(lease.scopeId); id(lease.cellId);
@@ -80,8 +84,12 @@ export function issueCapacityGrant({control,store,grant}) {
     store.assertCurrentCredential(); requireValue(store.config.peer.cellId===lease.cellId,'CAPACITY_AUTHORITY');
     requireValue(g.generation===store.config.generation,'CAPACITY_GRANT_GENERATION');
     requireValue(g.expiresAt<=store.config.credentialExpiresAt,'CAPACITY_GRANT_EXPIRED');
+    if (g.schemaVersion===2) {
+      const current=control.control().policy;
+      requireValue(current.schemaVersion===2 && current.growthMode==='budget-only' && current.maxCells===null && current.maxDepth===null,'CAPACITY_AUTHORITY');
+    }
     const task=control.authority(lease);
-    const binding={format:'factory-capacity-grant',schemaVersion:1,policy:p,
+    const binding={format:'factory-capacity-grant',schemaVersion:p.schemaVersion,policy:p,
       authority:{taskId:lease.scopeId,parentId:lease.cellId,attempt:lease.epoch,controlEpoch:lease.controlEpoch,specDigest:task.spec_digest},
       transport:transport(store),inboxFloor:store.db.prepare('SELECT coalesce(max(sequence),0) AS n FROM peer_inbox').get().n};
     return control.issueCapacityGrant(lease,{...binding,grantDigest:digest(binding)});

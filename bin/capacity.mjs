@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { validateGrowthPolicy } from '../src/growth-policy.mjs';
 
 const runFile = promisify(execFile);
 const print = value => process.stdout.write(JSON.stringify(value) + '\n');
@@ -113,7 +114,7 @@ function initializedDatabase(DatabaseSync, filename, kind, peerConfig, canonical
       check(rows.length === 1 && rows[0].id === 1 && Number.isSafeInteger(rows[0].epoch) && rows[0].epoch > 0
         && ['active','paused'].includes(rows[0].status) && root?.role === 'coordinator', 'CAPACITY_DATABASE');
       const policy = JSON.parse(rows[0].policy);
-      check(typeof policy.mission === 'string' && Number.isSafeInteger(policy.budgetCents) && policy.budgetCents >= 0, 'CAPACITY_DATABASE');
+      try { validateGrowthPolicy(policy); } catch { check(false, 'CAPACITY_DATABASE'); }
     } else {
       const rows = database.prepare('SELECT id,limit_cents,currency FROM spending_policy').all();
       check(rows.length === 1 && rows[0].id === 1 && rows[0].currency === 'USD'

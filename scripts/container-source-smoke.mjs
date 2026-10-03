@@ -68,6 +68,7 @@ try{
   assert.equal(checks.restoreReady.status.archiveSha256,checks.capture.archiveSha256);await delay(3000);
   checks.restored=await exec(child,'/fixture/container-source-native.mjs','inspect-restore');checks.sourceAfter=await exec(source,'/fixture/container-source-native.mjs','inspect-source');
   checks.brokerPrepared=await exec(anchor,'/app/scripts/container-source-fixture.mjs','prepare-broker');
+  assert.equal(checks.brokerPrepared.growthPolicy.schemaVersion,2);assert.equal(checks.brokerPrepared.growthPolicy.growthMode,'budget-only');assert.equal(checks.brokerPrepared.growthPolicy.maxCells,null);assert.equal(checks.brokerPrepared.growthPolicy.maxDepth,null);assert.equal(checks.brokerPrepared.grantSchemaVersion,2);assert.equal(checks.brokerPrepared.growthTransition.control.status,'paused');
   ({container:broker}=await run('capacity-broker',image.Id,['--network','container:'+anchor.id,...hardened,...mount(authority,'/authority')],['capacity-broker','--private-module','/app/deploy/private-files.mjs','--profile','/authority/broker.private.json'],{detached:true}));
   checks.brokerReady=await brokerState(rows=>rows.some(r=>r.ready===true&&r.scope==='standing-grant-capacity-broker'));
   checks.peerAcknowledgement=await exec(anchor,'/app/scripts/container-source-fixture.mjs','send-broker');assert.equal(checks.peerAcknowledgement.state,'acknowledged');

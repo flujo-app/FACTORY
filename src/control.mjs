@@ -6,6 +6,7 @@ import { safeReceipt } from './receipts.mjs';
 import { consumeGitRefusalProof } from './git-effect.mjs';
 import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
+import { validateGrowthPolicy } from './growth-policy.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -22,10 +23,22 @@ function canonical(value) {
 }
 export function digest(value) { return createHash('sha256').update(canonical(value)).digest('hex'); }
 function tokenHash(value) { return createHash('sha256').update(String(value)).digest('hex'); }
+function capacityGrowthPolicy(policy) {
+  const keys = ['schemaVersion','grantId','generation','expiresAt','maxChildren','maxBudgetCents','allowedRoles','template','paid','native'];
+  if (policy?.schemaVersion === 2) keys.push('growthMode');
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy) || Object.keys(policy).length !== keys.length
+      || keys.some(key => !Object.hasOwn(policy,key)) || !Number.isSafeInteger(policy.maxBudgetCents) || policy.maxBudgetCents < 0
+      || !(policy.schemaVersion === 1 && Number.isSafeInteger(policy.maxChildren) && policy.maxChildren >= 1 && policy.maxChildren <= 1000
+        || policy.schemaVersion === 2 && policy.growthMode === 'budget-only' && policy.maxChildren === null)) {
+    fail('CAPACITY_GRANT', 'Capacity grant growth policy is inconsistent.');
+  }
+  return policy;
+}
 function capacityRecord(row) {
   if (!row) return null;
   const record = JSON.parse(row.details), { grantDigest, ...binding } = record;
-  if (record.format !== 'factory-capacity-grant' || record.schemaVersion !== 1
+  const policy = capacityGrowthPolicy(record.policy);
+  if (record.format !== 'factory-capacity-grant' || record.schemaVersion !== policy.schemaVersion
       || digest(binding) !== grantDigest || record.policy.grantId !== row.subject) fail('CAPACITY_GRANT', 'Capacity grant history is inconsistent.');
   return record;
 }
@@ -198,17 +211,80 @@ export class FactoryControl {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   event(type, subject, details = {}) { this.db.prepare('INSERT INTO events(type,subject,details,observed) VALUES(?,?,?,?)').run(type, subject, canonical(details), this.clock()); }
-  control() { const row = this.db.prepare('SELECT * FROM control WHERE id=1').get(); if (!row) fail('UNINITIALIZED', 'Initialize the factory first.'); return { ...row, policy: JSON.parse(row.policy) }; }
+  control() {
+    const row = this.db.prepare('SELECT * FROM control WHERE id=1').get();
+    if (!row) fail('UNINITIALIZED', 'Initialize the factory first.');
+    let policy;
+    try { policy = validateGrowthPolicy(JSON.parse(row.policy)); }
+    catch { fail('POLICY', 'The durable factory growth policy is invalid.'); }
+    integer(row.epoch, 'factory epoch', 1);
+    if (!['active','paused'].includes(row.status)) fail('POLICY', 'The durable factory status is invalid.');
+    return { ...row, policy };
+  }
   active() { const control = this.control(); if (control.status !== 'active') fail('PAUSED', 'Factory is paused.'); return control; }
-  initialize({ mission, budgetCents, maxCells = 4, maxDepth = 2 }) {
+  initialize(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID','An initialization policy is required.');
+    const { mission, budgetCents } = input;
     if (typeof mission !== 'string' || !mission.trim()) fail('INVALID', 'Mission is required.');
-    const policy = { mission, budgetCents: integer(budgetCents, 'budgetCents'), maxCells: integer(maxCells, 'maxCells', 1), maxDepth: integer(maxDepth, 'maxDepth') };
+    let policy;
+    if (Object.hasOwn(input, 'growthMode')) {
+      if (input.growthMode !== 'budget-only' || ['maxCells','maxDepth'].some(key => Object.hasOwn(input,key) && input[key] !== null)) {
+        fail('INVALID', 'Budget-only growth cannot include numeric cell or depth ceilings.');
+      }
+      policy = { schemaVersion:2,mission,budgetCents:integer(budgetCents,'budgetCents'),growthMode:'budget-only',maxCells:null,maxDepth:null };
+    } else {
+      const { maxCells = 4, maxDepth = 2 } = input;
+      policy = { mission,budgetCents:integer(budgetCents,'budgetCents'),maxCells:integer(maxCells,'maxCells',1),maxDepth:integer(maxDepth,'maxDepth') };
+    }
     return this.transaction(() => {
       const previous = this.db.prepare('SELECT * FROM control WHERE id=1').get();
       if (previous) { if (previous.policy !== canonical(policy)) fail('CONFLICT', 'Factory already has a different policy.'); return this.control(); }
       this.db.prepare('INSERT INTO control VALUES(1,1,?,?)').run('active', canonical(policy));
       this.db.prepare('INSERT INTO cells(id,parent_id,depth,role,allocation,status,purpose,heartbeat) VALUES(?,NULL,0,?,?,?, ?,?)').run('root', 'coordinator', budgetCents, 'ready', mission, this.clock());
       this.event('initialized', 'root', policy); return this.control();
+    });
+  }
+  /** Trusted local policy change. It revokes old authority without changing any work or reopening admission. */
+  useBudgetOnlyGrowth(input) {
+    const request = closureInput(input, ['transitionId','expectedFactoryEpoch','expectedPolicyDigest']);
+    id(request.transitionId); integer(request.expectedFactoryEpoch,'expectedFactoryEpoch',1);
+    if (typeof request.expectedPolicyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(request.expectedPolicyDigest)) fail('INVALID','An exact previous policy digest is required.');
+    const requestDigest = digest(request);
+    return this.transaction(() => {
+      const current = this.control();
+      if (current.status !== 'paused') fail('PAUSED','Pause admission before changing the growth policy.');
+      const rows = this.db.prepare("SELECT details FROM events WHERE type='growth_policy_changed' AND subject=?").all(request.transitionId);
+      if (rows.length > 1) fail('POLICY_HISTORY','Growth transition history is inconsistent.');
+      if (rows.length) {
+        let record;
+        try { record = JSON.parse(rows[0].details); }
+        catch { fail('POLICY_HISTORY','Growth transition history is invalid.'); }
+        const keys=['format','schemaVersion','transitionId','request','requestDigest','previousFactoryEpoch','factoryEpoch','beforePolicy','beforePolicyDigest','afterPolicy','afterPolicyDigest','transitionDigest'];
+        if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).length !== keys.length || keys.some(key=>!Object.hasOwn(record,key))) fail('POLICY_HISTORY','Growth transition history is invalid.');
+        const {transitionDigest,...binding}=record;
+        if (digest(binding)!==transitionDigest) fail('POLICY_HISTORY','Growth transition history digest is invalid.');
+        if (record.requestDigest !== requestDigest || canonical(record.request) !== canonical(request)) fail('CONFLICT','Growth transition identity is already bound to another request.');
+        let before, after;
+        try { before = validateGrowthPolicy(record.beforePolicy); after = validateGrowthPolicy(record.afterPolicy); }
+        catch { fail('POLICY_HISTORY','Growth transition policy history is invalid.'); }
+        if (record.format !== 'factory-growth-policy-transition' || record.schemaVersion !== 1 || record.transitionId !== request.transitionId
+            || record.beforePolicyDigest !== digest(before) || record.beforePolicyDigest !== request.expectedPolicyDigest
+            || record.afterPolicyDigest !== digest(after) || record.afterPolicyDigest !== digest(current.policy)
+            || before.schemaVersion !== undefined || after.schemaVersion !== 2 || before.mission !== after.mission || before.budgetCents !== after.budgetCents
+            || record.previousFactoryEpoch !== request.expectedFactoryEpoch || !Number.isSafeInteger(record.factoryEpoch)
+            || record.factoryEpoch !== record.previousFactoryEpoch + 1 || current.epoch < record.factoryEpoch) fail('POLICY_HISTORY','Growth transition history does not match the durable policy.');
+        return { control:current,transition:record,replayed:true };
+      }
+      if (current.epoch !== request.expectedFactoryEpoch || digest(current.policy) !== request.expectedPolicyDigest) fail('STALE','Factory epoch or growth policy changed before transition.');
+      if (current.policy.schemaVersion === 2) fail('STATE','The factory already uses budget-only growth.');
+      const factoryEpoch = integer(current.epoch + 1,'factory epoch',1);
+      const afterPolicy = validateGrowthPolicy({schemaVersion:2,mission:current.policy.mission,budgetCents:current.policy.budgetCents,growthMode:'budget-only',maxCells:null,maxDepth:null});
+      const binding = {format:'factory-growth-policy-transition',schemaVersion:1,transitionId:request.transitionId,request,requestDigest,
+        previousFactoryEpoch:current.epoch,factoryEpoch,beforePolicy:current.policy,beforePolicyDigest:digest(current.policy),afterPolicy,afterPolicyDigest:digest(afterPolicy)};
+      const transition={...binding,transitionDigest:digest(binding)};
+      this.db.prepare('UPDATE control SET policy=?,epoch=? WHERE id=1').run(canonical(afterPolicy),factoryEpoch);
+      this.event('growth_policy_changed',request.transitionId,transition);
+      return {control:this.control(),transition,replayed:false};
     });
   }
   reserveCell(input) { return this.transaction(() => this.#reserveCell(input)); }
@@ -223,11 +299,21 @@ export class FactoryControl {
       }
       const parent = this.db.prepare('SELECT * FROM cells WHERE id=? AND status IN (\'ready\',\'reserved\')').get(parentId);
       if (!parent) fail('PARENT', 'Admitted parent is required.');
-      const count = this.db.prepare("SELECT count(*) AS n FROM cells WHERE status!='retired'").get().n;
-      if (count >= control.policy.maxCells || parent.depth + 1 > control.policy.maxDepth) fail('CAPACITY', 'Cell count or delegation depth would exceed policy.');
-      const allocated = this.db.prepare("SELECT coalesce(sum(allocation),0) AS n FROM cells WHERE parent_id=? AND status!='retired'").get(parentId).n;
-      if (parent.spent + allocated + budgetCents > parent.allocation) fail('BUDGET', 'Insufficient unallocated parent budget.');
-      this.db.prepare('INSERT INTO cells(id,parent_id,depth,role,allocation,status,purpose,heartbeat) VALUES(?,?,?,?,?,?,?,?)').run(cellId,parentId,parent.depth+1,role,budgetCents,'reserved',purpose,this.clock());
+      const depth = integer(integer(parent.depth,'parent depth') + 1,'child depth');
+      integer(parent.spent,'parent spent'); integer(parent.allocation,'parent allocation');
+      if (control.policy.schemaVersion === 2) {
+        let allocated = 0n;
+        for (const child of this.db.prepare("SELECT allocation FROM cells WHERE parent_id=? AND status!='retired'").iterate(parentId)) {
+          allocated += BigInt(integer(child.allocation,'child allocation'));
+        }
+        if (BigInt(parent.spent) + allocated + BigInt(budgetCents) > BigInt(parent.allocation)) fail('BUDGET','Insufficient unallocated parent budget.');
+      } else {
+        const count = this.db.prepare("SELECT count(*) AS n FROM cells WHERE status!='retired'").get().n;
+        if (count >= control.policy.maxCells || depth > control.policy.maxDepth) fail('CAPACITY', 'Cell count or delegation depth would exceed policy.');
+        const allocated = this.db.prepare("SELECT coalesce(sum(allocation),0) AS n FROM cells WHERE parent_id=? AND status!='retired'").get(parentId).n;
+        if (parent.spent + allocated + budgetCents > parent.allocation) fail('BUDGET', 'Insufficient unallocated parent budget.');
+      }
+      this.db.prepare('INSERT INTO cells(id,parent_id,depth,role,allocation,status,purpose,heartbeat) VALUES(?,?,?,?,?,?,?,?)').run(cellId,parentId,depth,role,budgetCents,'reserved',purpose,this.clock());
       this.event('cell_reserved', cellId, { parentId, role, budgetCents });
       return this.db.prepare('SELECT * FROM cells WHERE id=?').get(cellId);
   }
@@ -235,12 +321,15 @@ export class FactoryControl {
   issueCapacityGrant(lease, record) {
     const { grantDigest, ...binding } = record;
     id(record.policy?.grantId); integer(record.policy?.generation, 'generation', 1);
-    if (record.format !== 'factory-capacity-grant' || record.schemaVersion !== 1 || digest(binding) !== grantDigest
+    capacityGrowthPolicy(record.policy);
+    if (record.format !== 'factory-capacity-grant' || record.schemaVersion !== record.policy.schemaVersion || digest(binding) !== grantDigest
         || record.policy.generation !== record.transport?.generation) fail('CAPACITY_GRANT', 'An exact capacity policy binding is required.');
     return this.transaction(() => {
       this.#capacityAuthority(lease, record);
+      if (record.policy.schemaVersion === 2 && this.control().policy.schemaVersion !== 2) fail('CAPACITY_GRANT','Budget-only grants require an explicit budget-only factory.');
       integer(record.inboxFloor, 'inboxFloor');
       const previous = this.capacityGrant(record.policy.grantId);
+      if (previous && (previous.policy.schemaVersion !== record.policy.schemaVersion || previous.policy.growthMode !== record.policy.growthMode)) fail('CONFLICT','A grant identity cannot change its growth mode.');
       if (previous?.policy.generation === record.policy.generation) {
         const { inboxFloor: oldFloor, grantDigest: oldDigest, ...oldPolicy } = previous;
         const { inboxFloor: newFloor, grantDigest: newDigest, ...newPolicy } = record;
@@ -265,14 +354,14 @@ export class FactoryControl {
   }
   #capacityQuota(grant, additionalBudget) {
     const p = grant.policy;
-    integer(p.maxChildren, 'maxChildren', 1); integer(p.maxBudgetCents, 'maxBudgetCents');
-    let count = 0, budget = 0n;
+    capacityGrowthPolicy(p);
+    let count = 0n, budget = 0n;
     for (const row of this.db.prepare("SELECT details FROM events WHERE type='capacity_admitted' AND subject=?").iterate(p.grantId)) {
       const admission = JSON.parse(row.details);
       integer(admission.request.budgetCents, 'admitted budget');
       budget += BigInt(admission.request.budgetCents); count++;
     }
-    if (count + (additionalBudget === null ? 0 : 1) > p.maxChildren
+    if ((p.schemaVersion === 1 && count + (additionalBudget === null ? 0n : 1n) > BigInt(p.maxChildren))
         || budget + BigInt(additionalBudget ?? 0) > BigInt(p.maxBudgetCents)) fail('CAPACITY_GRANT_QUOTA', 'Standing grant count or logical budget is exhausted.');
   }
   #capacityBound(lease, { grantId, generation, grantDigest }) {
@@ -752,8 +841,8 @@ export class FactoryControl {
     });
   }
   inbox(cellId) { return this.db.prepare('SELECT * FROM messages WHERE recipient=? ORDER BY created,message_id').all(id(cellId)).map(row=>({...row,payload:JSON.parse(row.payload)})); }
-  pause() { return this.transaction(() => { const old=this.control(); if(old.status==='active'){this.db.prepare('UPDATE control SET status=?,epoch=epoch+1 WHERE id=1').run('paused');this.event('paused','root');} return this.status(); }); }
-  resume() { return this.transaction(() => {const old=this.control();if(old.status==='paused'){this.db.prepare('UPDATE control SET status=?,epoch=epoch+1 WHERE id=1').run('active');this.event('resumed','root');}return this.status();}); }
+  pause() { return this.transaction(() => { const old=this.control(); if(old.status==='active'){this.db.prepare('UPDATE control SET status=?,epoch=? WHERE id=1').run('paused',integer(old.epoch+1,'factory epoch',1));this.event('paused','root');} return this.status(); }); }
+  resume() { return this.transaction(() => {const old=this.control();if(old.status==='paused'){this.db.prepare('UPDATE control SET status=?,epoch=? WHERE id=1').run('active',integer(old.epoch+1,'factory epoch',1));this.event('resumed','root');}return this.status();}); }
   status() {
     const control=this.control(), cells=this.db.prepare('SELECT * FROM cells ORDER BY id').all(), tasks=this.db.prepare('SELECT id FROM tasks ORDER BY id').all().map(row=>this.task(row.id));
     const effects=this.db.prepare('SELECT key FROM effects ORDER BY created,key').all().map(row=>this.effect(row.key));

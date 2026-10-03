@@ -11,7 +11,7 @@ import { createManagedCloudAdapter } from '../src/adapters/managed-cloud.mjs';
 import * as files from '../deploy/private-files.mjs';
 import { captureSnapshot } from '../deploy/managed-cloud/lib/snapshot.mjs';
 import { encryptSnapshot } from '../deploy/managed-cloud/lib/envelope.mjs';
-import { FactoryControl } from '../src/control.mjs';
+import { FactoryControl,digest } from '../src/control.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
 import { PeerStore,createPairConfigurations } from '../src/peer-messaging.mjs';
 import { issueCapacityGrant,enqueueCapacityRequest } from '../src/capacity-bridge.mjs';
@@ -89,9 +89,12 @@ async function prepareBroker(){
     b:{identity:{factoryId:'clone-fixture',cellId:'broker'},endpoint:'http://127.0.0.1:3004/v1/peer/messages'},credentialExpiresAt:Date.now()+1800000});
   const control=new FactoryControl(AUTHORITY+'/control.sqlite'),paid=new SpendingLedger(AUTHORITY+'/paid.sqlite');let sender,receiver;
   try{
+    control.pause();const originalPolicy=control.control();
+    const growthTransition=control.useBudgetOnlyGrowth({transitionId:'clone-budget-growth',expectedFactoryEpoch:originalPolicy.epoch,expectedPolicyDigest:digest(originalPolicy.policy)});
+    assert.equal(growthTransition.control.status,'paused');assert.equal(growthTransition.control.policy.growthMode,'budget-only');control.resume();
     control.createTask({taskId:'capacity-fixture',projectId:'fixture',branch:'codex/capacity-fixture',specification:{problem:'Refuse deployment when the same fixture authority has no free paid funds',acceptance:['No provider operation'],baseline:s.operation}});
     const lease=control.claimTask('capacity-fixture','root',1200000);
-    const grant={schemaVersion:1,grantId:'clone-grant',generation:1,lease,expiresAt:lease.expires,maxChildren:2,maxBudgetCents:1000,allowedRoles:['developer'],native:s.worker,
+    const grant={schemaVersion:2,growthMode:'budget-only',grantId:'clone-grant',generation:1,lease,expiresAt:lease.expires,maxChildren:null,maxBudgetCents:1000,allowedRoles:['developer'],native:s.worker,
       template:{source:'http://127.0.0.1:4200',workspace:s.worker.workspace,image:'registry.invalid/fixture@sha256:'+'a'.repeat(64),org:'synthetic',region:'iad',appPrefix:'clone-fixture',flowIds:[s.flow.id]},paid:{provider:'fly',ceilingCents:500}};
     await write(AUTHORITY+'/sender.private.json',config.a);await write(AUTHORITY+'/receiver.private.json',config.b);
     sender=new PeerStore(AUTHORITY+'/sender.sqlite',{config:config.a});receiver=new PeerStore(AUTHORITY+'/receiver.sqlite',{config:config.b});
@@ -104,7 +107,7 @@ async function prepareBroker(){
     paid.reserve({reservationId:'fully-held-fixture',provider:'synthetic',ceilingCents:10000});
     const outbox=enqueueCapacityRequest({store:sender,grant:issued.policy,request:{requestId:'budget-refused',role:'developer',budgetCents:500,purpose:'Unpaid deployment refusal acceptance'},nativeProof:s.worker});
     await write(AUTHORITY+'/outbox.private.json',{messageId:outbox.messageId});
-    return{prepared:true,originalAuthority:true,messageId:outbox.messageId,worker:s.worker,paidHeldCents:10000,unallocatedCents:0};
+    return{prepared:true,originalAuthority:true,messageId:outbox.messageId,worker:s.worker,paidHeldCents:10000,unallocatedCents:0,growthPolicy:control.control().policy,grantSchemaVersion:grant.schemaVersion,growthTransition};
   }finally{sender?.close();receiver?.close();paid.close();control.close();}
 }
 async function sendBroker(){
@@ -116,13 +119,15 @@ async function brokerAudit(){
   const control=new DatabaseSync(paths[0],{readOnly:true}),paid=new DatabaseSync(paths[1],{readOnly:true});let result;
   try{control.exec('PRAGMA query_only=ON;BEGIN;');paid.exec('PRAGMA query_only=ON;BEGIN;');
     const effects=control.prepare("SELECT key,request_digest,state,receipt FROM effects WHERE task_id='capacity-fixture'").all();
+    const growthPolicy=JSON.parse(control.prepare('SELECT policy FROM control WHERE id=1').get().policy),grant=JSON.parse(control.prepare("SELECT details FROM events WHERE type='capacity_grant_issued' AND subject='clone-grant' ORDER BY seq DESC LIMIT 1").get().details);
+    assert.equal(growthPolicy.schemaVersion,2);assert.equal(growthPolicy.growthMode,'budget-only');assert.equal(growthPolicy.maxCells,null);assert.equal(growthPolicy.maxDepth,null);assert.equal(grant.schemaVersion,2);assert.equal(grant.policy.schemaVersion,2);assert.equal(grant.policy.maxChildren,null);
     const reservations=paid.prepare('SELECT * FROM spending_reservations ORDER BY id').all(),policy=paid.prepare('SELECT * FROM spending_policy').all(),events=paid.prepare('SELECT * FROM spending_events ORDER BY seq').all();
     assert.equal(effects.length,1);assert.equal(effects[0].state,'not_applied');assert.equal(reservations.length,1);assert.equal(reservations[0].id,'fully-held-fixture');assert.equal(reservations[0].ceiling_cents,10000);assert.equal(reservations[0].state,'reserved');
     assert.equal(reservations[0].charged_cents,null);assert.equal(reservations[0].final_cents,null);assert.equal(policy.length,1);assert.equal(policy[0].id,1);assert.equal(policy[0].limit_cents,10000);assert.equal(policy[0].currency,'USD');
     assert.equal(events.length,2);assert.equal(events.at(-1).type,'reserved');assert.equal(events.at(-1).reservation_id,'fully-held-fixture');
     const managedEntries=await fs.readdir(AUTHORITY+'/managed').catch(e=>{if(e.code==='ENOENT')return[];throw e;});assert.deepEqual(managedEntries,[]);
     const trap=await fs.readFile(AUTHORITY+'/fly-invocations.private.log').catch(e=>{if(e.code==='ENOENT')return Buffer.alloc(0);throw e;});assert.equal(trap.length,0);
-    result={audited:true,effects:effects.map(e=>({...e,receipt:e.receipt?JSON.parse(e.receipt):null})),reservations,policy,events,noManagedAttempt:true,noPaidAdmission:true,flyInvocations:0,queryOnly:true};
+    result={audited:true,effects:effects.map(e=>({...e,receipt:e.receipt?JSON.parse(e.receipt):null})),reservations,policy,events,growthPolicy,grantSchemaVersion:grant.schemaVersion,noManagedAttempt:true,noPaidAdmission:true,flyInvocations:0,queryOnly:true};
   }finally{paid.close();control.close();}
   assert.deepEqual(await Promise.all(paths.map(async p=>sha(await fs.readFile(p)))),before);return result;
 }
