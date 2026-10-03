@@ -27,11 +27,23 @@ remains unknown and no new paid run is admitted. See
 Source commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` adopts the independently
 reviewed logical lifecycle subset and low-memory HTTP preparation. The combined
 188/188 qualification ran once in its isolated stage; adoption matched those
-source bytes after line-ending normalization, with no shared-suite rerun. The
+source bytes after line-ending normalization without another suite at that
+adoption. The
 HTTP download variant has not run in the cloud. Logical closure is implemented
 for task release and never-provision-bound leaf cells; provider-bound closure
-remains future work. The operator API still runs build `6fcd718` for the Fly
-controller, with commands disabled.
+remains future work. The existing operator API on port 4343 still runs build
+`6fcd718` for the Fly controller, with commands disabled.
+
+Source `67997585baa897bd7586fe21b9a755c89739a1a3` adds authenticated, read-only
+Modal journal observation with private operator configuration and independent
+content revisions. Its full combination passed **270/270**, exit 0, with unchanged
+source during execution. A separate local API on port 4344 projected all three
+actual journals and their 15 operations without changing their database/WAL bytes
+or paid accounting. All three prefetch outcomes remain unknown. This view reports
+persisted history rather than fresh provider status and does not establish model
+inference or native Flow success. See [MODAL_OBSERVATION.md](MODAL_OBSERVATION.md)
+for its separate contract and [QUALIFICATION.md](QUALIFICATION.md) for the exact
+test and live-witness records.
 
 ## Run locally
 

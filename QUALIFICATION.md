@@ -1,11 +1,14 @@
 # Factory qualification record
 
-Updated October 3, 2026. Current runtime source comes from
-`0948fdd9ff7f5d379982e6e7286fd220236a1993`, adopting the reviewed lifecycle/HTTP
-combination after R3 ended. Its **188/188** suite ran once in the isolated qualified
-stage, not again in the shared checkout. R3 used unchanged launch build `15d6c78`
+Updated October 3, 2026. Current runtime source is
+`67997585baa897bd7586fe21b9a755c89739a1a3`, adding authenticated read-only Modal
+journal observation. Its complete qualified suite passed **270/270** with recorded
+exit 0 and unchanged source hashes. The earlier lifecycle/HTTP adoption at
+`0948fdd9ff7f5d379982e6e7286fd220236a1993` retains its separate historical
+**188/188** isolated-stage qualification. R3 used unchanged launch build `15d6c78`
 (whose earlier source suite passed **162/162**) and ended without inference proof.
-The operator API continues to run its separately reported build `6fcd718`.
+The original API on port 4343 remains build `6fcd718`; a separate API on port 4344
+runs build `6799758` with an explicit Modal journal registry.
 
 ## Proven so far
 
@@ -56,6 +59,13 @@ that controller's pause. The shared paid projection covers both providers; it
 does not extend the controller's effect-drain or pause claim to Modal. The paid
 gate can fence the next dispatch but cannot itself cancel an already-running
 provider operation.
+
+The separate API on `127.0.0.1:4344`, build `6799758`, now exposes registered
+Modal journals through an authenticated observation route. Its persisted local
+operation records and independent paid-budget projection have their own scope;
+neither extends the Fly controller snapshot into Modal execution authority.
+The actual witness and source qualification are recorded below. The brain-online
+frontend has not opted into this new route, and port 4343 was not changed.
 
 Independent review cleared brain-online build
 `b811bbd2dd8f7682e9c5598845c8f23a84badf1d`: **23/23** targeted mounted-host,
@@ -393,11 +403,11 @@ Combined patch SHA-256:
 `d7620687dc89d2853eeec59487ddb3aedf93b098aeded9e2caba9ed052337544`.
 Artifact manifest SHA-256:
 `1eaa7fed6bf592e423c41a88cd77bb1fa3d3f11a02c769578653e3cddf86f897`.
-Current source commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` contains those exact
-11 reviewed files. Root's post-adoption proof and independent current validation
+Adoption commit `0948fdd9ff7f5d379982e6e7286fd220236a1993` contains those exact
+11 reviewed files. Root's post-adoption proof and independent validation at that time
 matched the 47 qualified stage files and 44 compared shared source files after
-line-ending normalization. No shared suite was rerun or extra runtime source
-changed. Post-adoption proof:
+line-ending normalization. That adoption did not rerun the shared suite or change
+extra runtime source. Post-adoption proof:
 `.factory/integration-stage/run-2026-10-03T01-49-59-785Z-offline/root-adoption-byte-verification.private.json`,
 SHA-256 `18e404b495883689e8d7f0b9d9370f76512b4c253a1bbe751491fa7eec2e0416`.
 The corrected source-bound logical-closure wrapper SHA-256 is
@@ -410,10 +420,61 @@ An authenticated local API witness at **02:38:50 UTC** confirms process build
 paused admission and `commands: false`. The independent paid revision is 17:
 four retired-meter-pending reservations, 10,000 held cents, zero unallocated,
 24 conservatively rounded partial cents, final spend null and billing incomplete.
-This API still exposes only the Fly execution controller; the separate Modal and
-documentation journals are absent. No API restart or enum/command change occurred.
+That port 4343 process still exposes only the Fly execution controller; the
+separate Modal and documentation journals are absent from its snapshot. Its
+process and snapshot/events contract were left unchanged when port 4344 started.
 Protected API witness SHA-256:
 `783750aa183be89c5295f87e6db00e9ccfec8ee11eb102fd5080e268ef0a427b`.
+
+## Modal journal observation qualification
+
+Source commit `67997585baa897bd7586fe21b9a755c89739a1a3` changes eight files for
+the sanitized reader, owner-private configuration, CLI, authenticated
+routes, tests and observation contract. The complete qualified suite ran on
+Node **24.19.0** from **03:03:58.026 to 03:04:15.886 UTC**, with explicit
+`--test-reporter=tap`: **270/270** passed, process exit 0, no failures, cancellations,
+skips or todos. All 45 recorded source files were unchanged before and after the
+execution. Qualification proof:
+`.factory/qualification/modal-observation-a54f8ad9-72d9-4958-8e28-35d5bbc3c2df/combined-qualification.private.json`,
+SHA-256 `e153fe33e5eda429724bc71c2a8802ae6c45419b8b58cf3674c2158b8de68e1d`.
+Saved TAP SHA-256:
+`dd86a68c945da941a9438a8cf39b339611169fd819081c420f6470b4f3aaa0bc`.
+
+An earlier execution's default spec output reported 270 passing checks, but its
+recorder failed after execution while expecting TAP, before persisting child exit
+and source inventory evidence. The source, raw output and private failure note
+were preserved; no product source changed. A justified repeat with the corrected
+recorder captured the complete evidence above. This new qualification was not a
+single execution, and it does not borrow the historical 188-test result.
+Preserved recorder-failure note SHA-256:
+`dee150fb46f0a84de4d69a81f523acca85574a907bf039d3582d3346f5f7989f`.
+
+A fresh authenticated HTTP witness at **03:05:45.936–03:05:46.130 UTC** checked
+the separately started `127.0.0.1:4344` API, reporting full build
+`67997585baa897bd7586fe21b9a755c89739a1a3` and factory ID `factory-live-pilot`.
+Both `/v1/modal-runs` and the factory-scoped route returned 200, exposing exactly
+three registered runs and 15 historical operation records. All three prefetch
+records remained unknown. The existing snapshot contract returned 200;
+unauthenticated access returned 401, POST 405, query parameters 400 and a wrong
+factory ID 404. Observed database logical states and main/WAL bytes were unchanged
+throughout the witness, which made zero provider calls. Protected witness:
+`.factory/viewer/modal-observation-witnesses/modal-api-211f3c38-0494-4146-b443-6524f63900a8.evidence.private.json`,
+SHA-256 `d73219e9fe4ee2566c2799f5f6856dec2986dced67fdbfe3a65cf53d0b22acb1`.
+
+This route explicitly reports `registered-modal-operation-journals` scope,
+`persisted-local-operation-journal` basis and provider freshness `not_observed`.
+Its content-SHA journal revisions are separate from the controller cursor and the
+numeric paid revision. Response read time does not establish fresh provider state.
+Successful historical cleanup records do not resolve unknown prefetch, prove
+current account-wide absence or establish inference/native FLUJO Flow success.
+The original port 4343 process remains build `6fcd718` and Fly-scoped; no frontend
+opt-in, new model call, speed measurement or additional paid attempt occurred.
+
+The witness's shared paid revision 17 reports four `retired-meter-pending`
+reservations, 10,000 held cents, zero unallocated cents, 24 conservatively rounded
+partial cents, final spend null and billing incomplete. Journal visibility and
+successful cleanup do not release those holds or establish final billing. The
+broader remaining proofs below stay unresolved.
 
 ## Remaining proofs
 

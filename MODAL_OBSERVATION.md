@@ -63,3 +63,20 @@ qualified evidence supports settlement.
 The existing server on port 4343 and the brain-online adapter keep their
 snapshot/events contract. Any new frontend integration must explicitly opt into
 this separate endpoint and validate its scope and revision semantics.
+
+## Qualified local run
+
+Implementation build `67997585baa897bd7586fe21b9a755c89739a1a3` is running on
+`127.0.0.1:4344` with the three existing Modal pilot journals registered. Its
+full source combination passed 270/270 results, exit 0, with no skips or
+cancellations and unchanged source bytes during execution. The first recorder's
+text/TAP format mismatch was preserved before one corrected qualification run.
+
+An actual authenticated HTTP witness at 03:05:45.936–03:05:46.130 UTC on October 3
+returned all 15 historical operations with three unknown prefetch outcomes.
+Journal and spending contents and main/WAL bytes stayed unchanged. Shared paid
+revision 17 still holds all US$100, with no free admission capacity, 24 cents in
+conservatively rounded partial observations, and unknown final billing. No
+provider call, paid dispatch, inference, or native FLUJO Flow occurred in this
+verification. Exact evidence and remaining proofs are in
+[QUALIFICATION.md](QUALIFICATION.md).

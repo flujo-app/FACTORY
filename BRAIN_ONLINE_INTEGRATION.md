@@ -208,3 +208,47 @@ FACTORY inspected that narrow diff; the earlier independent 23-check execution
 applies specifically to build `b811bbd`, not this later commit. The owner reports
 28 checks plus typecheck/build passing and a fresh actual BFF read at 01:31 UTC.
 The PR remains unmerged and undeployed by FACTORY.
+
+## Separate Modal journal view
+
+A separate owned local API now runs on `http://127.0.0.1:4344`, implementation
+build `67997585baa897bd7586fe21b9a755c89739a1a3`. The existing port 4343 process,
+its build, and the brain-online adapter's snapshot/events integration stay as
+reported above. No frontend adoption of the new endpoint is implied.
+
+`GET /v1/factories/factory-live-pilot/modal-runs` (alias `/v1/modal-runs`) uses
+the same private bearer mechanism. Its scope is
+`registered-modal-operation-journals`, with
+`capabilities: {"observation": true, "commands": false}`. It exposes `modalRuns`
+and independently read `paidBudget`; it has no controller cursor or top-level
+numeric revision. The original snapshot/events envelope is unchanged. Consult
+[MODAL_OBSERVATION.md](MODAL_OBSERVATION.md) before adding a separate adapter.
+
+Each journal's `journalRevision` is an unordered SHA-256 content fingerprint.
+`basis: "persisted-local-operation-journal"` and
+`providerFreshness: "not_observed"` explicitly distinguish a record read from
+a new provider observation. Private request bindings are verified internally;
+request JSON, raw response text, credentials, endpoints, profile/workspace names,
+file paths, and private reconciliation proofs are excluded. A bad journal is
+unavailable individually. Controller unavailability does not prevent this route
+from returning healthy registered journals and the separately qualified budget.
+
+The actual authenticated check at **03:05:45.936–03:05:46.130 UTC, October 3**
+returned three registered runs and all 15 recorded operations. Every prefetch
+remains unknown; recorded App stops and Volume deletions remain separate historical
+outcomes. Authenticated alias/scoped reads and the existing snapshot returned 200;
+unauthenticated reads returned 401, writes 405, client path queries 400, and a
+different factory 404. Journal and spending state, including main/WAL bytes,
+stayed unchanged. No provider call or paid dispatch occurred. Paid revision 17
+retains all 10,000 cents, zero unallocated, 24 conservatively rounded partial
+cents, null final spend, and incomplete billing.
+
+The exact combination passed 270/270 full-suite results with exit 0, no skips or
+cancellations, and unchanged source. A first evidence recorder failed after its
+270 passing text-format results because it expected TAP; that output was preserved
+and one corrected qualification run recorded exit/source identity. This is a new
+combination's qualification, separate from the earlier isolated 188 result.
+Protected actual API witness SHA-256:
+`d73219e9fe4ee2566c2799f5f6856dec2986dced67fdbfe3a65cf53d0b22acb1`.
+Model inference, native FLUJO Flow execution, final billing, and budget release
+remain unproven.
