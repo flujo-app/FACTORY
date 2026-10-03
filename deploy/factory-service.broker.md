@@ -74,7 +74,15 @@ and source registration. Do not set `FLY_ACCESS_TOKEN`, which takes precedence
 over `FLY_API_TOKEN`, or unreviewed API URL overrides. Fly's
 [automation guidance](https://docs.fly.io/flyctl/integrating) describes these
 credentials. The private grant's exact organization, immutable image, roles,
-child count and logical/paid ceilings remain the authority for each request.
+schema-1 child count or explicit schema-2 budget-only mode, and logical/paid
+ceilings remain the authority for each request.
+
+Service startup never changes the policy or creates controller authority. For
+budget-only growth, use the trusted local paused CAS transition on the existing
+controller, then deliberately resume and issue a fresh task-bound schema-2 grant
+before preparing the private broker profile. Old grants remain historical and
+epoch-fenced; changing their growth mode requires a new grant ID. The commands
+and retained constraints are in [the growth guide](../BUDGET_GROWTH.md).
 
 For the container role, `sourceProfileFile` explicitly binds a native source;
 it avoids desktop registration files and PID assumptions across namespaces.

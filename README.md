@@ -28,6 +28,16 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
+Source `72aec7cd64ff7d55ba8c7cb31bf371dee8a88044` adds explicit budget-only growth:
+factory policy schema 2 removes cell-count and delegation-depth ceilings, and
+capacity grant schema 2 removes its child-count ceiling. Parent allocations,
+lifetime grant monetary ceilings and the shared SpendingLedger still constrain
+admission. The complete suite passed **456/456** and the focused suite **60/60**.
+Actual Docker capture/restore and schema-2 broker refusal/restart passed against
+a fully held fixture budget. The original live policy remains paused and
+unconverted. See [the growth guide](BUDGET_GROWTH.md) for the exact policy and
+trusted local migration commands.
+
 Source `fea3d151c1a4380495094744d00a33770b1abbb5` packages native-cell and
 capacity-broker roles over one private authority. The full suite passed
 **433/433**; the later fixture-only correction passed separate final-image
@@ -257,8 +267,10 @@ Replace `node` with `& $factoryNode` when using the bundled runtime.
 
 | Command | JSON input |
 | --- | --- |
-| `init` | `mission`, `budgetCents`, optional `maxCells`, `maxDepth` |
+| `init` | `mission`, `budgetCents`; legacy optional `maxCells`, `maxDepth`, or explicit `growthMode: "budget-only"` |
 | `status`, `pause`, `resume` | No input |
+| `growth-policy` | No input; read existing policy, epoch, status and policy digest |
+| `budget-growth` | `transitionId`, `expectedFactoryEpoch`, `expectedPolicyDigest`; existing paused authority only |
 | `reserve` | `cellId`, `budgetCents`, `purpose`; optional `parentId`, `role` |
 | `enroll` | `cellId` |
 | `task` | `taskId`, `projectId`, `branch`, `specification` |

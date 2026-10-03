@@ -9,11 +9,19 @@ recipient broker separately decides admission and provisioning.
 Only a trusted local operator can issue a standing grant. It binds the exact
 task lease, specification digest, attempt and controller epoch; peer pair,
 credential generation and an inbox sequence floor; allowed roles, lifetime,
-total child count and logical allocation; immutable image digest, source
+lifetime logical allocation and, for schema 1, total child count; immutable image digest, source
 workspace, selected Flows, organization and region; and a positive paid ceiling
 per request. For a native tool it also binds the worker's assigned workspace,
 encrypted snapshot hash and compatibility metadata. Historical advisory messages
 cannot acquire this grant retroactively. PeerStore remains an advisory transport.
+
+An explicit schema-2 grant requires `growthMode: "budget-only"` and
+`maxChildren: null`, plus every other existing grant field. It can only be issued
+under an explicit schema-2 factory policy. Schema 1 retains its positive child
+count ceiling, at most 1,000, even on a budget-only factory. A grant ID cannot
+change growth mode across credential generations; choose a new ID for that
+change. Lifetime monetary allocation accumulates across all generations,
+including refused or uncertain admitted requests. See [BUDGET_GROWTH.md](BUDGET_GROWTH.md).
 
 One controller transaction reserves the child, debits the grant quota and admits
 the unique provisioning effect. The broker then reserves and starts an allowance

@@ -15,8 +15,8 @@ constraints. Track accepted-delivery throughput as a complementary measure.
 
 The owner also wants a network of FLUJO instances that can provision further
 cloud instances, pursue different problems and competing approaches, communicate,
-and monitor each other. The proposed architecture is a federation with bounded
-delegation; see [the federation design](C:/Users/Moe/Documents/ChatGPT/FACTORY/FEDERATION.md).
+and monitor each other. The proposed architecture is a federation with delegated
+budget and explicit authority; see [the federation design](C:/Users/Moe/Documents/ChatGPT/FACTORY/FEDERATION.md).
 
 The factory should eventually govern its own routine work and improve its
 methods. The operating model below is a proposal, not an implemented system or
@@ -283,11 +283,20 @@ denominators and uncertainty; tokens, messages and commits are diagnostics.
 
 The owner authorized a total cloud pilot spending cap of **US$100**. The signed-in
 Fly account exposes one organization, `personal`, which owns the temporary pilot
-resources. The first live slice allows at most two workers and delegation depth
+resources. The first live slice allowed at most two workers and delegation depth
 two, with one bounded Flow call per worker and targeted retirement at the end.
 Logical allocations in the controller do not substitute for actual provider
 charges. The runner must constrain resource size, runtime and inference attempts,
 and preserve any unconfirmed cleanup for reconciliation.
+
+The owner subsequently requested no factory growth limits beyond budget.
+Source `72aec7cd64ff7d55ba8c7cb31bf371dee8a88044` implements an explicit trusted
+local policy choice: exact factory schema 2 stores
+`{schemaVersion:2,mission,budgetCents,growthMode:"budget-only",maxCells:null,maxDepth:null}`.
+Missing or malformed ceilings never imply that mode. Parent allocations, grant
+monetary ceilings, paid admission, leases and provenance remain enforced.
+Models and advisory peers cannot change the policy. The original live controller
+is still paused with its legacy policy; see [BUDGET_GROWTH.md](BUDGET_GROWTH.md).
 
 The local recovery pilot is executable in this repository. Its saved evidence at
 [the October 2 recovery report](C:/Users/Moe/Documents/ChatGPT/FACTORY/evidence/local-recovery-20261002/report.json)

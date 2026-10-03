@@ -85,8 +85,12 @@ before accepting work. Expiry disables new actions and triggers owned-resource
 reconciliation, evidence preservation and teardown according to policy.
 
 Recursive capacity is useful when it shortens the critical path or enables a
-valuable experiment. Start with a small fleet and a depth limit. The scheduler
-should also shrink idle capacity and account for provisioning/setup time.
+valuable experiment. Legacy policy retains finite fleet and depth ceilings.
+Explicit budget-only policy removes those ceilings while parent allocations,
+lifetime grant monetary ceilings and shared paid admission constrain each child.
+The scheduler should also shrink idle capacity and account for provisioning/setup
+time. The source implementation and paused migration are described in
+[BUDGET_GROWTH.md](BUDGET_GROWTH.md); the original live policy is unconverted.
 
 ## Talking is a durable protocol
 

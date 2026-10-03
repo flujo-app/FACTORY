@@ -1,7 +1,61 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`fea3d151c1a4380495094744d00a33770b1abbb5`. The complete Node 24.19.0 suite passed
+`72aec7cd64ff7d55ba8c7cb31bf371dee8a88044`. Its complete Node 24.19.0 suite
+passed **456/456**, actual child 26652, from 14:09:46.435 to 14:15:29.565 UTC,
+exit 0/null signal and zero failures, cancellations, skips or todos. The focused
+suite passed **60/60**, actual child 44372, exit 0/null. All 139 frozen inputs
+retained their hashes throughout both runs and the final Docker build/acceptance.
+
+Explicit factory policy schema 2 removes the cell-count and depth ceilings;
+explicit capacity grant schema 2 removes the child-count ceiling. The new 23
+cases exercise 1,001 authenticated SQLite fixture admissions, lifetime monetary
+allocation across credential rotations, legacy finite limits, fully held shared
+paid-budget refusal, retained uncertain holds, actual process races, and paused
+CAS migration with exact replay, history preservation and stale-authority fencing.
+Parent allocations, lifetime grant monetary ceilings and paid admission remain
+enforced. Malformed or missing limits fail closed. See [BUDGET_GROWTH.md](BUDGET_GROWTH.md).
+
+The local factory image is
+`sha256:04b28196a596ad58ca2f0a78bf011a05082fbe4900d6f6eb5f58c1e77b11ba69`.
+Actual build child 17452 and clone/broker child 14792 closed 0/null. The owned
+fixture transitioned while paused from epoch 2 to 3, resumed explicitly and
+issued a schema-2 grant. The packaged broker refused against the original fully
+held 10,000-cent fixture ledger before a ManagedCloud attempt or Fly invocation.
+Actual broker restart preserved one `not_applied` effect and the same two paid
+events. Authenticated snapshot finalize captured 4,189 bytes containing five
+declared workspace files plus the manifest; a fresh encrypted envelope restored
+a second native worker with preserved configuration and dormant copied schedules.
+Both workers exposed the inert MCP tool; zero tool calls, conversations or
+schedule runs occurred. All nine owned containers and four volumes were removed,
+with stopped processes exiting 0 and no OOM or forced kill. All 140 Docker
+commands and 280 retained raw captures were independently reviewed.
+
+Adoption copied exactly ten changed files, preserved 129 original files byte for
+byte and retained all 139 raw inputs under
+`.factory/budget-growth-20261003/qualified-source`. All 139 runtime-commit files
+match qualified content after LF normalization; the ten adopted working files
+also match their raw hashes. Subsequent Markdown edits leave the 123 non-Markdown
+runtime/build/test files unchanged. The original controller and spending main-file
+hashes remained unchanged. Its live controller stays paused at legacy policy;
+the API was neither restarted nor freshly health-checked by this increment.
+All US$100 remains held with zero available paid admission and final billing unknown.
+
+Evidence under `.factory/budget-growth-20261003`:
+
+- Full-suite witness SHA256: `b03f1ba5d8cd54891190c9345be4069264fc8442d40eabe33667da07e413c836`.
+- Build witness SHA256: `5b356f5b60a1a4f418a9e13fe9d706900459dfe44279f9b2d0f49537b5024a47`.
+- Clone/broker execution SHA256: `6e649dcdd1efb3b32269c2a73730321cfe8ebf77f7d325d6b0f875b4269d67f7`.
+
+This establishes local policy/admission and packaged fixture behavior. No live
+growth activation, successful paid deployment, GPU inference, recursive cloud
+enrollment, remote shared authority or development-speed improvement was proved.
+The earlier native-cell service restart proof below applies to its recorded
+runtime/image; that separate proof was not rerun on the new growth image.
+
+## Earlier container capacity service qualification
+
+Source `fea3d151c1a4380495094744d00a33770b1abbb5` passed the complete suite
 **433/433**, actual child 40736, exit 0/null signal, with no failed, skipped,
 cancelled or todo results. Its 135 frozen inputs include the production source
 profile binding, broker startup, vendored ManagedCloud and pinned Fly CLI packaging.
