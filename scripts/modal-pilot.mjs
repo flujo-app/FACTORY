@@ -12,7 +12,7 @@ import { minimalFlow as astraFlow } from './cloud-pilot.mjs';
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const CONFIG_PATH = path.join(ROOT, 'modal', 'config.json');
 const WORKSPACE = 'factory-pilot';
-const SAFE_FIELDS = ['state', 'operation', 'appId', 'volumeId', 'serveFunctionId', 'prefetchFunctionId',
+const SAFE_FIELDS = ['state', 'operation', 'appId', 'volumeId', 'volumeFsVersion', 'serveFunctionId', 'prefetchFunctionId',
   'elapsedMs', 'status', 'promptTokens', 'completionTokens', 'totalTokens', 'runningContainers', 'observedAt',
   'knownMeteredCents', 'resourceRows', 'ownedObjectCount', 'final', 'tokenStoredPrivately', 'alreadyStopped'];
 const select = (value, fields = SAFE_FIELDS) => Object.fromEntries(fields.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]));
@@ -99,7 +99,7 @@ export function modalFlow(options) {
   const node = (id, type, properties = {}) => ({ id, type, position: { x: 0, y: 0 }, data: { type, label: type, properties } });
   const nodes = [node('start', 'start'), node('process', 'process', {
     boundModel: options.modelId, promptTemplate: 'Return only the requested JSON. Use no tools or questions.',
-    inputMode: 'full-history', allowQuestion: false,
+    inputMode: 'full-history', allowQuestion: false, maxTokens: 64,
   }), node('finish', 'finish')];
   const edge = (from, to) => ({ id: `${from.id}-${to.id}`, source: from.id, target: to.id,
     sourceHandle: `${from.type}-bottom`, targetHandle: `${to.type}-top`, type: 'custom', data: { edgeType: 'standard' } });
@@ -184,7 +184,7 @@ function pythonDriver(options, config) {
 }
 
 function identityOf(source) { return { origin: source.source, instanceId: source.instanceId, appRoot: source.appRoot, dataRoot: source.dataRoot }; }
-async function sourceContext(options, context, { allowOwn = false, resources = {} } = {}) {
+async function sourceContext(options, context, { allowOwn = false, resources = {}, ownedFlow } = {}) {
   const evidence = JSON.parse(await privateRead(options.sourceEvidencePath));
   if (evidence.fixtureAlreadyExists !== false) fail('ORIGINAL_WORKSPACE_OWNERSHIP_REQUIRED');
   const source = await context.managed.source({ source: options.source });
@@ -204,7 +204,7 @@ async function sourceContext(options, context, { allowOwn = false, resources = {
     } else fail('UNEXPECTED_FIXTURE_MODEL');
   }
   for (const flow of flows) {
-    const expected = flow.id === 'factory-pilot-flow' ? astraFlow() : allowOwn && flow.id === options.flowId ? modalFlow(options) : null;
+    const expected = flow.id === 'factory-pilot-flow' ? astraFlow() : allowOwn && flow.id === options.flowId ? ownedFlow : null;
     if (!expected || digest(select(flow, ['id', 'name', 'nodes', 'edges'])) !== digest(expected) || !noAttachments(flow)) fail('FIXTURE_FLOW_CHANGED');
   }
   return { source, models, flows, identity: identityOf(source), originalModelCount: models.filter(item => item.id === 'factory-pilot-model').length,
@@ -213,9 +213,10 @@ async function sourceContext(options, context, { allowOwn = false, resources = {
 
 export async function prepareModalPilot(input = {}, dependencies = {}) {
   const options = optionsFor(input), context = await contextFor(options, dependencies);
+  if (context.config.volumeFsVersion !== 2) fail('INVALID_VOLUME_FS_VERSION');
   modalBridgeTimeoutMs('prefetch', context.config);
   const local = await sourceContext(options, context);
-  const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']) });
+  const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']), volumeFsVersion: context.config.volumeFsVersion });
   if (modal.state !== 'prepared' || !modal.credentialsAccepted || modal.environment !== 'main' || !modal.profile || !modal.workspaceName) fail('MODAL_PROFILE_UNVERIFIED');
   return { mode: 'prepare-read-only', options, config: context.config, profile: modal.profile, workspaceName: modal.workspaceName, source: local.identity,
     originalModelCount: local.originalModelCount, originalFlowCount: local.originalFlowCount,
@@ -224,21 +225,48 @@ export async function prepareModalPilot(input = {}, dependencies = {}) {
     enforcement: 'Shared durable reservation/admission; no App-specific provider spending cap or final meter claim.' };
 }
 
-async function boundedText(response, maximum = 1024 * 1024) {
+function readWithSignal(reader, signal) {
+  if (!signal) return reader.read();
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const aborted = () => reject(signal.reason);
+    signal.addEventListener('abort', aborted, { once: true });
+    reader.read().then(value => { signal.removeEventListener('abort', aborted); resolve(value); },
+      error => { signal.removeEventListener('abort', aborted); reject(error); });
+  });
+}
+
+async function boundedText(response, maximum = 1024 * 1024, signal) {
   const reader = response.body?.getReader();
   if (!reader) return '';
-  const chunks = []; let bytes = 0;
+  const chunks = []; let bytes = 0, cancel = false;
   try {
-    while (true) { const value = await reader.read(); if (value.done) break; bytes += value.value.length; if (bytes > maximum) fail('OVERSIZED_PRIVATE_RESPONSE'); chunks.push(value.value); }
+    while (true) { const value = await readWithSignal(reader, signal); if (value.done) break; bytes += value.value.length; if (bytes > maximum) fail('OVERSIZED_PRIVATE_RESPONSE'); chunks.push(value.value); }
+    signal?.throwIfAborted();
     return Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8');
-  } finally { reader.releaseLock(); if (bytes > maximum) await response.body?.cancel().catch(() => {}); }
+  } catch (error) { cancel = true; throw error; }
+  finally { if (cancel) void reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
-export function completionEvidence(body, { flujo = false } = {}) {
+
+function modalResultUrl(location, original) {
+  if (typeof location !== 'string' || !location) fail('INVALID_RESULT_URL');
+  let result;
+  try { result = new URL(location, original); } catch { fail('INVALID_RESULT_URL'); }
+  if (result.protocol !== 'https:' || result.origin !== original.origin || result.pathname !== original.pathname
+      || !result.search || result.username || result.password || result.href.includes('#')) fail('INVALID_RESULT_URL');
+  return result;
+}
+export function completionEvidence(body, { flujo = false, expectedModel } = {}) {
   const value = JSON.parse(body), choice = value.choices?.[0];
-  if (value.object !== 'chat.completion' || !['stop', 'length'].includes(choice?.finish_reason) || typeof choice?.message?.content !== 'string'
+  if (value.object !== 'chat.completion' || !Array.isArray(value.choices) || value.choices.length !== 1
+      || choice.index !== 0 || choice.finish_reason !== 'stop' || choice.message?.role !== 'assistant'
+      || typeof choice.message.content !== 'string' || typeof expectedModel !== 'string' || !expectedModel
+      || value.model !== expectedModel || choice.message.function_call != null
+      || (choice.message.tool_calls != null && (!Array.isArray(choice.message.tool_calls) || choice.message.tool_calls.length !== 0))
       || (flujo && value.status !== 'completed')) fail('NONTERMINAL_COMPLETION');
   const answer = JSON.parse(choice.message.content);
-  if (answer?.checkpoint !== 'ready') fail('SMOKE_ACCEPTANCE_FAILED');
+  if (!answer || Array.isArray(answer) || typeof answer !== 'object' || Object.keys(answer).length !== 1
+      || answer.checkpoint !== 'ready') fail('SMOKE_ACCEPTANCE_FAILED');
   const tokens = value.usage ?? {};
   return { state: 'generation-completed', promptTokens: Number.isSafeInteger(tokens.prompt_tokens) ? tokens.prompt_tokens : undefined,
     completionTokens: Number.isSafeInteger(tokens.completion_tokens) ? tokens.completion_tokens : undefined,
@@ -252,6 +280,8 @@ export async function runModalPilot(input = {}, dependencies = {}) {
   const lockPath = path.join(options.runDirectory, 'modal-pilot.lock');
   const lock = await open(lockPath, 'wx', 0o600).catch(() => fail('RUN_LOCKED'));
   let journal, spending, ownsSpending = false, startedAt = context.clock(), failure = null, prepared, source, finalReport;
+  let runVolumeFsVersion = context.config.volumeFsVersion;
+  let runFlow = modalFlow(options);
   const attemptId = randomUUID();
   const events = [], cleanup = [], privateEvents = path.join(options.runDirectory, 'events.private.jsonl');
   const notify = async (operation, result = {}) => {
@@ -263,7 +293,8 @@ export async function runModalPilot(input = {}, dependencies = {}) {
   const resources = async () => await exists(path.join(options.runDirectory, 'resources.private.json'))
     ? JSON.parse(await privateRead(path.join(options.runDirectory, 'resources.private.json'))) : {};
   const requestFor = operation => ({ operation, runId: options.runId, appName: options.appName, volumeName: options.volumeName,
-    environment: options.environment, profile: prepared.profile, workspaceName: prepared.workspaceName, runDirectory: options.runDirectory });
+    environment: options.environment, profile: prepared.profile, workspaceName: prepared.workspaceName, runDirectory: options.runDirectory,
+    ...(runVolumeFsVersion === undefined ? {} : { volumeFsVersion: runVolumeFsVersion }) });
   const perform = async (key, operation, operationRequest, action, { paid = false } = {}) => {
     const request = { ...requestFor(operation), ...operationRequest };
     const admission = journal.admit(key, operation, request);
@@ -346,10 +377,16 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     const manifestPath = path.join(options.runDirectory, 'manifest.private.json');
     if (options.cleanupOnly) {
       const manifest = JSON.parse(await privateRead(manifestPath));
+      runVolumeFsVersion = manifest.volumeFsVersion;
+      if (runVolumeFsVersion !== undefined && ![1, 2].includes(runVolumeFsVersion)) fail('CLEANUP_OWNERSHIP_CONFLICT');
       const originalOptions = { ...manifest.options, cleanupOnly: true, through: options.through };
       if (manifest.format !== 'factory-modal-pilot' || manifest.runId !== options.runId
           || digest(originalOptions) !== digest(options) || manifest.desiredState !== 'retired') fail('CLEANUP_OWNERSHIP_CONFLICT');
       prepared = { profile: manifest.profile, workspaceName: manifest.workspaceName, source: manifest.source };
+      const authored = await privateRead(path.join(options.runDirectory, 'redeployable-fixture.private.json')).then(JSON.parse).catch(() => null);
+      // Damaged local Flow evidence fences its fixture cleanup, while exact
+      // recorded provider retirement remains independent and available.
+      runFlow = authored?.flow?.id === options.flowId && authored.flow.name === options.flowName ? authored.flow : null;
       const current = await context.managed.source({ source: options.source });
       if (digest(identityOf(current)) !== digest(prepared.source)) fail('SOURCE_IDENTITY_CHANGED');
       source = current; startedAt = manifest.startedAt;
@@ -365,11 +402,11 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     if (!prepared.appAbsent || !prepared.volumeAbsent) fail('RESOURCE_IDENTITY_ALREADY_EXISTS');
     source = (await sourceContext(options, context)).source;
     await privateJson(manifestPath, { format: 'factory-modal-pilot', version: 1, runId: options.runId,
-      startedAt, options, profile: prepared.profile, workspaceName: prepared.workspaceName, source: prepared.source, desiredState: 'retired',
+      startedAt, options, volumeFsVersion: runVolumeFsVersion, profile: prepared.profile, workspaceName: prepared.workspaceName, source: prepared.source, desiredState: 'retired',
       model: select(context.config, ['model', 'revision', 'servedModel', 'license']), state: 'admitted' }, true);
     await privateJson(path.join(options.runDirectory, 'redeployable-fixture.private.json'), {
       model: { ...fixtureModel(options, context.config, 'https://replace-with-owned-endpoint.modal.run', ''), displayName: 'Factory Modal Coder (retired)' },
-      flow: modalFlow(options), state: 'not-active', credentialSource: 'new-run-owned-private-proxy-token',
+      flow: runFlow, state: 'not-active', credentialSource: 'new-run-owned-private-proxy-token',
     }, true);
     journal = new ModalJournal(path.join(options.runDirectory, 'modal.sqlite'), { clock: context.clock });
     spending = dependencies.spending ?? new SpendingLedger(options.spendingPath, { clock: context.clock });
@@ -387,24 +424,43 @@ export async function runModalPilot(input = {}, dependencies = {}) {
     if (token.runId !== options.runId || token.profile !== prepared.profile || !/^wk-[^.]+\.ws-.+$/.test(token.bearer)) fail('PRIVATE_PROXY_TOKEN_MISMATCH');
     const prompt = 'Return exactly this JSON object and nothing else: {"checkpoint":"ready"}';
     if (options.through !== 'infra') {
-      await perform('direct-generation', 'direct-generation', { endpointHash: sha(endpoint.origin), maxTokens: 64, model: context.config.servedModel }, async () => {
+      await perform('direct-generation', 'direct-generation', { endpointHash: sha(endpoint.origin), maxTokens: 64, model: context.config.servedModel,
+        deadlineMs: 600_000, resultGetLimit: 3 }, async (request, effectKey) => {
         const began = context.clock();
-        const response = await context.fetchImpl(new URL('/v1/chat/completions', endpoint), { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(600_000),
-          headers: { Authorization: `Bearer ${token.bearer}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: context.config.servedModel, messages: [{ role: 'user', content: prompt }], max_tokens: 64, temperature: 0, stream: false }) });
-        const raw = await boundedText(response);
-        await writeFile(path.join(options.runDirectory, 'direct-response.private.json'), raw, { flag: 'wx', mode: 0o600 });
-        if (response.status !== 200) {
+        const originalUrl = new URL('/v1/chat/completions', endpoint), signal = AbortSignal.timeout(request.deadlineMs);
+        const binding = { format: 'factory-modal-direct-http', version: 1, effectKey, requestDigest: digest(request),
+          ownedEndpoint: endpoint.href, originalUrl: originalUrl.href, appId: owned.appId };
+        let target = originalUrl;
+        for (let hop = 0; ; hop += 1) {
+          signal.throwIfAborted();
+          const method = hop === 0 ? 'POST' : 'GET';
+          const response = await context.fetchImpl(target, { method, redirect: 'manual', signal,
+            headers: { Authorization: `Bearer ${token.bearer}`, ...(hop === 0 ? { 'Content-Type': 'application/json' } : {}) },
+            ...(hop === 0 ? { body: JSON.stringify({ model: context.config.servedModel, messages: [{ role: 'user', content: prompt }],
+              max_tokens: 64, temperature: 0, stream: false }) } : {}) });
           const location = response.headers.get('location');
-          if (location) await privateJson(path.join(options.runDirectory, 'direct-result-url.private.json'), { location, state: 'unknown-no-post-replay' }, true);
-          fail('DIRECT_HTTP_REQUIRES_RECONCILIATION');
+          const receipt = { ...binding, hop, method, requestedUrl: target.href, status: response.status,
+            ...(location === null ? {} : { location }), observedAt: context.clock() };
+          await privateJson(path.join(options.runDirectory, `direct-http-${hop}.private.json`), receipt, true);
+          if (hop === 0 && response.status === 303 && location !== null) {
+            await privateJson(path.join(options.runDirectory, 'direct-result-url.private.json'),
+              { ...receipt, state: 'original-post-not-replayed' }, true);
+          }
+          const raw = await boundedText(response, 1024 * 1024, signal);
+          await writeFile(path.join(options.runDirectory, `direct-http-${hop}.body.private.txt`), raw, { flag: 'wx', mode: 0o600 });
+          if (response.status === 200) {
+            await writeFile(path.join(options.runDirectory, 'direct-response.private.json'), raw, { flag: 'wx', mode: 0o600 });
+            signal.throwIfAborted();
+            return { ...completionEvidence(raw, { expectedModel: context.config.servedModel }), elapsedMs: context.clock() - began, status: 200 };
+          }
+          if (response.status !== 303 || hop >= request.resultGetLimit) fail('DIRECT_HTTP_REQUIRES_RECONCILIATION');
+          target = modalResultUrl(location, originalUrl);
         }
-        return { ...completionEvidence(raw), elapsedMs: context.clock() - began, status: 200 };
       }, { paid: true });
     }
     if (['connect', 'flow'].includes(options.through)) {
       await sourceContext(options, context);
-      const model = fixtureModel(options, context.config, endpoint.origin, token.bearer), flow = modalFlow(options);
+      const model = fixtureModel(options, context.config, endpoint.origin, token.bearer), flow = runFlow;
       await perform('create-flujo-model', 'create-flujo-model', { modelDigest: digest(modelProjection(model)), workspace: WORKSPACE }, async () => {
         const response = await sourceRequest('POST', '/api/model', model, 'create-model-response.private.json');
         if (response.status !== 201) fail('MODEL_CREATION_UNCONFIRMED');
@@ -419,13 +475,13 @@ export async function runModalPilot(input = {}, dependencies = {}) {
         await (dependencies.writeFixtureOwnership ?? privateJson)(path.join(options.runDirectory, 'fixture-ownership.private.json'), { ...fixture, flowCreated: true });
         return { state: 'flow-connected', status: response.status };
       });
-      await sourceContext(options, context, { allowOwn: true, resources: owned });
+      await sourceContext(options, context, { allowOwn: true, resources: owned, ownedFlow: flow });
       if (options.through === 'flow') {
         await perform('flujo-generation', 'flujo-generation', { flowId: options.flowId, flowDigest: digest(flow), maxTokens: 64, workspace: WORKSPACE }, async () => {
           const began = context.clock();
           const response = await sourceRequest('POST', '/v1/chat/completions', { model: options.flowName, stream: false, max_tokens: 64,
             metadata: { flujo: 'true', appendMessages: 'true' }, messages: [{ role: 'user', content: prompt }] }, 'flujo-response.private.json');
-          return { ...completionEvidence(response.raw, { flujo: true }), elapsedMs: context.clock() - began, status: response.status };
+          return { ...completionEvidence(response.raw, { flujo: true, expectedModel: options.flowName }), elapsedMs: context.clock() - began, status: response.status };
         }, { paid: true });
       }
     }
@@ -445,20 +501,29 @@ export async function runModalPilot(input = {}, dependencies = {}) {
       // failure. It proves the exact original creation; do not replay the POST.
       const modelHttp = await privateRead(path.join(options.runDirectory, 'create-model-response.private.json.http.private.json')).then(JSON.parse).catch(() => ({}));
       const expectedModel = owned.endpoint ? fixtureModel(options, context.config, owned.endpoint, '') : null;
+      const authoredFlowDigest = digest(runFlow), flowIntent = journal.get('create-flujo-flow');
+      const boundAuthoredFlow = (() => {
+        try {
+          return flowIntent?.operation === 'create-flujo-flow'
+            && flowIntent.request_digest === digest(JSON.parse(flowIntent.request_json))
+            && flowIntent.request_digest === digest({ ...requestFor('create-flujo-flow'), flowDigest: authoredFlowDigest, workspace: WORKSPACE });
+        } catch { return false; }
+      })();
       if (!fixture.modelCreated && expectedModel && modelHttp.status === 201 && modelHttp.method === 'POST' && modelHttp.endpoint === '/api/model'
           && modelHttp.resourceId === options.modelId && digest(modelHttp.source) === digest(prepared.source)
           && modelHttp.bodyDigest === digest(modelProjection(expectedModel))
           && journal.get('create-flujo-model')?.request_digest === digest({ ...requestFor('create-flujo-model'), modelDigest: digest(modelProjection(expectedModel)), workspace: WORKSPACE })) {
         fixture = { modelCreated: true, modelId: options.modelId, flowId: options.flowId, source: prepared.source,
-          modelDigest: digest(modelProjection(expectedModel)), flowDigest: digest(modalFlow(options)), recoveredFromConfirmedHttp: true };
+          modelDigest: digest(modelProjection(expectedModel)), flowDigest: authoredFlowDigest, recoveredFromConfirmedHttp: true };
       }
       const flowHttp = await privateRead(path.join(options.runDirectory, 'create-flow-response.private.json.http.private.json')).then(JSON.parse).catch(() => ({}));
       if (!fixture.flowCreated && fixture.modelCreated && flowHttp.status === 201 && flowHttp.method === 'POST' && flowHttp.endpoint === '/api/flow'
           && flowHttp.resourceId === options.flowId && digest(flowHttp.source) === digest(prepared.source)
-          && flowHttp.bodyDigest === digest(modalFlow(options)) && journal.get('create-flujo-flow')) fixture.flowCreated = true;
+          && flowHttp.bodyDigest === authoredFlowDigest && boundAuthoredFlow) fixture.flowCreated = true;
       if (fixture.modelCreated) {
         await attempt('disable-flujo-model', 'disable-flujo-model', () => perform('disable-flujo-model', 'disable-flujo-model', { modelId: options.modelId }, async () => {
-          await sourceContext(options, context, { allowOwn: true, resources: owned });
+          if (fixture.flowCreated && (!boundAuthoredFlow || fixture.flowDigest !== authoredFlowDigest)) fail('OWNED_FLOW_CHANGED');
+          await sourceContext(options, context, { allowOwn: true, resources: owned, ownedFlow: runFlow });
           const disabled = { ...fixtureModel(options, context.config, owned.endpoint, ''), displayName: 'Factory Modal Coder (retired)' };
           const result = await sourceRequest('PUT', `/api/model/${options.modelId}`, disabled, 'disable-model-response.private.json');
           return { state: 'model-disabled', status: result.status };
@@ -469,6 +534,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
       const afterStop = await resources().catch(() => ({}));
       if (afterStop.volumeCreated && (afterStop.appStopped || !afterStop.appDeployed)) await attempt('delete-volume', 'delete-volume', () => sdk('delete-volume', 'delete-volume'));
       if (fixture.flowCreated) await attempt('delete-flujo-flow', 'delete-flujo-flow', () => perform('delete-flujo-flow', 'delete-flujo-flow', { flowId: options.flowId }, async () => {
+        if (!boundAuthoredFlow || fixture.flowDigest !== authoredFlowDigest) fail('OWNED_FLOW_CHANGED');
         const current = await context.managed.json(new URL(`/api/flow/${options.flowId}`, source.source), { token: source.token, workspace: WORKSPACE });
         if (digest(select(current, ['id', 'name', 'nodes', 'edges'])) !== fixture.flowDigest) fail('OWNED_FLOW_CHANGED');
         const response = await sourceRequest('DELETE', `/api/flow/${options.flowId}`, null, 'delete-flow-response.private.json');

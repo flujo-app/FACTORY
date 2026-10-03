@@ -24,6 +24,7 @@ import uuid
 
 
 MUTATIONS = {"create-volume", "deploy", "prefetch", "create-proxy-token", "stop-app", "delete-volume", "delete-proxy-token"}
+CONFIG = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))
 
 
 def write_json(filename, value):
@@ -71,7 +72,7 @@ def require_admission(payload):
     if payload["operation"] not in MUTATIONS:
         return
     request = payload["request"]
-    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory"):
+    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion"):
         if request.get(key) != payload.get(key):
             raise ValueError("Bridge arguments differ from the durable intent.")
     if Path(payload["journalPath"]).resolve() != Path(payload["runDirectory"], "modal.sqlite").resolve() or not re.fullmatch(r"[a-z0-9_-]{1,80}", payload.get("effectKey", "")):
@@ -99,6 +100,66 @@ def checkpoint(payload, changes=None):
         value.update(changes)
         write_json(filename, value)
     return value
+
+
+def required_weights_version(payload, resources=None):
+    version = payload.get("volumeFsVersion")
+    if type(version) is not int or version != 2 or CONFIG.get("volumeFsVersion") != 2:
+        raise ValueError("New model weights require the explicitly admitted VolumeFS v2.")
+    if resources is not None and resources.get("volumeFsVersion") != version:
+        raise ValueError("Owned model weights version differs from the admitted run.")
+    return version
+
+
+def owned_weights(modal, payload, resources):
+    version = required_weights_version(payload, resources)
+    if not resources.get("volumeCreated") or not resources.get("volumeId"):
+        raise ValueError("The recorded owned model weights Volume is required.")
+    volume = modal.Volume.from_name(payload["volumeName"], environment_name="main",
+                                   create_if_missing=False, version=version).hydrate()
+    if volume.object_id != resources["volumeId"]:
+        raise ValueError("Model weights Volume identity differs from recorded ownership.")
+    return volume
+
+
+def owned_billing_observation(rows, resources, start, end):
+    owned = {resources.get(key) for key in ("appId", "serveFunctionId", "prefetchFunctionId", "volumeId")} - {None}
+    selected = [row for row in rows if row.object_id in owned and row.environment_name == "main"]
+    base = {"state": "billing-unavailable", "observedAt": int(time.time() * 1000),
+            "knownMeteredCents": 0, "resourceRows": len(selected), "ownedObjectCount": len(owned),
+            "reportStart": start.isoformat(), "reportEnd": end.isoformat(),
+            "final": False, "buildCostAttribution": "unverified",
+            "meterScope": "recorded-owned-objects-completed-hours-only"}
+    seen, positive_apps, positive_functions = set(), set(), set()
+    function_ids = {resources.get(key) for key in ("serveFunctionId", "prefetchFunctionId")} - {None}
+    observed_cost = Decimal(0)
+    for row in selected:
+        interval = row.interval_start
+        if (not isinstance(interval, datetime) or interval.tzinfo is None or interval.utcoffset().total_seconds() != 0
+                or interval.minute or interval.second or interval.microsecond or not start <= interval < end
+                or not isinstance(row.cost, Decimal) or not row.cost.is_finite() or row.cost < 0):
+            return {**base, "observationReason": "invalid-owned-row"}
+        key = (row.object_id, row.environment_name, interval)
+        if key in seen:
+            return {**base, "observationReason": "duplicate-owned-interval"}
+        seen.add(key)
+        if row.cost > 0:
+            if row.object_id == resources.get("appId"):
+                positive_apps.add(interval)
+            if row.object_id in function_ids:
+                positive_functions.add(interval)
+        # The SDK describes cost_by_resource as a breakdown of this total,
+        # not additional charges. No tags, descriptions or account rows escape.
+        observed_cost += row.cost
+    if positive_apps & positive_functions:
+        # The report has no hierarchy/additive-independence field. Do not
+        # double count a possible App total and child Function compute.
+        return {**base, "observationReason": "ambiguous-app-function-interval"}
+    if selected:
+        return {**base, "state": "billing-observed",
+                "matchedRowCostUsdSum": str(observed_cost),
+                "knownMeteredCents": int((observed_cost * 100).to_integral_value(rounding=ROUND_CEILING))}
+    return base
 
 
 def cli(payload, arguments, *, timeout_seconds=120):
@@ -221,27 +282,27 @@ def operate(payload):
         return {"state": "prepared", "profile": profile, "workspaceName": workspace.name,
                 "environment": "main", "credentialsAccepted": True,
                 "appAbsent": absent(lambda: modal.App.lookup(payload["appName"], environment_name="main")),
-                "volumeAbsent": absent(lambda: modal.Volume.from_name(payload["volumeName"], environment_name="main").hydrate())}
+                "volumeAbsent": absent(lambda: modal.Volume.from_name(payload["volumeName"], environment_name="main", create_if_missing=False).hydrate())}
 
     if workspace.name != payload.get("workspaceName"):
         raise ValueError("Actual Workspace identity differs from the admitted profile.")
     require_admission(payload)
     if operation == "create-volume":
-        modal.Volume.objects.create(payload["volumeName"], environment_name="main", allow_existing=False)
-        volume = modal.Volume.from_name(payload["volumeName"], environment_name="main").hydrate()
-        checkpoint(payload, {"volumeId": volume.object_id, "volumeCreated": True})
-        return {"state": "volume-created", "volumeId": volume.object_id}
+        version = required_weights_version(payload)
+        modal.Volume.objects.create(payload["volumeName"], environment_name="main", version=version, allow_existing=False)
+        volume = modal.Volume.from_name(payload["volumeName"], environment_name="main", create_if_missing=False, version=version).hydrate()
+        checkpoint(payload, {"volumeId": volume.object_id, "volumeCreated": True, "volumeFsVersion": version})
+        return {"state": "volume-created", "volumeId": volume.object_id, "volumeFsVersion": version}
     if operation == "deploy":
         resources = checkpoint(payload)
-        volume = modal.Volume.from_name(payload["volumeName"], environment_name="main").hydrate()
-        if not resources.get("volumeCreated") or volume.object_id != resources.get("volumeId"):
-            raise ValueError("Deployment requires the recorded owned Volume.")
+        volume = owned_weights(modal, payload, resources)
         try:
             modal.App.lookup(payload["appName"], environment_name="main")
         except NotFoundError:
             pass
         else:
             raise ValueError("App identity already exists; do not overwrite it.")
+        os.environ["FACTORY_MODAL_VOLUME_ID"] = volume.object_id
         inference = importlib.import_module("inference")
         inference.app.deploy(environment_name="main", strategy="recreate", tag=payload["runId"])
         checkpoint(payload, {"appId": inference.app.app_id, "appDeployed": True})
@@ -253,11 +314,13 @@ def operate(payload):
         return {"state": "deployed", **result}
     resources = checkpoint(payload)
     if operation == "prefetch":
+        volume = owned_weights(modal, payload, resources)
         function = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         if function.object_id != resources.get("prefetchFunctionId"):
             raise ValueError("Prefetch Function identity changed.")
         result = function.remote()
-        if result.get("state") != "weights-cached":
+        if (result.get("state") != "weights-cached" or result.get("volumeId") != volume.object_id
+                or result.get("volumeFsVersion") != resources["volumeFsVersion"]):
             raise ValueError("Pinned weights were not confirmed.")
         checkpoint(payload, {"weightsCached": True})
         return result
@@ -305,12 +368,14 @@ def operate(payload):
     if operation == "delete-volume":
         if not resources.get("volumeCreated") or not resources.get("appStopped", not resources.get("appDeployed")):
             raise ValueError("Owned Volume requires confirmed App retirement first.")
-        volume = modal.Volume.from_name(payload["volumeName"], environment_name="main").hydrate()
+        # Original v1 runs have no v2 intent/metadata. Cleanup remains version-agnostic
+        # and checks the exact recorded ID; it must never implicitly create a Volume.
+        volume = modal.Volume.from_name(payload["volumeName"], environment_name="main", create_if_missing=False).hydrate()
         if volume.object_id != resources.get("volumeId"):
             raise ValueError("Volume identity differs from recorded ownership.")
         modal.Volume.objects.delete(payload["volumeName"], environment_name="main", allow_missing=False)
         try:
-            modal.Volume.from_name(payload["volumeName"], environment_name="main").hydrate()
+            modal.Volume.from_name(payload["volumeName"], environment_name="main", create_if_missing=False).hydrate()
         except NotFoundError:
             checkpoint(payload, {"volumeDeleted": True})
             return {"state": "volume-deleted", "volumeId": resources["volumeId"]}
@@ -330,14 +395,12 @@ def operate(payload):
         return {"state": "proxy-token-deleted"}
     if operation == "meter":
         started = datetime.fromtimestamp(payload["startedAt"] / 1000, timezone.utc).replace(minute=0, second=0, microsecond=0)
-        rows = modal.Workspace.from_context().billing.report(start=started, resolution="h")
-        owned = {resources.get(key) for key in ("serveFunctionId", "prefetchFunctionId", "volumeId")} - {None}
-        selected = [row for row in rows if row.object_id in owned and row.environment_name == "main"]
-        observed_cost = sum((row.cost for row in selected), Decimal(0))
-        return {"state": "billing-observed" if selected else "billing-unavailable",
-                "observedAt": int(time.time() * 1000), "knownMeteredCents": int((observed_cost * 100).to_integral_value(rounding=ROUND_CEILING)),
-                "resourceRows": len(selected), "ownedObjectCount": len(owned), "final": False,
-                "buildCostAttribution": "unverified", "meterScope": "recorded-functions-and-volume-partial-hours-only"}
+        # SDK reports complete intervals and excludes a partial final hour.
+        end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        if started >= end:
+            return owned_billing_observation([], resources, started, end)
+        rows = modal.Workspace.from_context().billing.report(start=started, end=end, resolution="h")
+        return owned_billing_observation(rows, resources, started, end)
     raise ValueError("Unknown operation.")
 
 

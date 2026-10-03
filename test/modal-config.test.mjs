@@ -25,6 +25,14 @@ test('fake SDK profile, ownership, durable admission and teardown proof suite', 
   assert.equal(output, '');
 });
 
+test('offline inference definition binds v2 without creating resources and preserves prefetch limits', () => {
+  const output = execFileSync(python, ['-B', '-m', 'unittest', 'test_inference_volume.py'], {
+    cwd: modalDir, encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.equal(output, '');
+  assert.equal(config.volumeFsVersion, 2);
+});
+
 test('compute projection covers one bounded L4 pool and is explicitly an estimate', () => {
   const rate = config.pricing.gpuPerSecond + config.cpuCores * config.pricing.physicalCpuCorePerSecond
     + (config.memoryMiB / 1024) * config.pricing.gibMemoryPerSecond;
@@ -52,7 +60,7 @@ test('CPU prefetch bridge allows configured startup margin and rejects unbounded
 test('pinned source metadata and anonymous import are offline', () => {
   assert.match(config.revision, /^[0-9a-f]{40}$/);
   assert.equal(config.license, 'Apache-2.0');
-  const code = `import os,sys; sys.path.insert(0,${JSON.stringify(modalDir)}); os.environ['FACTORY_MODAL_APP_NAME']='factory-offline-import'; os.environ['FACTORY_MODAL_VOLUME_NAME']='factory-offline-weights'; import inference; assert inference.app.name == 'factory-offline-import'; print('offline-definition-ok')`;
+  const code = `import os,sys,socket; sys.path.insert(0,${JSON.stringify(modalDir)}); os.environ['FACTORY_MODAL_APP_NAME']='factory-offline-import'; os.environ['FACTORY_MODAL_VOLUME_NAME']='factory-offline-weights'; os.environ['FACTORY_MODAL_VOLUME_ID']='vo-offline'; socket.socket.connect=lambda *args: (_ for _ in ()).throw(AssertionError('RPC during import')); import inference; assert inference.app.name == 'factory-offline-import'; print('offline-definition-ok')`;
   const output = execFileSync(python, ['-B', '-c', code], {
     cwd: modalDir, encoding: 'utf8', timeout: 15_000,
     env: { ...process.env, MODAL_TOKEN_ID: '', MODAL_TOKEN_SECRET: '' },

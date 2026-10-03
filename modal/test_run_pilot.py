@@ -1,6 +1,8 @@
 """Fake-SDK ownership/auth/durability tests; no Modal RPCs or GPU execution."""
 
 import hashlib
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -25,13 +27,21 @@ class BridgeTests(unittest.TestCase):
         self.calls = []
         self.app_id = "ap-owned"
         self.volume_id = "vo-owned"
+        self.volume_version = 2
+        self.volume_exists = False
+        self.volume_lookups = []
+        self.volume_creates = []
+        self.prefetch_result = None
         self.workspace_name = "factory-account"
         self.app_absent = False
         self.function_failure = False
+        self.billing_rows = []
+        self.billing_calls = []
 
         test = self
         workspace = SimpleNamespace(name=self.workspace_name,
                                     settings=SimpleNamespace(list=lambda: SimpleNamespace(default_environment="main")),
+                                    billing=SimpleNamespace(report=lambda **kwargs: self.billing_calls.append(kwargs) or list(self.billing_rows)),
                                     proxy_tokens=SimpleNamespace(create=lambda: self.calls.append("token-create")))
         class Workspace:
             @staticmethod
@@ -40,11 +50,36 @@ class BridgeTests(unittest.TestCase):
                 return workspace
 
         class Volume:
-            objects = SimpleNamespace(create=lambda *args, **kwargs: test.calls.append("volume-create"),
-                                      delete=lambda *args, **kwargs: test.calls.append("volume-delete"))
             @staticmethod
-            def from_name(*args, **kwargs):
-                return SimpleNamespace(hydrate=lambda: SimpleNamespace(object_id=test.volume_id))
+            def create(name, **kwargs):
+                test.volume_creates.append({"name": name, **kwargs})
+                if test.volume_exists:
+                    raise ValueError("Volume name already exists")
+                if kwargs.get("version") != 2 or kwargs.get("allow_existing") is not False:
+                    raise ValueError("Creation must explicitly require new v2")
+                test.volume_exists = True
+                test.volume_version = kwargs["version"]
+                test.calls.append("volume-create")
+
+            @staticmethod
+            def delete(name, **kwargs):
+                test.volume_exists = False
+                test.calls.append("volume-delete")
+
+            @staticmethod
+            def from_name(name, **kwargs):
+                test.volume_lookups.append({"name": name, **kwargs})
+                if kwargs.get("create_if_missing") is not False:
+                    raise ValueError("Implicit Volume creation forbidden")
+                def hydrate():
+                    if not test.volume_exists:
+                        raise NotFoundError()
+                    if kwargs.get("version") is not None and kwargs["version"] != test.volume_version:
+                        raise ValueError("Actual VolumeFS version mismatch")
+                    return SimpleNamespace(object_id=test.volume_id)
+                return SimpleNamespace(hydrate=hydrate)
+
+        Volume.objects = SimpleNamespace(create=Volume.create, delete=Volume.delete)
 
         class App:
             @staticmethod
@@ -58,7 +93,10 @@ class BridgeTests(unittest.TestCase):
             def from_name(*args, **kwargs):
                 if test.function_failure:
                     raise ValueError("private SDK diagnostic")
-                return SimpleNamespace(hydrate=lambda: SimpleNamespace(object_id="fu-owned", get_web_url=lambda: "https://factory--serve.modal.run"))
+                def remote():
+                    test.calls.append("prefetch-call")
+                    return test.prefetch_result or {"state": "weights-cached", "volumeId": test.volume_id, "volumeFsVersion": test.volume_version}
+                return SimpleNamespace(hydrate=lambda: SimpleNamespace(object_id="fu-owned", get_web_url=lambda: "https://factory--serve.modal.run", remote=remote))
 
         self.fake = ModuleType("modal")
         self.fake.Workspace, self.fake.Volume, self.fake.App, self.fake.Function = Workspace, Volume, App, Function
@@ -72,6 +110,8 @@ class BridgeTests(unittest.TestCase):
         request = {"operation": operation, "runId": "offline-run", "appName": "factory-offline-model",
                    "volumeName": "factory-offline-weights", "profile": "fake-profile", "environment": "main",
                    "workspaceName": "factory-account", "runDirectory": str(self.root)}
+        if operation in {"prepare", "create-volume", "deploy", "prefetch", "create-proxy-token"}:
+            request["volumeFsVersion"] = 2
         payload = {**request, "request": request, "effectKey": operation, "journalPath": str(self.root / "modal.sqlite")}
         encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         connection = sqlite3.connect(payload["journalPath"])
@@ -84,7 +124,134 @@ class BridgeTests(unittest.TestCase):
     def resource(self, payload, **changes):
         value = {key: payload[key] for key in ("runId", "appName", "volumeName", "environment", "profile", "workspaceName")}
         value.update(changes)
+        if changes.get("volumeCreated"):
+            self.volume_exists = True
+            if payload["operation"] in {"deploy", "prefetch"}:
+                value.setdefault("volumeFsVersion", 2)
         pilot.write_json(self.root / "resources.private.json", value)
+
+    def meter_payload(self):
+        request = self.payload("meter")
+        self.billing_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+        request["startedAt"] = int((self.billing_hour + timedelta(minutes=17)).timestamp() * 1000)
+        self.resource(request, appId="ap-owned", serveFunctionId="fu-serve", prefetchFunctionId="fu-prefetch", volumeId="vo-owned")
+        return request
+
+    def billing_row(self, object_id, cost="0.01", **changes):
+        value = {"object_id": object_id, "environment_name": "main", "interval_start": self.billing_hour,
+                 "cost": Decimal(cost), "cost_by_resource": {}, "description": "private-description", "tags": {"private": "value"}}
+        value.update(changes)
+        return SimpleNamespace(**value)
+
+    def test_meter_empty_unrelated_or_wrong_environment_is_unavailable(self):
+        request = self.meter_payload()
+        for rows in ([], [self.billing_row("ap-unrelated")], [self.billing_row("ap-owned", environment_name="other-env")]):
+            with self.subTest(rows=len(rows)):
+                self.billing_rows = rows
+                result = pilot.operate(request)
+                self.assertEqual(result["state"], "billing-unavailable")
+                self.assertEqual(result["knownMeteredCents"], 0)
+                self.assertFalse(result["final"])
+                self.assertEqual(result["reportStart"], self.billing_hour.isoformat())
+                self.assertEqual(result["reportEnd"], self.billing_calls[-1]["end"].isoformat())
+                self.assertNotIn("matchedRowCostUsdSum", result)
+        self.assertEqual(self.calls, [])
+
+    def test_meter_recorded_app_counts_total_once_without_resource_breakdown_or_private_fields(self):
+        request = self.meter_payload()
+        self.billing_rows = [self.billing_row("ap-owned", "0.03503811", cost_by_resource={
+            "CPU": Decimal("0.01"), "Memory": Decimal("0.02503811")})]
+        result = pilot.operate(request)
+        self.assertEqual(result["state"], "billing-observed")
+        self.assertEqual(result["knownMeteredCents"], 4)
+        self.assertEqual(result["resourceRows"], 1)
+        self.assertEqual(result["ownedObjectCount"], 4)
+        self.assertFalse(result["final"])
+        self.assertEqual(result["buildCostAttribution"], "unverified")
+        self.assertEqual(result["meterScope"], "recorded-owned-objects-completed-hours-only")
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("ap-owned", json.dumps(result))
+        query = self.billing_calls[-1]
+        self.assertEqual(query["start"], self.billing_hour)
+        self.assertEqual(result["reportStart"], query["start"].isoformat())
+        self.assertEqual(result["reportEnd"], query["end"].isoformat())
+        self.assertEqual(result["matchedRowCostUsdSum"], "0.03503811")
+        self.assertEqual(query["resolution"], "h")
+        self.assertEqual(query["end"].minute, 0)
+        self.assertEqual(query["end"].second, 0)
+        self.assertEqual(query["end"].microsecond, 0)
+        self.assertEqual(self.calls, [])
+
+    def test_meter_functions_and_volume_can_sum_distinct_owned_object_costs(self):
+        request = self.meter_payload()
+        self.billing_rows = [self.billing_row("fu-serve", "0.07"), self.billing_row("fu-prefetch", "0.02"),
+                             self.billing_row("vo-owned", "0.01", cost_by_resource={"Storage": Decimal("0.01")})]
+        result = pilot.operate(request)
+        self.assertEqual(result["state"], "billing-observed")
+        self.assertEqual(result["knownMeteredCents"], 10)
+        self.assertEqual(result["resourceRows"], 3)
+        self.assertFalse(result["final"])
+
+    def test_meter_app_compute_and_volume_storage_can_coexist(self):
+        request = self.meter_payload()
+        self.billing_rows = [self.billing_row("ap-owned", "0.03", cost_by_resource={"CPU": Decimal("0.03")}),
+                             self.billing_row("vo-owned", "0.01", cost_by_resource={"Storage": Decimal("0.01")})]
+        result = pilot.operate(request)
+        self.assertEqual(result["state"], "billing-observed")
+        self.assertEqual(result["knownMeteredCents"], 4)
+
+    def test_meter_positive_app_and_function_same_interval_is_ambiguous(self):
+        request = self.meter_payload()
+        self.billing_rows = [self.billing_row("ap-owned", "0.03"), self.billing_row("fu-serve", "0.04")]
+        result = pilot.operate(request)
+        self.assertEqual(result["state"], "billing-unavailable")
+        self.assertEqual(result["observationReason"], "ambiguous-app-function-interval")
+        self.assertEqual(result["knownMeteredCents"], 0)
+        self.assertNotIn("matchedRowCostUsdSum", result)
+        self.billing_rows[1].interval_start += timedelta(hours=1)
+        separated = pilot.operate(request)
+        self.assertEqual(separated["state"], "billing-observed")
+        self.assertEqual(separated["knownMeteredCents"], 7)
+        self.billing_rows[1] = self.billing_row("fu-serve", "0")
+        self.assertEqual(pilot.operate(request)["knownMeteredCents"], 3)
+
+    def test_meter_duplicate_or_conflicting_owned_interval_cannot_double_count(self):
+        request = self.meter_payload()
+        for other_cost in ("0.03", "0.04"):
+            with self.subTest(other_cost=other_cost):
+                self.billing_rows = [self.billing_row("ap-owned", "0.03"), self.billing_row("ap-owned", other_cost)]
+                result = pilot.operate(request)
+                self.assertEqual(result["state"], "billing-unavailable")
+                self.assertEqual(result["observationReason"], "duplicate-owned-interval")
+        self.billing_rows[1].interval_start += timedelta(hours=1)
+        result = pilot.operate(request)
+        self.assertEqual(result["state"], "billing-observed")
+        self.assertEqual(result["knownMeteredCents"], 7)
+
+    def test_meter_invalid_cost_or_interval_is_unavailable_without_billing_claim(self):
+        request = self.meter_payload()
+        invalid = [{"cost": Decimal("NaN")}, {"cost": Decimal("Infinity")}, {"cost": Decimal("-0.01")}, {"cost": 0.01},
+                   {"interval_start": self.billing_hour.replace(tzinfo=None)},
+                   {"interval_start": self.billing_hour + timedelta(minutes=1)},
+                   {"interval_start": self.billing_hour + timedelta(hours=2)},
+                   {"interval_start": self.billing_hour - timedelta(hours=1)}]
+        for changes in invalid:
+            with self.subTest(changes=list(changes)):
+                row = self.billing_row("ap-owned")
+                for key, value in changes.items():
+                    setattr(row, key, value)
+                self.billing_rows = [row]
+                result = pilot.operate(request)
+                self.assertEqual(result["state"], "billing-unavailable")
+                self.assertEqual(result["knownMeteredCents"], 0)
+                self.assertFalse(result["final"])
+
+    def test_meter_with_no_completed_hour_is_unavailable_without_provider_report(self):
+        request = self.meter_payload()
+        request["startedAt"] = int(datetime.now(timezone.utc).timestamp() * 1000)
+        result = pilot.operate(request)
+        self.assertEqual(result["state"], "billing-unavailable")
+        self.assertEqual(self.billing_calls, [])
 
     def test_named_profile_discards_inherited_environment_credentials(self):
         self.app_absent = True
@@ -139,6 +306,11 @@ class BridgeTests(unittest.TestCase):
         record = json.loads((self.root / "resources.private.json").read_text())
         self.assertEqual(result["volumeId"], "vo-owned")
         self.assertTrue(record["volumeCreated"])
+        self.assertEqual(record["volumeFsVersion"], 2)
+        self.assertEqual(self.volume_creates[0]["version"], 2)
+        self.assertFalse(self.volume_creates[0]["allow_existing"])
+        self.assertEqual(self.volume_lookups[0]["version"], 2)
+        self.assertFalse(self.volume_lookups[0]["create_if_missing"])
         self.assertEqual(self.calls, ["volume-create"])
 
     def test_changed_volume_identity_is_never_deleted(self):
@@ -272,6 +444,77 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pilot.operate(request)
         self.assertEqual(self.calls, [])
+
+    def test_existing_volume_conflict_never_adopts_or_deploys(self):
+        request = self.payload("create-volume")
+        self.volume_exists, self.volume_version = True, 1
+        with self.assertRaises(ValueError):
+            pilot.operate(request)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.volume_lookups, [])
+        self.assertFalse((self.root / "resources.private.json").exists())
+
+    def test_version_changes_cannot_reuse_durable_intent(self):
+        request = self.payload("create-volume")
+        request["volumeFsVersion"] = 1
+        with self.assertRaises(ValueError):
+            pilot.operate(request)
+        self.assertEqual(self.volume_creates, [])
+
+    def test_wrong_volume_version_or_id_blocks_deployment(self):
+        for actual_version, recorded_id in [(1, "vo-owned"), (2, "vo-original")]:
+            with self.subTest(actual_version=actual_version, recorded_id=recorded_id):
+                request = self.payload("deploy")
+                self.resource(request, volumeCreated=True, volumeId=recorded_id)
+                self.volume_version = actual_version
+                with patch.object(pilot.importlib, "import_module") as imported, self.assertRaises(ValueError):
+                    pilot.operate(request)
+                imported.assert_not_called()
+                self.assertEqual(self.calls, [])
+
+    def test_missing_version_metadata_cannot_adopt_old_volume_for_new_deployment(self):
+        request = self.payload("deploy")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", volumeFsVersion=None)
+        with self.assertRaises(ValueError):
+            pilot.operate(request)
+        self.assertEqual(self.volume_lookups, [])
+        self.assertEqual(self.calls, [])
+
+    def test_prefetch_rechecks_version_and_id_before_remote_execution(self):
+        for actual_version, recorded_id in [(1, "vo-owned"), (2, "vo-original")]:
+            request = self.payload("prefetch")
+            self.resource(request, volumeCreated=True, volumeId=recorded_id, prefetchFunctionId="fu-owned")
+            self.volume_version = actual_version
+            with self.assertRaises(ValueError):
+                pilot.operate(request)
+        self.assertEqual(self.calls, [])
+
+    def test_prefetch_success_is_bound_to_owned_v2_volume(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+        self.assertEqual(pilot.operate(request)["volumeFsVersion"], 2)
+        self.assertEqual(self.calls, ["prefetch-call"])
+
+    def test_wrong_prefetch_result_cannot_checkpoint_cached_weights(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+        self.prefetch_result = {"state": "weights-cached", "volumeId": "vo-other", "volumeFsVersion": 2}
+        with self.assertRaises(ValueError):
+            pilot.operate(request)
+        self.assertNotIn("weightsCached", json.loads((self.root / "resources.private.json").read_text()))
+
+    def test_legacy_v1_cleanup_is_version_agnostic_and_exact_id_bound(self):
+        request = self.payload("delete-volume")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", volumeFsVersion=1, appDeployed=True, appStopped=True)
+        self.volume_version = 1
+        self.assertNotIn("volumeFsVersion", request)
+        result = pilot.operate(request)
+        self.assertEqual(result["volumeId"], "vo-owned")
+        self.assertEqual(self.calls, ["volume-delete"])
+        self.assertTrue(all("version" not in item and item["create_if_missing"] is False for item in self.volume_lookups))
+        record = json.loads((self.root / "resources.private.json").read_text())
+        self.assertTrue(record["volumeDeleted"])
+        self.assertEqual(record["volumeFsVersion"], 1)
 
 
 if __name__ == "__main__":

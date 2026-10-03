@@ -104,6 +104,28 @@ separately. Evidence SHA-256:
 The staged meter fix adds exact recorded App eligibility and refuses ambiguous
 parent/child compute overlap rather than summing an unproven total.
 
+R2's local SDK observation reached its **4200-second** bound at **01:09:55 UTC**
+without confirming complete weights. Its original prefetch stays unknown with
+the original request digest; no generation, proxy token or native model/Flow was
+created. The original App stop succeeded with zero containers, and the original
+Volume deletion succeeded. A separate provider witness at **01:10:57 UTC**
+confirmed stopped/zero, active App lookup absent, and exact Volume absence from
+complete inventory and noncreating lookup. Its full $30 hold is
+`retired-meter-pending`. Completed-hour App billing through **01:00 UTC exclusive**
+reports another **US$0.11033673**, recorded as **12 cents** conservatively rounded
+up. The ledger's combined recorded observations are now **16 cents**, with final
+spend still null. This excludes R2's last partial hour and remaining charges.
+Evidence SHA-256:
+`ac5267638c43c92fa2b9fb4b22f4925bb76ee03324cf719104004b06452223b3`.
+
+After that terminal cleanup, the independently reviewed version-2/acceptance/
+result-retrieval/billing patch was applied. The merged checkout passed the complete
+**162/162 Node test results**; its focused qualification was independently
+**33/33**, including 46 Python cases. Evidence:
+`.factory/tests-v2-qualified.txt` and the isolated stage's immutable test report.
+Provider download performance and actual inference for this variant remain to be
+tested; the offline results do not establish either.
+
 The ledger is local
 admission/accounting for registered factory reservations; it is not a provider
 hard billing stop or an audit of unrelated account usage. The Fly apps have been

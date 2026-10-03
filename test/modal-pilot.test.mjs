@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
-import { ModalJournal, prepareModalPilot, runModalPilot } from '../scripts/modal-pilot.mjs';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, unlink } from 'node:fs/promises';
+import { ModalJournal, completionEvidence, prepareModalPilot, runModalPilot } from '../scripts/modal-pilot.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
+import { digest } from '../src/control.mjs';
 
 const SOURCE = { origin: 'http://127.0.0.1:4200', instanceId: 'source-instance', appRoot: 'fake-app', dataRoot: 'fake-data' };
-const safeCompletion = (flujo = false) => JSON.stringify({ object: 'chat.completion', ...(flujo ? { status: 'completed' } : {}),
-  choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{"checkpoint":"ready"}' } }],
+const safeCompletion = (model, flujo = false) => JSON.stringify({ object: 'chat.completion', model, ...(flujo ? { status: 'completed' } : {}),
+  choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"checkpoint":"ready"}' } }],
   usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } });
 
 async function fixture(t, settings = {}) {
@@ -16,19 +17,20 @@ async function fixture(t, settings = {}) {
   const runDirectory = path.join(directory, 'run'), sourceEvidencePath = path.join(directory, 'source.json');
   await writeFile(sourceEvidencePath, JSON.stringify({ source: SOURCE, fixtureAlreadyExists: false }));
   const options = { runId: 'offline-modal', runDirectory, sourceEvidencePath, spendingPath: path.join(directory, 'spending.sqlite') };
-  const calls = [], httpCalls = [], notifications = [], protections = [], models = [], flows = [];
+  const calls = [], payloads = [], httpCalls = [], notifications = [], protections = [], models = [], flows = [];
   let resourceState = {};
   const persist = async () => writeFile(path.join(runDirectory, 'resources.private.json'), JSON.stringify(resourceState));
   const source = { source: SOURCE.origin, instanceId: SOURCE.instanceId, appRoot: SOURCE.appRoot, dataRoot: SOURCE.dataRoot, token: 'owner-private-source-token' };
   const driver = async payload => {
     calls.push(payload.operation);
+    payloads.push(structuredClone(payload));
     if (payload.operation === 'prepare') return { state: 'prepared', profile: 'fake-profile', workspaceName: 'factory-account', environment: 'main', credentialsAccepted: true, appAbsent: true, volumeAbsent: true };
     if (payload.operation === settings.sdkFailure || settings.sdkFailures?.includes(payload.operation)) throw new Error('private raw token diagnostic');
     resourceState = { ...resourceState, ...await readFile(path.join(runDirectory, 'resources.private.json'), 'utf8').then(JSON.parse).catch(() => ({})) };
     resourceState = { ...resourceState, runId: payload.runId, appName: payload.appName, volumeName: payload.volumeName,
       environment: payload.environment, profile: payload.profile, workspaceName: payload.workspaceName };
     switch (payload.operation) {
-      case 'create-volume': resourceState.volumeId = 'vo-owned'; resourceState.volumeCreated = true; await persist(); return { state: 'volume-created', volumeId: 'vo-owned' };
+      case 'create-volume': resourceState.volumeId = 'vo-owned'; resourceState.volumeCreated = true; resourceState.volumeFsVersion = payload.volumeFsVersion; await persist(); return { state: 'volume-created', volumeId: 'vo-owned', volumeFsVersion: payload.volumeFsVersion };
       case 'deploy': Object.assign(resourceState, { appId: 'ap-owned', appDeployed: true, serveFunctionId: 'fu-serve', prefetchFunctionId: 'fu-prefetch', endpoint: 'https://factory--serve.modal.run' }); await persist(); return { state: 'deployed', ...resourceState };
       case 'prefetch': resourceState.weightsCached = true; await persist(); return { state: 'weights-cached' };
       case 'create-proxy-token':
@@ -41,7 +43,11 @@ async function fixture(t, settings = {}) {
         originalKey: payload.originalKey, originalRequestDigest: payload.originalRequestDigest, observedAt: Date.now() };
       case 'delete-volume': resourceState.volumeDeleted = true; await persist(); return { state: 'volume-deleted', volumeId: 'vo-owned' };
       case 'delete-proxy-token': resourceState.proxyTokenDeleted = true; await persist(); return { state: 'proxy-token-deleted' };
-      case 'meter': return { state: 'billing-unavailable', knownMeteredCents: 0, observedAt: Date.now(), resourceRows: 0, final: false };
+      case 'meter': return { state: settings.meteredCents === undefined ? 'billing-unavailable' : 'billing-observed',
+        knownMeteredCents: settings.meteredCents ?? 0, observedAt: Date.now(), resourceRows: settings.meteredCents === undefined ? 0 : 1,
+        ...(settings.meteredCents === undefined ? {} : { reportStart: '2026-01-01T00:00:00+00:00',
+          reportEnd: '2026-01-01T01:00:00+00:00', matchedRowCostUsdSum: '0.03503811' }),
+        meterScope: 'recorded-owned-objects-completed-hours-only', buildCostAttribution: 'unverified', final: false };
       default: throw new Error('unexpected SDK operation');
     }
   };
@@ -56,16 +62,22 @@ async function fixture(t, settings = {}) {
     } };
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url), body = init.body ? JSON.parse(init.body) : null;
-    httpCalls.push({ origin: parsed.origin, pathname: parsed.pathname, method: init.method, body, headers: init.headers, redirect: init.redirect });
+    httpCalls.push({ url: parsed.href, origin: parsed.origin, pathname: parsed.pathname, method: init.method, body,
+      headers: init.headers, redirect: init.redirect, signal: init.signal });
     if (parsed.hostname.endsWith('.modal.run')) {
+      const expectedModel = body?.model ?? httpCalls.find(call => call.origin === parsed.origin && call.method === 'POST').body.model;
+      if (settings.modalHttpResponse) return settings.modalHttpResponse({ url: parsed, init, body, expectedModel });
       if (settings.redirect) return new Response('private redirect body', { status: 303, headers: { location: 'https://factory--serve.modal.run/?result=private' } });
-      return new Response(safeCompletion(), { status: 200 });
+      return new Response(settings.directCompletion?.(JSON.parse(safeCompletion(expectedModel))) ?? safeCompletion(expectedModel), { status: 200 });
     }
     assert.equal(init.headers.Origin, SOURCE.origin);
     assert.equal(init.headers['x-flujo-workspace'], 'factory-pilot');
     if (parsed.pathname === '/api/model' && init.method === 'POST') { models.push(body); return new Response(JSON.stringify({ ...body, ApiKey: '********' }), { status: 201 }); }
     if (parsed.pathname === '/api/flow' && init.method === 'POST') { flows.push(body); return new Response(JSON.stringify(body), { status: 201 }); }
-    if (parsed.pathname === '/v1/chat/completions') return new Response(safeCompletion(true), { status: 200 });
+    if (parsed.pathname === '/v1/chat/completions') {
+      await settings.beforeFlowCompletion?.();
+      return new Response(safeCompletion(body.model, true), { status: 200 });
+    }
     if (parsed.pathname.startsWith('/api/model/') && init.method === 'PUT') { const index = models.findIndex(item => item.id === body.id); models[index] = body; return new Response(JSON.stringify({ ...body, ApiKey: '' }), { status: 200 }); }
     if (init.method === 'DELETE') {
       if (settings.fixtureDeleteFailure) return new Response('private failure', { status: 500 });
@@ -80,7 +92,7 @@ async function fixture(t, settings = {}) {
     notify: event => { notifications.push(event); if (settings.notifyFailure) throw new Error('private diagnostic'); },
     ...(settings.checkpointFailure ? { writeFixtureOwnership: async () => { throw new Error('private checkpoint failure'); } } : {}) };
   t.after(() => {}); // Preserve tiny offline evidence if a regression fails; no cloud resources exist.
-  return { directory, options, dependencies, calls, httpCalls, notifications, protections, models, flows };
+  return { directory, options, dependencies, calls, payloads, httpCalls, notifications, protections, models, flows };
 }
 
 test('private SQLite operation journal prevents replay, replacement keys and duplicate running/settlement', async t => {
@@ -135,6 +147,8 @@ test('direct and actual FLUJO Flow complete before independently verified fixtur
   assert.equal(generations.length, 2);
   assert.equal(generations[1].body.metadata.flujo, 'true');
   assert.equal(generations[0].redirect, 'manual');
+  const createdFlow = f.httpCalls.find(item => item.pathname === '/api/flow' && item.method === 'POST').body;
+  assert.equal(createdFlow.nodes.find(node => node.data.type === 'process').data.properties.maxTokens, 64);
   assert.ok(f.protections.includes(f.options.runDirectory));
   assert.ok(!JSON.stringify(f.notifications).includes('private'));
   assert.ok(!JSON.stringify(report).includes('owner-private-source-token'));
@@ -143,6 +157,204 @@ test('direct and actual FLUJO Flow complete before independently verified fixtur
   assert.equal(status.meteredSpendCents, null);
   assert.equal(status.committedCents, 3000);
   assert.equal(status.reservations[0].state, 'retired-meter-pending');
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  assert.equal(JSON.parse(journal.get('create-flujo-flow').request_json).flowDigest, digest(createdFlow));
+  assert.equal(JSON.parse(journal.get('flujo-generation').request_json).flowDigest, digest(createdFlow));
+});
+
+test('completion acceptance requires one terminal assistant, exact ready JSON and the expected direct or Flow model', () => {
+  const valid = JSON.parse(safeCompletion('factory-coder'));
+  assert.equal(completionEvidence(JSON.stringify(valid), { expectedModel: 'factory-coder' }).state, 'generation-completed');
+  const mutations = [
+    value => { value.choices[0].finish_reason = 'length'; },
+    value => { value.choices[0].message.tool_calls = [{ id: 'x', type: 'function', function: { name: 'external', arguments: '{}' } }]; },
+    value => { value.choices[0].message.tool_calls = {}; },
+    value => { value.choices[0].message.function_call = { name: 'external', arguments: '{}' }; },
+    value => { value.choices[0].message.content = '{"checkpoint":"ready","unexpected":"accepted"}'; },
+    value => { value.choices[0].message.content = '[{"checkpoint":"ready"}]'; },
+    value => { value.choices[0].message.content = 'null'; },
+    value => { value.choices[0].message.role = 'user'; },
+    value => { value.choices[0].index = 1; },
+    value => { value.choices.push(structuredClone(value.choices[0])); },
+    value => { value.choices = []; },
+    value => { value.model = 'other-model'; },
+    value => { delete value.model; },
+  ];
+  for (const mutate of mutations) {
+    const rejected = structuredClone(valid); mutate(rejected);
+    assert.throws(() => completionEvidence(JSON.stringify(rejected), { expectedModel: 'factory-coder' }));
+  }
+  assert.throws(() => completionEvidence(JSON.stringify(valid)));
+  assert.throws(() => completionEvidence(safeCompletion('factory-flow'), { expectedModel: 'factory-flow', flujo: true }));
+  assert.equal(completionEvidence(safeCompletion('factory-flow', true), { expectedModel: 'factory-flow', flujo: true }).state, 'generation-completed');
+});
+
+test('tool-call or truncated direct response stays unknown, is never retried, and still retires owned resources', async t => {
+  for (const change of [value => { value.choices[0].finish_reason = 'length'; },
+    value => { value.choices[0].message.tool_calls = [{ id: 'x', type: 'function', function: { name: 'external', arguments: '{}' } }]; }]) {
+    const f = await fixture(t, { directCompletion: value => { change(value); return JSON.stringify(value); } });
+    const result = await runModalPilot(f.options, f.dependencies);
+    assert.equal(result.state, 'requires-reconciliation');
+    assert.equal(f.httpCalls.filter(item => item.origin.includes('modal.run')).length, 1);
+    assert.equal(f.httpCalls.filter(item => item.pathname === '/api/flow' && item.method === 'POST').length, 0);
+    const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+    assert.equal(journal.get('direct-generation').state, 'unknown');
+    assert.equal(journal.get('stop-app').state, 'succeeded');
+    assert.equal(journal.get('delete-volume').state, 'succeeded');
+    journal.close();
+  }
+});
+
+test('new run pins VolumeFS v2 in manifest, checkpoint and every admitted provider request', async t => {
+  const f = await fixture(t);
+  await runModalPilot(f.options, f.dependencies);
+  const manifest = JSON.parse(await readFile(path.join(f.options.runDirectory, 'manifest.private.json'), 'utf8'));
+  const resources = JSON.parse(await readFile(path.join(f.options.runDirectory, 'resources.private.json'), 'utf8'));
+  assert.equal(manifest.volumeFsVersion, 2);
+  assert.equal(resources.volumeFsVersion, 2);
+  assert.equal(resources.volumeId, 'vo-owned');
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  for (const payload of f.payloads) {
+    assert.equal(payload.volumeFsVersion, 2);
+    if (payload.request) {
+      assert.equal(payload.request.volumeFsVersion, 2);
+      assert.equal(journal.get(payload.effectKey).request_digest, digest(payload.request));
+    }
+  }
+});
+
+test('partial owned App billing updates known cents without releasing the reservation or claiming final spend', async t => {
+  const f = await fixture(t, { meteredCents: 4 });
+  const result = await runModalPilot(f.options, f.dependencies);
+  const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+  const status = ledger.status();
+  assert.equal(status.knownMeteredCents, 4);
+  assert.equal(status.meteredSpendCents, null);
+  assert.equal(status.committedCents, 3000);
+  assert.equal(status.reservations[0].state, 'retired-meter-pending');
+  assert.equal(result.finalMeterKnown, false);
+  const meter = JSON.parse(await readFile(path.join(f.options.runDirectory, 'meter.private.json'), 'utf8'));
+  assert.equal(meter.final, false);
+  assert.equal(meter.buildCostAttribution, 'unverified');
+  assert.equal(meter.matchedRowCostUsdSum, '0.03503811');
+  assert.ok(!JSON.stringify(f.notifications).includes('0.03503811'));
+  assert.ok(!JSON.stringify(result.events).includes('reportStart'));
+  assert.ok(!JSON.stringify(result.events).includes('reportEnd'));
+  assert.ok(!JSON.stringify(result.events).includes('matchedRowCostUsdSum'));
+});
+
+test('legacy v1 cleanup preserves version-free original request bytes and never redeploys or refills budget', async t => {
+  const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
+  await runModalPilot(f.options, f.dependencies);
+  // Materialize the exact version-free persisted format from pre-v2 runs.
+  // Only this offline fixture is rewritten; actual old journals stay immutable.
+  const manifestPath = path.join(f.options.runDirectory, 'manifest.private.json');
+  const resourcePath = path.join(f.options.runDirectory, 'resources.private.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  delete manifest.volumeFsVersion;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const owned = JSON.parse(await readFile(resourcePath, 'utf8'));
+  await writeFile(resourcePath, JSON.stringify({ ...owned, volumeFsVersion: 1 }));
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  for (const row of journal.db.prepare('SELECT key,request_json FROM modal_operations').all()) {
+    const request = JSON.parse(row.request_json); delete request.volumeFsVersion;
+    journal.db.prepare('UPDATE modal_operations SET request_json=?,request_digest=? WHERE key=?')
+      .run(JSON.stringify(request), digest(request), row.key);
+  }
+  const originalStop = journal.get('stop-app');
+  const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+  const originalCommitment = ledger.status().committedCents;
+  const callsBefore = f.calls.length;
+  settings.sdkFailures = ['prefetch'];
+  await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+  const completedStop = journal.get('stop-app');
+  assert.equal(completedStop.state, 'succeeded');
+  assert.equal(completedStop.request_json, originalStop.request_json);
+  assert.equal(completedStop.request_digest, originalStop.request_digest);
+  assert.equal(journal.get('prefetch').state, 'unknown');
+  assert.equal(journal.get('delete-volume').state, 'succeeded');
+  const cleanupPayloads = f.payloads.slice(callsBefore);
+  assert.ok(cleanupPayloads.some(payload => payload.operation === 'reconcile-stop-app'));
+  assert.ok(cleanupPayloads.some(payload => payload.operation === 'delete-volume'));
+  assert.ok(cleanupPayloads.every(payload => !('volumeFsVersion' in payload)
+    && (!payload.request || !('volumeFsVersion' in payload.request))));
+  assert.equal(f.calls.filter(operation => operation === 'deploy').length, 1);
+  assert.equal(f.calls.filter(operation => operation === 'prefetch').length, 1);
+  assert.equal(ledger.status().committedCents, originalCommitment);
+  assert.equal(ledger.status().reservations[0].state, 'retired-meter-pending');
+  const retired = JSON.parse(await readFile(resourcePath, 'utf8'));
+  assert.equal(retired.volumeId, 'vo-owned');
+  assert.equal(retired.volumeFsVersion, 1);
+});
+
+test('legacy uncapped Flow cleanup uses original authored digest and201 proof with unknown generation preserved', async t => {
+  const settings = {}, f = await fixture(t, settings);
+  const names = ['manifest.private.json', 'resources.private.json', 'redeployable-fixture.private.json',
+    'fixture-ownership.private.json', 'create-flow-response.private.json', 'create-flow-response.private.json.http.private.json'];
+  let snapshot;
+  settings.beforeFlowCompletion = async () => {
+    const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+    const rows = journal.db.prepare('SELECT * FROM modal_operations').all(); journal.close();
+    snapshot = { rows, files: Object.fromEntries(await Promise.all(names.map(async name =>
+      [name, await readFile(path.join(f.options.runDirectory, name))]))), models: structuredClone(f.models), flows: structuredClone(f.flows) };
+  };
+  await runModalPilot(f.options, f.dependencies);
+  settings.beforeFlowCompletion = undefined;
+  assert.ok(snapshot.flows.length === 1, 'The offline runner actually created its Flow before the crash snapshot');
+  // Restore the captured pre-cleanup fixture state, then represent the exact
+  // uncapped authored bytes/version-free journal format of an old v1 run.
+  for (const stem of ['disable-model-response.private.json', 'delete-flow-response.private.json', 'delete-model-response.private.json']) {
+    await unlink(path.join(f.options.runDirectory, stem));
+    await unlink(path.join(f.options.runDirectory, `${stem}.http.private.json`));
+  }
+  for (const [name, bytes] of Object.entries(snapshot.files)) await writeFile(path.join(f.options.runDirectory, name), bytes);
+  const legacyFlow = structuredClone(snapshot.flows[0]);
+  delete legacyFlow.nodes.find(node => node.data.type === 'process').data.properties.maxTokens;
+  const legacyFlowDigest = digest(legacyFlow);
+  const manifest = JSON.parse(snapshot.files['manifest.private.json']); delete manifest.volumeFsVersion;
+  await writeFile(path.join(f.options.runDirectory, 'manifest.private.json'), JSON.stringify(manifest));
+  const owned = JSON.parse(snapshot.files['resources.private.json']); owned.volumeFsVersion = 1;
+  await writeFile(path.join(f.options.runDirectory, 'resources.private.json'), JSON.stringify(owned));
+  const authored = JSON.parse(snapshot.files['redeployable-fixture.private.json']); authored.flow = legacyFlow;
+  await writeFile(path.join(f.options.runDirectory, 'redeployable-fixture.private.json'), JSON.stringify(authored));
+  const ownership = JSON.parse(snapshot.files['fixture-ownership.private.json']);
+  ownership.flowDigest = legacyFlowDigest; delete ownership.flowCreated; //201 survived the lost checkpoint.
+  await writeFile(path.join(f.options.runDirectory, 'fixture-ownership.private.json'), JSON.stringify(ownership));
+  const flowHttp = JSON.parse(snapshot.files['create-flow-response.private.json.http.private.json']);
+  flowHttp.bodyDigest = legacyFlowDigest;
+  await writeFile(path.join(f.options.runDirectory, 'create-flow-response.private.json.http.private.json'), JSON.stringify(flowHttp));
+  await writeFile(path.join(f.options.runDirectory, 'create-flow-response.private.json'), JSON.stringify(legacyFlow));
+  f.models.push(...snapshot.models); f.flows.push(legacyFlow);
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  journal.db.exec('BEGIN IMMEDIATE');
+  try {
+    journal.db.exec('DELETE FROM modal_operations');
+    for (const row of snapshot.rows) {
+      const request = JSON.parse(row.request_json); delete request.volumeFsVersion;
+      if ('flowDigest' in request) request.flowDigest = legacyFlowDigest;
+      journal.db.prepare('INSERT INTO modal_operations VALUES(?,?,?,?,?,?,?,?)').run(row.key, row.operation,
+        digest(request), JSON.stringify(request), row.state, row.result_json, row.created, row.updated);
+    }
+    journal.db.exec('COMMIT');
+  } catch (error) { journal.db.exec('ROLLBACK'); throw error; }
+  journal.settle('flujo-generation', 'unknown', { state: 'unknown' });
+  const originalFlowIntent = journal.get('create-flujo-flow');
+  const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
+  const beforeBudget = ledger.status(), callsBefore = f.calls.length, httpBefore = f.httpCalls.length;
+  await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+  assert.equal(journal.get('create-flujo-flow').request_json, originalFlowIntent.request_json);
+  assert.equal(journal.get('create-flujo-flow').request_digest, originalFlowIntent.request_digest);
+  assert.equal(journal.get('flujo-generation').state, 'unknown');
+  assert.equal(journal.get('disable-flujo-model').state, 'succeeded');
+  assert.equal(journal.get('delete-flujo-flow').state, 'succeeded');
+  assert.equal(journal.get('delete-flujo-model').state, 'succeeded');
+  assert.equal(f.flows.length, 0); assert.equal(f.models.length, 0);
+  const cleanupHttp = f.httpCalls.slice(httpBefore);
+  assert.ok(cleanupHttp.findIndex(call => call.method === 'PUT') < cleanupHttp.findIndex(call => call.method === 'DELETE' && call.pathname.startsWith('/api/flow/')));
+  assert.ok(cleanupHttp.every(call => call.method !== 'POST'));
+  assert.ok(f.calls.slice(callsBefore).every(operation => !['create-volume', 'deploy', 'prefetch', 'create-proxy-token'].includes(operation)));
+  assert.equal(ledger.status().committedCents, beforeBudget.committedCents);
+  assert.equal(ledger.status().limitCents, beforeBudget.limitCents);
 });
 
 test('proxy cleanup failure cannot claim retired completion and cannot suppress App/Volume cleanup', async t => {
@@ -186,6 +398,126 @@ test('unknown generation redirects are retained privately, never replayed, and o
   assert.ok(!JSON.stringify(f.notifications).includes('private'));
   const location = JSON.parse(await readFile(path.join(f.options.runDirectory, 'direct-result-url.private.json'), 'utf8'));
   assert.match(location.location, /result=private/);
+});
+
+test('one POST303 followed by validated GET200 preserves opaque query, original intent and absolute signal', async t => {
+  const query = '?__modal_result=opaque%2f+%2B&x=1&x=2';
+  const f = await fixture(t, { modalHttpResponse: ({ init, expectedModel }) => init.method === 'POST'
+    ? new Response('private pending result', { status: 303, headers: { location: query } })
+    : new Response(safeCompletion(expectedModel), { status: 200 }) });
+  const result = await runModalPilot(f.options, f.dependencies);
+  assert.equal(result.state, 'smoke-complete');
+  const requests = f.httpCalls.filter(call => call.origin.includes('modal.run'));
+  assert.deepEqual(requests.map(call => call.method), ['POST', 'GET']);
+  assert.equal(new URL(requests[1].url).search, query);
+  assert.equal(requests[1].body, null);
+  assert.equal(requests[1].headers['Content-Type'], undefined);
+  assert.equal(requests[0].signal, requests[1].signal);
+  assert.ok(requests.every(call => call.redirect === 'manual'));
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  const intent = journal.get('direct-generation');
+  assert.equal(intent.state, 'succeeded');
+  assert.equal(JSON.parse(intent.request_json).deadlineMs, 600_000);
+  assert.equal(JSON.parse(intent.request_json).resultGetLimit, 3);
+  for (const hop of [0, 1]) {
+    const receipt = JSON.parse(await readFile(path.join(f.options.runDirectory, `direct-http-${hop}.private.json`), 'utf8'));
+    assert.equal(receipt.effectKey, 'direct-generation');
+    assert.equal(receipt.requestDigest, intent.request_digest);
+    assert.equal(receipt.originalUrl, requests[0].url);
+    assert.equal(receipt.appId, 'ap-owned');
+    assert.equal(receipt.status, hop === 0 ? 303 : 200);
+  }
+  const final = JSON.parse(await readFile(path.join(f.options.runDirectory, 'direct-response.private.json'), 'utf8'));
+  assert.equal(final.choices[0].message.content, '{"checkpoint":"ready"}');
+  assert.ok(!JSON.stringify(f.notifications).includes('opaque'));
+  assert.ok(!JSON.stringify(result).includes('opaque'));
+});
+
+test('repeated303 stops after three GETs without repeating POST and retains original unknown work', async t => {
+  const f = await fixture(t, { modalHttpResponse: () => new Response('pending', { status: 303,
+    headers: { location: '?__modal_result=private' } }) });
+  const result = await runModalPilot(f.options, f.dependencies);
+  const requests = f.httpCalls.filter(call => call.origin.includes('modal.run'));
+  assert.deepEqual(requests.map(call => call.method), ['POST', 'GET', 'GET', 'GET']);
+  assert.ok(requests.every(call => call.signal === requests[0].signal));
+  assert.equal(result.state, 'requires-reconciliation');
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  assert.equal(journal.get('direct-generation').state, 'unknown');
+  assert.equal(journal.get('stop-app').state, 'succeeded');
+  assert.equal(journal.get('delete-volume').state, 'succeeded');
+  assert.equal((await readdir(f.options.runDirectory)).filter(name => /^direct-http-\d\.private\.json$/.test(name)).length, 4);
+});
+
+test('unsafe303 result URLs never receive GET or bearer transmission', async t => {
+  const locations = ['https://other.modal.run/v1/chat/completions?private=1',
+    'https://factory--serve.modal.run:444/v1/chat/completions?private=1',
+    'https://factory--serve.modal.run/wrong-path?private=1',
+    'http://factory--serve.modal.run/v1/chat/completions?private=1',
+    'https://user:pass@factory--serve.modal.run/v1/chat/completions?private=1',
+    '/v1/chat/completions?private=1#fragment', '/v1/chat/completions?private=1#',
+    '/v1/chat/completions', '/v1/chat/completions?', '', null];
+  for (const location of locations) {
+    const f = await fixture(t, { modalHttpResponse: () => new Response('private redirect', { status: 303,
+      headers: location === null ? {} : { location } }) });
+    const result = await runModalPilot(f.options, f.dependencies);
+    assert.equal(result.state, 'requires-reconciliation');
+    assert.equal(f.httpCalls.filter(call => call.origin.includes('modal.run')).length, 1);
+    assert.equal(f.httpCalls.filter(call => call.method === 'GET').length, 0);
+    assert.ok(f.calls.includes('stop-app') && f.calls.includes('delete-volume'));
+  }
+});
+
+test('non303 HTTP status never authorizes a result request or another POST', async t => {
+  for (const status of [307, 503]) {
+    const f = await fixture(t, { modalHttpResponse: () => new Response('private error', { status,
+      headers: { location: '?__modal_result=private' } }) });
+    const result = await runModalPilot(f.options, f.dependencies);
+    assert.equal(result.state, 'requires-reconciliation');
+    assert.deepEqual(f.httpCalls.filter(call => call.origin.includes('modal.run')).map(call => call.method), ['POST']);
+  }
+});
+
+test('result GET still rejects truncated completion and oversized body while resources retire', async t => {
+  for (const oversized of [false, true]) {
+    const f = await fixture(t, { modalHttpResponse: ({ init, expectedModel }) => {
+      if (init.method === 'POST') return new Response('pending', { status: 303, headers: { location: '?__modal_result=private' } });
+      const value = JSON.parse(safeCompletion(expectedModel)); value.choices[0].finish_reason = 'length';
+      return new Response(oversized ? 'x'.repeat(1024 * 1024 + 1) : JSON.stringify(value), { status: 200 });
+    } });
+    const result = await runModalPilot(f.options, f.dependencies);
+    assert.equal(result.state, 'requires-reconciliation');
+    assert.deepEqual(f.httpCalls.filter(call => call.origin.includes('modal.run')).map(call => call.method), ['POST', 'GET']);
+    const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite'));
+    assert.equal(journal.get('direct-generation').state, 'unknown');
+    assert.equal(journal.get('stop-app').state, 'succeeded');
+    assert.equal(journal.get('delete-volume').state, 'succeeded'); journal.close();
+  }
+});
+
+test('single600-second absolute signal cancels pending result body and still permits cleanup', async t => {
+  const nativeTimeout = AbortSignal.timeout, controller = new AbortController();
+  let deadlineCreations = 0, bodyCancelled = false;
+  AbortSignal.timeout = milliseconds => {
+    if (milliseconds === 600_000) { deadlineCreations += 1; return controller.signal; }
+    return nativeTimeout(milliseconds);
+  };
+  try {
+    const f = await fixture(t, { modalHttpResponse: ({ init }) => {
+      if (init.method === 'POST') return new Response('pending', { status: 303, headers: { location: '?__modal_result=private' } });
+      const body = new ReadableStream({ pull() { queueMicrotask(() => controller.abort(new DOMException('private timeout', 'TimeoutError'))); },
+        cancel() { bodyCancelled = true; } }, { highWaterMark: 0 });
+      return new Response(body, { status: 200 });
+    } });
+    const result = await runModalPilot(f.options, f.dependencies);
+    const requests = f.httpCalls.filter(call => call.origin.includes('modal.run'));
+    assert.equal(deadlineCreations, 1);
+    assert.deepEqual(requests.map(call => call.method), ['POST', 'GET']);
+    assert.ok(requests.every(call => call.signal === controller.signal));
+    assert.equal(bodyCancelled, true);
+    assert.equal(result.state, 'requires-reconciliation');
+    assert.ok(f.calls.includes('stop-app') && f.calls.includes('delete-volume'));
+    assert.ok(!JSON.stringify(result).includes('private timeout'));
+  } finally { AbortSignal.timeout = nativeTimeout; }
 });
 
 test('refused rerun preserves original report and never creates another provider effect', async t => {
@@ -242,6 +574,21 @@ test('owned fresh stop reconciliation permits only undispatched volume cleanup a
   const ledger = new SpendingLedger(f.options.spendingPath); t.after(() => ledger.close());
   assert.equal(ledger.status().reservations[0].state, 'retired-meter-pending');
   assert.equal(ledger.status().committedCents, 3000);
+});
+
+test('damaged authored Flow evidence cannot block independently owned provider retirement', async t => {
+  const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
+  await runModalPilot(f.options, f.dependencies);
+  await writeFile(path.join(f.options.runDirectory, 'redeployable-fixture.private.json'), 'invalid fixture JSON');
+  settings.sdkFailures = ['prefetch'];
+  const result = await runModalPilot({ ...f.options, cleanupOnly: true }, f.dependencies);
+  const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
+  assert.equal(result.state, 'requires-reconciliation');
+  assert.equal(journal.get('stop-app').state, 'succeeded');
+  assert.equal(journal.get('delete-volume').state, 'succeeded');
+  assert.equal(journal.get('prefetch').state, 'unknown');
+  assert.equal(f.calls.filter(operation => operation === 'deploy').length, 1);
+  assert.equal(f.calls.filter(operation => operation === 'prefetch').length, 1);
 });
 
 test('fabricated or live stop proof cannot settle the original intent or unlock volume deletion', async t => {
