@@ -1,7 +1,92 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`72aec7cd64ff7d55ba8c7cb31bf371dee8a88044`. Its complete Node 24.19.0 suite
+`d9d87c6ebbd05b6c82bdbf0f7c537e76eb4b9a66`. Its complete Node 24.19.0 suite passed **461/461** across
+all 39 frozen test files. Actual child **48632** ran from **15:41:52.766 to
+15:48:15.029 UTC**, closed 0/null signal, and reported zero failures,
+cancellations, skips or todos. Focused Modal qualification passed **36/36**,
+actual child **44092**, closed 0/null signal.
+
+The coordinator rechecks the shared SpendingLedger after awaited running-stage
+notifications and bound FLUJO source resolution, immediately before a new paid
+SDK, direct HTTP or Flow dispatch. Five new cases use a separate actual ledger
+connection: pause during prefetch and direct-generation notifications; pause or
+exhaustion during awaited Flow-source resolution; and pause after an original
+generation POST while its GET result and owned cleanup remain available.
+The refused calls preserve their original uncertain intents and reservation
+holds; ordinary replay cannot replace them.
+
+The raw R2 full execution remains **accepted:false**: its private collector
+incorrectly required exit 0 for the four native watcher children that the frozen
+test intentionally stops with SIGTERM. A separate **accepted** retained-evidence
+qualification verifies the actual closed 461/461 run, focused 36/36 run, genuine
+SDK loopback probes (2 baseline and 20 candidate cases), the four source-bound
+watcher terminations and their eight raw streams. It reproduces the collector's
+assertion failure without changing or relabeling the raw record and runs no new
+tests. These are same-host fixture and loopback proofs.
+
+The first full run remains a timed-out failure after its private TEMP/TMP fixture
+environment changed a negative ACL test's assumptions. The initial focused run
+failed before discovery because the isolated worktree lacked dependencies. The
+first retained qualification failed raw-fixture private-file handling and its
+helper read-limit check. The first runtime-adoption preflight failed before
+destination creation or source writes because it compared equivalent Windows
+path spellings literally. A read-only diagnostic reproduced that exact failure;
+the corrected helper preserves the recorded path, hash and file identity and
+passed a complete nonmutating admission before adoption. All original failed
+records, producers and raw outputs remain retained with their own identities.
+
+Adoption copied exactly `scripts/modal-pilot.mjs` and
+`test/modal-pilot.test.mjs`, preserved the other 138 Root tracked files byte for
+byte, and retained all 140 qualified inputs under
+`.factory/modal-dispatch-fence-20261003/qualified-source`. All 123 committed
+non-Markdown runtime/build/test files match the qualified source after LF
+normalization. The six qualification trees (initial focused failure, focused
+success, failed first full run, raw second full run, failed first retained
+qualification and accepted retained qualification), their producers, the failed
+runtime-adopter observation, actual read-only diagnosis and nonmutating admission
+were copied with an explicit relocation map before either runtime write.
+
+The original controller remains paused at epoch **5**, revision **92**, with
+budget-only policy and its original mission, 10,000-cent allocation and history.
+Paid revision **19** retains four `retired-meter-pending` reservations, the full
+**US$100** held, **US$0** available and unknown final billing. All original
+eight-table controller and three-table paid SQL histories and main/WAL pins
+remained unchanged. No admission resume, terminal task write, provider operation,
+new paid reservation or paid/external model call occurred in this source adoption.
+
+At the historical **15:16 UTC** reconciliation, original API **PID 52524** served
+loaded build `8f5a940` and the updated controller. A fresh **17:26 UTC** process
+and listener inspection found that PID absent and no listener on port 4344.
+Neither these source tests nor this adoption establish current API health.
+
+Evidence under `.factory/modal-dispatch-fence-20261003`:
+
+- Raw second full execution (still failed):
+  `3b70058451a7a0b1b6f9d1524ac9d908787f28ebd339f1759cffce29156cd110`.
+- Separate accepted retained qualification:
+  `e97c666f280c665d7e311098703374443d74ac1b21a74f2f96de833b9eeefa65`.
+- Accepted focused execution:
+  `2f0eaa8d5110306811a570649e0b979741e13b54b1e158640920af5ef5e86149`.
+- Failed first full execution:
+  `e34822c3520fb66ee056472090b6257efe476c12b50c7288d9c78f3c7b4d0d0d`.
+- Failed first retained qualification:
+  `2f33d0c706efaf1809d164422e055366d41e75b8b14dda3bdaef55f3a1f2226e`.
+- Accepted runtime adoption: `a7f5b71fbdd5b53f6d876aaba82cb5bb343e8bc5e36e77a832d3af014e61e87b`.
+- Source/evidence relocation map: `cab050eb5eaeb217124d68ef9d0cd7c72f906d6f781769fde87f639e20390249`.
+
+The final synchronous ledger check closes the coordinator's asynchronous gaps;
+it is not atomic with another process's later pause and does not cancel an
+already dispatched SDK child or HTTP request. It is not a provider-side hard
+cost cap. This increment does not prove mounted Modal weights, GPU startup,
+successful Modal-backed native Flow inference, recursive cloud enrollment, independent-host
+recovery or development-speed improvement. The earlier growth/Docker results
+below retain their original source and image scope; they were not rerun or
+relabeled for this Modal change.
+
+## Earlier budget-only growth source qualification
+
+Source `72aec7cd64ff7d55ba8c7cb31bf371dee8a88044`. Its complete Node 24.19.0 suite
 passed **456/456**, actual child 26652, from 14:09:46.435 to 14:15:29.565 UTC,
 exit 0/null signal and zero failures, cancellations, skips or todos. The focused
 suite passed **60/60**, actual child 44372, exit 0/null. All 139 frozen inputs
@@ -78,7 +163,7 @@ reproduced the exact recorded assertion-message hash. No transition retry or
 restore occurred. A separate read-only reconciliation completed at **15:16:38
 UTC**, with all eight owned Git/CIM children closing 0/null and four fresh
 authenticated responses returning 200/no-store. The original API **PID 52524**,
-created at **04:04:18.778031 UTC**, still loaded `8f5a940` and served epoch 5/revision
+created at **04:04:18.778031 UTC**, was then loaded at `8f5a940` and served epoch 5/revision
 92. Full snapshot DTO comparison against retained pre-transition responses permits
 only observation timestamps, revision/cursor and controller epoch changes; the
 event projection preserves its original prefix and adds the bound event. Exact
@@ -542,7 +627,7 @@ lacks the new operation type. Provisioning cannot satisfy that acceptance.
 The intended terminal outcome is cancellation for `acceptance-unmet`, preserving
 the original specification; no legacy completion or specification rewrite was
 added. At that terminal-task qualification, the controller remained revision 91, paused at epoch 4, with
-`launch-parent` running. Port 4344 remains loaded build `8f5a940`. Paid revision
+`launch-parent` running. At that qualification, port 4344 served build `8f5a940`. Paid revision
 19 retains all US$100, zero available capacity, 30 rounded nonfinal partial cents
 and null final spend. No live terminal transition, API restart or paid/provider
 mutation occurred.
@@ -584,7 +669,7 @@ pins and eight SDK/helper dependencies were unchanged during execution. Adoption
 then verified ten exact changed raw files, 57 unchanged root raw files and all
 67 current runtime files against the tested source after LF normalization.
 No provider resource, paid reservation, model cache or existing API process was
-changed. The API on port 4344 still has its earlier loaded build `8f5a940`.
+changed. At that qualification, the API on port 4344 served its earlier loaded build `8f5a940`.
 
 The first focused run remains failed: the real SDK suites passed, but two new
 fake-bridge fixtures left SQLite handles open and failed Windows temporary-file
@@ -1336,7 +1421,7 @@ controller revision 91 and the unchanged running task and paid projection. All
 three Modal journals still expose their original 15 operations and three unknown
 prefetch outcomes. SQL and main/WAL bytes were stable during those HTTP reads.
 The existing port 4344 process was not restarted: its actual presentation build
-remains `8f5a940`, distinct from repository runtime source `8dce857`.
+was then `8f5a940`, distinct from repository runtime source `8dce857`.
 Protected HTTP witness SHA-256:
 `1e545a0d0dca944e0daaae73d21486e4e00a92e0ba90b4bf5bd7be5644361bb4`.
 

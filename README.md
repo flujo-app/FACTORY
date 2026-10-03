@@ -28,7 +28,16 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
-Source `72aec7cd64ff7d55ba8c7cb31bf371dee8a88044` adds explicit budget-only growth:
+Source `d9d87c6ebbd05b6c82bdbf0f7c537e76eb4b9a66` repeats shared paid-admission checks after awaited
+stage notifications and FLUJO source discovery, immediately before paid SDK,
+direct HTTP or Flow dispatch. Its complete Node 24 suite passed **461/461** and
+focused Modal checks **36/36**. Separate retained-evidence qualification accepts
+the actual closed run while preserving its failed raw collector receipt. Owned
+cleanup and GET recovery of an original generation remain available while paid
+admission is paused. This is local source qualification; mounted Modal weights,
+GPU startup, Modal-backed native Flow and deployed autonomy remain open.
+
+Earlier source `72aec7cd64ff7d55ba8c7cb31bf371dee8a88044` adds explicit budget-only growth:
 factory policy schema 2 removes cell-count and delegation-depth ceilings, and
 capacity grant schema 2 removes its child-count ceiling. Parent allocations,
 lifetime grant monetary ceilings and the shared SpendingLedger still constrain
@@ -120,9 +129,11 @@ combination passed **324/324** with actual exit 0 and process closure. Adoption
 matched six qualified files and preserved 63 untouched runtime files and all
 29 accounting/history witnesses. A rehearsal cancelled the original launch task
 on a private database copy only. The separate growth-policy transition advanced
-the live controller to revision 92 and paused epoch 5; that task remains running,
-and the port 4344 API remains loaded at `8f5a940`. Brain's
-reader source is qualified; active O readers and a replacement API still need
+the live controller to revision 92 and paused epoch 5; that task remains running.
+At the 15:16 UTC reconciliation, the original port 4344 API served build
+`8f5a940`. A fresh 17:26 UTC process/listener inspection found its PID 52524 absent
+and no listener on port 4344; this source adoption establishes no current API
+health. Brain's reader source is qualified; active O readers and a replacement API still need
 qualification before live terminal writes. See [LIFECYCLE.md](LIFECYCLE.md) and
 [QUALIFICATION.md](QUALIFICATION.md).
 
