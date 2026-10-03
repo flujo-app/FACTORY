@@ -58,7 +58,45 @@ new paid reservation or paid/external model call occurred in this source adoptio
 At the historical **15:16 UTC** reconciliation, original API **PID 52524** served
 loaded build `8f5a940` and the updated controller. A fresh **17:26 UTC** process
 and listener inspection found that PID absent and no listener on port 4344.
-Neither these source tests nor this adoption establish current API health.
+The source tests and source adoption establish no API health by themselves.
+
+A separate accepted **18:35 UTC** read-only reconciliation verified the already
+launched replacement **PID 29756**, parent **1040**, created at
+**18:20:52.1966410 UTC**, with its exact Node executable, command line, 17 arguments
+and sole `127.0.0.1:4344` listener. It serves qualified runtime
+`d9d87c6ebbd05b6c82bdbf0f7c537e76eb4b9a66`. Actual authenticated snapshot, events
+and Modal-journal GETs at **18:35:29.796–18:35:29.823 UTC** returned 200/no-store;
+the corresponding three anonymous GETs returned 401/no-store. Complete response
+projections matched retained historical evidence after removing only observation
+timestamps and build identity, with the exact current paid projection substituted
+into the historical Modal response. Source 140/raw runtime 123/qualified Git 123,
+dependencies, all eight controller and three paid SQL tables, main/WAL pins,
+three Modal journals, viewer credential/configuration and 2,194 retained proof
+pins stayed unchanged. All 11 read-only Git/CIM children closed 0/null signal.
+
+The original single-launch execution remains **accepted:false**. Its Windows
+PowerShell 5 argument parser nested the expected JSON array and rejected the
+process before HTTP checks; cleanup refused unverified ownership and did not
+stop it. Independent read-only diagnosis confirmed the exact original process
+and the corrected typed 17-element comparison. The accepted reconciliation is a
+distinct receipt: it neither edits nor relabels that failure and launches, stops
+or retries no server. The earlier accepted preflight used a non-listening
+production handler and established no HTTP health. The current viewer exposes
+read-only projections with commands disabled; provider freshness remains
+`not_observed`. Controller authority remains paused at epoch 5/revision 92 and
+paid revision 19 still holds the full US$100 pending final billing. This local
+viewer evidence grants no task completion, paid admission or deployment readiness.
+
+Viewer evidence under `.factory/budget-growth-activation-20261003`:
+
+- Accepted existing-process reconciliation:
+  `901c29e2091bc0f1c3ec5dec1c4496b91241e96e8c2e5a04a84a80f4a5bf9ed9`.
+- Original failed single-launch execution:
+  `a58b7df348ce14007b92a76e84b3c66a352262881c2b76f40417ce152114c671`.
+- Independent Windows argument diagnosis:
+  `4b682b20ce14261d21ee3fb55f92fa1d0a079b0222cd502f384987d79e391f5d`.
+- Accepted non-listening preflight:
+  `d821b5caf0f11b7813ac7b799146d3b51fd1ff8c676e8bd6a3e9199785b0c905`.
 
 Evidence under `.factory/modal-dispatch-fence-20261003`:
 

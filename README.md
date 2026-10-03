@@ -132,9 +132,16 @@ on a private database copy only. The separate growth-policy transition advanced
 the live controller to revision 92 and paused epoch 5; that task remains running.
 At the 15:16 UTC reconciliation, the original port 4344 API served build
 `8f5a940`. A fresh 17:26 UTC process/listener inspection found its PID 52524 absent
-and no listener on port 4344; this source adoption establishes no current API
-health. Brain's reader source is qualified; active O readers and a replacement API still need
-qualification before live terminal writes. See [LIFECYCLE.md](LIFECYCLE.md) and
+and no listener on port 4344. A separate **18:35 UTC** read-only reconciliation
+verified the single replacement **PID 29756** on `127.0.0.1:4344`, serving qualified
+runtime `d9d87c6ebbd05b6c82bdbf0f7c537e76eb4b9a66`. Authenticated snapshot, events
+and Modal-journal GETs returned 200/no-store; anonymous requests returned
+401/no-store. The original launcher receipt remains failed after its Windows
+argument-parser check; the separate reconciliation verified the existing process
+without another launch or cleanup. Controller epoch 5/revision 92, paid revision
+19, all original SQL histories and source bytes stayed unchanged. Commands remain
+disabled. Brain's reader source is qualified; active O readers still need
+qualification before any later live terminal transition. See [LIFECYCLE.md](LIFECYCLE.md) and
 [QUALIFICATION.md](QUALIFICATION.md).
 
 Source `ac8b51fbf2833d347a0d96ed7f422a0bd82412bc` rejects invalid HTTP
