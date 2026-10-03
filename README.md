@@ -34,8 +34,10 @@ capacity grant schema 2 removes its child-count ceiling. Parent allocations,
 lifetime grant monetary ceilings and the shared SpendingLedger still constrain
 admission. The complete suite passed **456/456** and the focused suite **60/60**.
 Actual Docker capture/restore and schema-2 broker refusal/restart passed against
-a fully held fixture budget. The original live policy remains paused and
-unconverted. See [the growth guide](BUDGET_GROWTH.md) for the exact policy and
+a fully held fixture budget. The original controller now uses budget-only policy,
+paused at epoch 5 and revision 92. Its mission, budget and historical records
+were preserved; the same loaded API served the transition. See
+[the growth guide](BUDGET_GROWTH.md) for the exact policy and
 trusted local migration commands.
 
 Source `fea3d151c1a4380495094744d00a33770b1abbb5` packages native-cell and
@@ -117,8 +119,9 @@ and review history. Neither establishes reviewed software delivery. The complete
 combination passed **324/324** with actual exit 0 and process closure. Adoption
 matched six qualified files and preserved 63 untouched runtime files and all
 29 accounting/history witnesses. A rehearsal cancelled the original launch task
-on a private database copy only. The live controller remains revision 91 with
-that task running, and the port 4344 API remains loaded at `8f5a940`. Brain's
+on a private database copy only. The separate growth-policy transition advanced
+the live controller to revision 92 and paused epoch 5; that task remains running,
+and the port 4344 API remains loaded at `8f5a940`. Brain's
 reader source is qualified; active O readers and a replacement API still need
 qualification before live terminal writes. See [LIFECYCLE.md](LIFECYCLE.md) and
 [QUALIFICATION.md](QUALIFICATION.md).

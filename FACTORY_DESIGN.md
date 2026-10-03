@@ -296,7 +296,8 @@ local policy choice: exact factory schema 2 stores
 Missing or malformed ceilings never imply that mode. Parent allocations, grant
 monetary ceilings, paid admission, leases and provenance remain enforced.
 Models and advisory peers cannot change the policy. The original live controller
-is still paused with its legacy policy; see [BUDGET_GROWTH.md](BUDGET_GROWTH.md).
+now uses budget-only policy at paused epoch 5/revision 92, preserving its mission,
+budget and historical records; see [BUDGET_GROWTH.md](BUDGET_GROWTH.md).
 
 The local recovery pilot is executable in this repository. Its saved evidence at
 [the October 2 recovery report](C:/Users/Moe/Documents/ChatGPT/FACTORY/evidence/local-recovery-20261002/report.json)

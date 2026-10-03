@@ -165,11 +165,12 @@ retroactive operational completion. Its specification was not rewritten.
 
 The full combination passed **324/324**. Two real processes also rehearsed the
 original task's cancellation on a private database copy with exact replay and a
-read-only API. Event 92 exists only in that copy. Live revision 91 and the running
-launch task are unchanged; the existing port 4344 process still loads `8f5a940`.
+read-only API. That cancellation event 92 exists only in its copy. The original
+controller's separate event 92 records budget-only growth at paused epoch 5;
+the launch task remains running and the existing port 4344 process still loads `8f5a940`.
 The presentation source accepts exactly `completed` and `cancelled` as additive
 task enums under schema 1. Brain reader source is qualified; active O reader
-rollout and replacement-API qualification remain prerequisites for live writes.
+rollout and replacement-API qualification remain prerequisites for live terminal-task writes.
 Commands remain disabled. Worker quiescence and paid finality remain separate
 facts. Exact source and execution evidence is in [QUALIFICATION.md](QUALIFICATION.md).
 

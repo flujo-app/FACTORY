@@ -91,8 +91,16 @@ capture/restore, schema-2 admission refusal and broker restart passed. No paid
 provider operation was performed. Exact identities and evidence are in
 [QUALIFICATION.md](QUALIFICATION.md).
 
-The original live controller remains paused with its legacy policy. All US$100
-is held, with zero available paid admission and final billing unknown. Budget-only
-source does not establish deployed recursive peers or independent-host authority.
+On October 3 the original controller changed from legacy paused epoch 4/revision
+91 to budget-only paused epoch 5/revision 92. Transition
+`budget-growth-live-20261003` removed its count/depth ceilings while preserving
+the original mission, 10,000-cent budget and every historical row. The original
+`8f5a940` API process served the resulting state without replacement. Admission
+was not resumed, existing tasks were not closed, and no live schema-2 standing
+grant was issued. Exact execution and separate read-only reconciliation are
+recorded in [QUALIFICATION.md](QUALIFICATION.md).
+
+All US$100 is held, with zero available paid admission and final billing unknown.
+Budget-only policy does not establish deployed recursive peers or independent-host authority.
 Large-history presentation pagination also remains future work; its existing
 10,000-row response guard is not a provisioning quota or a scale qualification.

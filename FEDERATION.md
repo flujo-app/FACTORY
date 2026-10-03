@@ -90,7 +90,9 @@ Explicit budget-only policy removes those ceilings while parent allocations,
 lifetime grant monetary ceilings and shared paid admission constrain each child.
 The scheduler should also shrink idle capacity and account for provisioning/setup
 time. The source implementation and paused migration are described in
-[BUDGET_GROWTH.md](BUDGET_GROWTH.md); the original live policy is unconverted.
+[BUDGET_GROWTH.md](BUDGET_GROWTH.md). The original controller now uses that policy
+at paused epoch 5/revision 92; paid allowance and deployed peer authority remain
+separate prerequisites.
 
 ## Talking is a durable protocol
 

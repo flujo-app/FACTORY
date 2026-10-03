@@ -36,9 +36,10 @@ byte and retained all 139 raw inputs under
 `.factory/budget-growth-20261003/qualified-source`. All 139 runtime-commit files
 match qualified content after LF normalization; the ten adopted working files
 also match their raw hashes. Subsequent Markdown edits leave the 123 non-Markdown
-runtime/build/test files unchanged. The original controller and spending main-file
-hashes remained unchanged. Its live controller stays paused at legacy policy;
-the API was neither restarted nor freshly health-checked by this increment.
+runtime/build/test files unchanged. During that source-adoption increment, the
+original controller and spending main-file hashes remained unchanged and the
+controller retained legacy policy. The API was neither restarted nor freshly
+health-checked by that increment. Subsequent live activation is recorded below.
 All US$100 remains held with zero available paid admission and final billing unknown.
 
 Evidence under `.factory/budget-growth-20261003`:
@@ -47,11 +48,68 @@ Evidence under `.factory/budget-growth-20261003`:
 - Build witness SHA256: `5b356f5b60a1a4f418a9e13fe9d706900459dfe44279f9b2d0f49537b5024a47`.
 - Clone/broker execution SHA256: `6e649dcdd1efb3b32269c2a73730321cfe8ebf77f7d325d6b0f875b4269d67f7`.
 
-This establishes local policy/admission and packaged fixture behavior. No live
-growth activation, successful paid deployment, GPU inference, recursive cloud
-enrollment, remote shared authority or development-speed improvement was proved.
+That increment establishes local policy/admission and packaged fixture behavior.
+It did not establish live growth activation, successful paid deployment, GPU inference, recursive cloud
+enrollment, remote shared authority or development-speed improvement.
 The earlier native-cell service restart proof below applies to its recorded
 runtime/image; that separate proof was not rerun on the new growth image.
+
+## Original paused growth activation
+
+On October 3, the original controller committed transition
+`budget-growth-live-20261003` at 15:00:11 UTC, from paused legacy epoch 4/revision
+91 to paused budget-only epoch 5/revision 92. Actual qualified CLI child **43788**
+closed 0/null, with no timeout, overflow or recording failure. Policy schema 2
+stores `growthMode: "budget-only"`, `maxCells: null` and `maxDepth: null`.
+The original mission and 10,000-cent budget remain exact. All original 91 events,
+all cell/task/effect/binding/integration/message rows and the schema are preserved;
+only policy, epoch and one digest-bound `growth_policy_changed` event changed.
+
+An owned-copy rehearsal first verified the actual current CLI transition/replay
+and six historical-reader responses, with all four child processes closing
+0/null. Exact logical replay was preserved; SQLite header counters changed at
+byte offsets 27 and 95. The earlier rehearsal that required physical replay-byte
+equality remains failed. Original source, control and paid main/WAL pins stayed
+unchanged during both copy runs.
+
+The original live execution receipt remains **failed** because its private
+post-check omitted the CLI's `control.id: 1` field. Offline reconstruction
+reproduced the exact recorded assertion-message hash. No transition retry or
+restore occurred. A separate read-only reconciliation completed at **15:16:38
+UTC**, with all eight owned Git/CIM children closing 0/null and four fresh
+authenticated responses returning 200/no-store. The original API **PID 52524**,
+created at **04:04:18.778031 UTC**, still loaded `8f5a940` and served epoch 5/revision
+92. Full snapshot DTO comparison against retained pre-transition responses permits
+only observation timestamps, revision/cursor and controller epoch changes; the
+event projection preserves its original prefix and adds the bound event. Exact
+eight-table SQL and current main/WAL pins stayed stable during reconciliation.
+
+Paid revision 19 retains the same four `retired-meter-pending` reservations,
+10,000 cents held, zero available admission, 30 rounded nonfinal partial cents and
+null final spend. Its full three-table history and main/WAL bytes are unchanged.
+All 123 non-Markdown runtime/build/test files retain their hashes. No admission
+resume, task closure, API restart, live standing grant, new paid reservation,
+provider call or model call occurred. The frozen O writer-guard proposal remains
+undeployed; its Docker observations describe separate named-volume authorities.
+
+The CLI atomically checks paused status, epoch and policy digest. Full historical
+rows are checked before and after, rather than included in that atomic CAS.
+Process observations cover configured listeners and whitelisted executables with
+explicit original database arguments; worker quiescence remains unverified.
+
+Evidence under `.factory/budget-growth-activation-20261003`:
+
+- Accepted owned-copy rehearsal SHA256: `5308b67266c16f2aa4990c7aa628a0f6b8155145671bc6c4d2c9b83631cc72ea`.
+- Original failed live execution SHA256: `00410b58842ac9f50c33dff9b60aa6bbf1662de4c122691ddeeccf659a5c7837`.
+- Exact post-check diagnosis SHA256: `b93cc8924827464ad9dac510b8beb40326e76c052cafde8e757b3bcb24fe2796`.
+- Accepted separate reconciliation SHA256: `cf2ba7008801431898b73c269182182fb48ce713924bc643f4aa42029f4f9fd9`.
+
+The first read-only reconciliation remains failed because it compared two
+spellings of the same Windows path literally. The corrected producer normalizes
+that path while retaining exact file/hash/identity checks. Neither that correction
+nor its second observation relabels the failed live execution. Live growth policy
+is now activated; paid inference, recursive cloud enrollment and independent-host
+recovery remain open.
 
 ## Earlier container capacity service qualification
 
@@ -483,7 +541,7 @@ The original `launch-parent` specification describes software acceptance and
 lacks the new operation type. Provisioning cannot satisfy that acceptance.
 The intended terminal outcome is cancellation for `acceptance-unmet`, preserving
 the original specification; no legacy completion or specification rewrite was
-added. The actual controller remains revision 91, paused at epoch 4, with
+added. At that terminal-task qualification, the controller remained revision 91, paused at epoch 4, with
 `launch-parent` running. Port 4344 remains loaded build `8f5a940`. Paid revision
 19 retains all US$100, zero available capacity, 30 rounded nonfinal partial cents
 and null final spend. No live terminal transition, API restart or paid/provider
