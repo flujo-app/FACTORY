@@ -1,19 +1,23 @@
 # Factory qualification record
 
 Updated October 3, 2026. Current qualified runtime source is
-`a05ae09e7faeba40d8d24470a924cf9e4b4b5f49`. Its complete isolated Node 24.19.0
-combination passed **383/383**, exit 0, with no failed, skipped, cancelled or
-todo results. Separate actual native FLUJO acceptance also passed: a fresh child
-executed its assigned Flow, lost the completed response, restarted with its
-controller, and recovered with one POST and one fixture-model invocation.
-Adoption matched nine qualified changed files and preserved 91 untouched Root
-files. All 100 candidate files, 3,636 Factory dependencies, nine native dependency
-witnesses, all 92 prior Root files, 29 accounting/history witnesses, eight earlier
-dependencies and 2,467 pinned FLUJO source files remained stable during execution.
-All 88 runtime source pins match the tested candidate after LF normalization;
-older Root CRLF files retain their original raw bytes. Raw pins and the complete
-100-file tested candidate are retained separately.
-The live controller, loaded API and real paid reservations are unchanged.
+`8ef36348f04d0a4a452acd75c493fb1cffa3c97c`. Its complete isolated Node 24.19.0 combination
+passed **408/408**, exit 0, with no failed, skipped, cancelled or todo results.
+The focused native-cell/mission/client combination passed **50/50**.
+Separate actual native acceptance passed with one POST and one fixture-model
+invocation across daemon/controller/FLUJO restart and paused GET recovery.
+Adoption copied seven qualified changed files and preserved 97 untouched Root
+files. All 104 candidate files, complete 3,636-file dependency trees, nine native
+dependency witnesses, 100 prior Root files, 29 accounting/history witnesses,
+eight earlier dependencies and 2,467 pinned FLUJO source files remained stable
+during qualification. All 91 runtime pins are LF-equivalent to the tested source;
+13 are also raw-byte equal. Older Root CRLF files retain their raw bytes.
+The complete 104-file raw tested candidate is retained separately.
+This change did not mutate the live controller or paid accounting or restart
+the loaded API; it did not freshly verify that API's current health.
+
+Earlier assigned-mission source `a05ae09e7faeba40d8d24470a924cf9e4b4b5f49`
+retains its separate **383/383** suite and original native mission acceptance.
 
 Earlier native capacity source `56a2048485525e369a30e95e36c86397eea2b5ab`
 retains its separate **358/358** suite and native Flow/MCP admission proof.
@@ -49,6 +53,51 @@ with source, accounting/history and owner witnesses unchanged. See
 does not establish mounted Modal weights, GPU boot, inference or native Flow.
 
 ## Proven so far
+
+### Native cell queue and original-result recovery
+
+An explicit private daemon consumes only immutable missions for its configured
+cell/app/provision/worker tuple at the authoritative controller and paid ledger.
+Existing running/unknown intents are observed before fresh work, including while
+paused. Accepted intents are never resumed. Same-cell claim admission is fenced
+inside the controller transaction; a stale unstarted claim can be released only
+with exact token-free provenance, no candidate/review and zero lifetime effects.
+Budget-blocked work remains ready, and a failed preflight rotates to later work.
+Completed Flow execution still requires separate software review and delivery.
+
+Native acceptance used parent PID 18176, exit 0/null signal. Native FLUJO workers
+39572 and 40120 and daemon processes 36252, 19272 and 17312 each have confirmed
+intentional Windows SIGTERM closures. Windows forced termination bypasses JS
+handlers; these receipts prove restart recovery and closure, not graceful signal
+handling. The fixture used clean FLUJO `549792e1839931e862e6a305eb0d9ce2b82ae905`,
+an encrypted fresh snapshot, a synthetic loopback model and fixture provisioning.
+The original native conversation/output remained bound to the same packet.
+The software task stayed running with null candidate/review. Budget refusal left
+the second task ready with no execution intent.
+
+The focused child PID 48432 closed with exit 0/null signal (**50/50**).
+The complete suite child PID 36144 closed with exit 0/null signal (**408/408**),
+retaining genuine SDK HTTP and native peer-watch subprocess evidence. Final freeze
+SHA `a7eb537706d2eeaa991f420665a1bf09c22387e750da68f20db786fb70c5c208`,
+source review SHA `8896c19dbe1312774a89dc8f12d9cd8c37b79d158084f87ca0ef7a5b48be78d3`,
+native acceptance SHA `35d4fa20f8767d9516b9219ea82d766d69c21f80e9c9295d6df49ce18006f76f`
+and execution SHA `230887e395c9c90217b44e5f64fa628c6c278a31489865c7b7bfd4c9fb8145f4`
+bind this qualification. Raw captures, independent outcome review and adoption
+are retained under `.factory/native-cell-20261003`.
+
+Authenticated Modal billing settings were also inspected read-only: the displayed
+October 1–31 cycle has a $39 usage limit and $9 estimated net-spend limit, with a
+warning that volume storage still accrues after workloads stop. This manually
+transcribed observation is not final attributable billing and does not authorize
+a paid hold release. Monthly limits also do not reset the factory's $100 total
+budget. See [Modal budgets](https://modal.com/docs/guide/budgets) and
+[billing scope](https://modal.com/docs/guide/billing).
+
+The daemon has no independent planner or deployed shared-authority contract.
+Cloud packaging requires Node 24 and explicit supervisor wiring because the
+current FLUJO image runs Node 22 and ManagedCloud overrides its command. Actual
+Modal inference, independent-host recovery and development-speed comparison
+remain open. See [NATIVE_CELLS.md](NATIVE_CELLS.md).
 
 ### Assigned native child mission and recovery
 

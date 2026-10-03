@@ -254,6 +254,16 @@ Modal-backed inference. Native worker startup still suppresses cloned schedules.
 See [NATIVE_MISSIONS.md](NATIVE_MISSIONS.md) for the runnable private dispatcher
 and exact limits.
 
+The native cell queue is now qualified at source `8ef36348f04d0a4a452acd75c493fb1cffa3c97c`.
+Its daemon consumes explicitly assigned backlog through one authoritative
+controller/paid ledger, serializes same-cell claims, and recovers original results
+after restart without another POST. New work after startup and paused recovery
+passed with real daemon/native processes, one fixture-model call and no paid run.
+This supplies a coordinator-side execution loop, not an independent cloud planner.
+Remote deployment still needs a supervisor, compatible Node runtime and
+authenticated shared authority; duplicating SQLite ledgers would not preserve
+the global spending cap. See [NATIVE_CELLS.md](NATIVE_CELLS.md).
+
 FLUJO's existing local WorkItems, leases, Behaviors, learning mechanisms and remote
 execution are candidates for reuse. Cross-host ownership, network task exchange,
 fleet budgets and recovery need explicit qualification before claiming a

@@ -28,6 +28,16 @@ they are neither exact total spend nor a strict monetary lower bound. Final spen
 remains unknown and no new paid run is admitted. See
 [QUALIFICATION.md](QUALIFICATION.md) for evidence and remaining work.
 
+Source `8ef36348f04d0a4a452acd75c493fb1cffa3c97c` adds the native cell mission queue. Its complete isolated
+Node 24.19.0 suite passed **408/408**; the focused combination passed **50/50**.
+Separate acceptance used actual daemon and FLUJO processes: new work arrived
+after startup, a completed response was lost, both processes restarted, and
+GET-only recovery succeeded while paused. Exactly one POST and one fixture-model
+call occurred. A fully held fixture budget left the next task ready. All three
+daemon processes and both native workers closed. This is local execution proof;
+deployed autonomy, shared remote authority and paid Modal inference remain open.
+See [NATIVE_CELLS.md](NATIVE_CELLS.md).
+
 Source `a05ae09e7faeba40d8d24470a924cf9e4b4b5f49` adds assigned native missions:
 authenticated child preparation, atomic enrollment/task claim, one durable Flow
 dispatch and recovery of the original result. The complete source suite passed
