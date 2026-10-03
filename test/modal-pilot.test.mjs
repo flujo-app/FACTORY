@@ -26,14 +26,15 @@ async function fixture(t, settings = {}) {
     calls.push(payload.operation);
     payloads.push(structuredClone(payload));
     if (payload.operation === 'prepare') return { state: 'prepared', profile: 'fake-profile', workspaceName: 'factory-account', environment: 'main', credentialsAccepted: true, appAbsent: true, volumeAbsent: true,
-      modelArtifactValidation: settings.badArtifactPreflight ? {} : payload.modelArtifactValidation };
+      modelArtifactValidation: settings.badArtifactPreflight ? {} : payload.modelArtifactValidation,
+      httpResumeValidation: settings.badResumePreflight ? {} : payload.httpResumeValidation };
     if (payload.operation === settings.sdkFailure || settings.sdkFailures?.includes(payload.operation)) throw new Error('private raw token diagnostic');
     resourceState = { ...resourceState, ...await readFile(path.join(runDirectory, 'resources.private.json'), 'utf8').then(JSON.parse).catch(() => ({})) };
     resourceState = { ...resourceState, runId: payload.runId, appName: payload.appName, volumeName: payload.volumeName,
       environment: payload.environment, profile: payload.profile, workspaceName: payload.workspaceName };
     switch (payload.operation) {
       case 'create-volume': resourceState.volumeId = 'vo-owned'; resourceState.volumeCreated = true; resourceState.volumeFsVersion = payload.volumeFsVersion; await persist(); return { state: 'volume-created', volumeId: 'vo-owned', volumeFsVersion: payload.volumeFsVersion };
-      case 'deploy': Object.assign(resourceState, { appId: 'ap-owned', appDeployed: true, serveFunctionId: 'fu-serve', prefetchFunctionId: 'fu-prefetch', endpoint: 'https://factory--serve.modal.run', prefetchDownload: payload.prefetchDownload }); await persist(); return { state: 'deployed', ...resourceState };
+      case 'deploy': Object.assign(resourceState, { appId: 'ap-owned', appDeployed: true, serveFunctionId: 'fu-serve', prefetchFunctionId: 'fu-prefetch', endpoint: 'https://factory--serve.modal.run', prefetchDownload: payload.prefetchDownload, httpResumeValidation: payload.httpResumeValidation }); await persist(); return { state: 'deployed', ...resourceState };
       case 'prefetch': resourceState.weightsCached = true; await persist(); return { state: 'weights-cached', download: { ...payload.prefetchDownload, hfXetVersion: '1.6.0', xetDisabled: true, hfTransferDisabled: true } };
       case 'create-proxy-token':
         Object.assign(resourceState, { proxyTokenCreated: true, proxyTokenId: 'wk-fake' }); await persist();
@@ -135,6 +136,18 @@ test('unverified validator preflight prevents paid reservation and resource admi
   await assert.rejects(readFile(path.join(f.options.runDirectory, 'modal.sqlite')), { code: 'ENOENT' });
 });
 
+test('unverified HTTP resume guard preflight prevents paid reservation and resource admission', async t => {
+  const f = await fixture(t, { badResumePreflight: true });
+  const report = await runModalPilot(f.options, f.dependencies);
+  assert.notEqual(report.state, 'smoke-complete');
+  assert.equal(report.failureCode, 'HTTP_RESUME_GUARD_UNVERIFIED');
+  assert.deepEqual(f.calls, ['prepare']);
+  assert.equal(f.httpCalls.length, 0);
+  await assert.rejects(readFile(f.options.spendingPath), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(f.options.runDirectory, 'manifest.private.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(f.options.runDirectory, 'modal.sqlite')), { code: 'ENOENT' });
+});
+
 test('fresh run defaults isolate storage and reservation while explicit identities remain supported', async t => {
   const f = await fixture(t), { runDirectory, ...input } = f.options;
   const fresh = await prepareModalPilot({ ...input, runId: 'modal-next-attempt' }, f.dependencies);
@@ -185,25 +198,30 @@ test('fresh manifest and deploy/prefetch intents bind HTTP profile and exact val
   const sourceSha = async filename => createHash('sha256').update(await readFile(new URL(`../modal/${filename}`, import.meta.url))).digest('hex');
   const validation = { schemaVersion: 1, manifestSha256: await sourceSha('model-artifacts.json'),
     validatorSha256: await sourceSha('model_artifacts.py') };
+  const resumeValidation = { schemaVersion: 1, protocol: 'http-range-v1', guardSha256: await sourceSha('http_resume.py') };
   assert.deepEqual(manifest.modelArtifactValidation, validation);
+  assert.deepEqual(manifest.httpResumeValidation, resumeValidation);
   const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
   for (const operation of ['deploy', 'prefetch']) {
     const intent = journal.get(operation), request = JSON.parse(intent.request_json);
     assert.deepEqual(request.prefetchDownload, expected);
+    assert.deepEqual(request.httpResumeValidation, resumeValidation);
     assert.deepEqual(request.modelArtifactValidation, validation);
     assert.equal(intent.request_digest, digest(request));
     assert.deepEqual(f.payloads.find(item => item.operation === operation).prefetchDownload, expected);
     assert.deepEqual(f.payloads.find(item => item.operation === operation).modelArtifactValidation, validation);
+    assert.deepEqual(f.payloads.find(item => item.operation === operation).httpResumeValidation, resumeValidation);
   }
   // Native dependency metadata belongs to the SDK's private success receipt,
   // while the coordinator retains its existing sanitized result projection.
   assert.equal(journal.get('prefetch').result.download, undefined);
   assert.equal(journal.get('prefetch').result.artifactProof, undefined);
   assert.ok(f.notifications.every(event => !('download' in event) && !('prefetchDownload' in event)
-    && !('modelArtifactValidation' in event) && !('artifactProof' in event)));
+    && !('modelArtifactValidation' in event) && !('artifactProof' in event) && !('httpResumeValidation' in event)));
   for (const operation of ['stop-app', 'delete-volume', 'delete-proxy-token']) {
     assert.equal(JSON.parse(journal.get(operation).request_json).prefetchDownload, undefined);
     assert.equal(JSON.parse(journal.get(operation).request_json).modelArtifactValidation, undefined);
+    assert.equal(JSON.parse(journal.get(operation).request_json).httpResumeValidation, undefined);
   }
 });
 
@@ -211,12 +229,12 @@ test('legacy download intents and manifest stay byte-identical through cleanup a
   const settings = { sdkFailures: ['prefetch', 'stop-app'] }, f = await fixture(t, settings);
   await runModalPilot(f.options, f.dependencies);
   const manifestPath = path.join(f.options.runDirectory, 'manifest.private.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); delete manifest.prefetchDownload; delete manifest.modelArtifactValidation;
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); delete manifest.prefetchDownload; delete manifest.modelArtifactValidation; delete manifest.httpResumeValidation;
   await writeFile(manifestPath, JSON.stringify(manifest));
   const manifestBytes = await readFile(manifestPath, 'utf8');
   const journal = new ModalJournal(path.join(f.options.runDirectory, 'modal.sqlite')); t.after(() => journal.close());
   for (const operation of ['deploy', 'prefetch']) {
-    const request = JSON.parse(journal.get(operation).request_json); delete request.prefetchDownload; delete request.modelArtifactValidation;
+    const request = JSON.parse(journal.get(operation).request_json); delete request.prefetchDownload; delete request.modelArtifactValidation; delete request.httpResumeValidation;
     journal.db.prepare('UPDATE modal_operations SET request_json=?, request_digest=? WHERE key=?').run(JSON.stringify(request), digest(request), operation);
   }
   const original = ['deploy', 'prefetch'].map(operation => journal.get(operation));

@@ -72,8 +72,16 @@ def require_admission(payload):
     if payload["operation"] not in MUTATIONS:
         return
     request = payload["request"]
-    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion", "prefetchDownload", "modelArtifactValidation"):
-        if request.get(key) != payload.get(key):
+    for key in ("operation", "runId", "appName", "volumeName", "environment", "profile", "workspaceName", "runDirectory", "volumeFsVersion", "prefetchDownload", "modelArtifactValidation", "httpResumeValidation"):
+        if key == "httpResumeValidation":
+            # Missing on both sides remains valid for original cleanup. A
+            # present identity must retain its exact JSON value types.
+            matches = ((key not in request and key not in payload)
+                       or (isinstance(payload.get(key), dict)
+                           and exact_artifact_fields(request.get(key), payload[key])))
+        else:
+            matches = request.get(key) == payload.get(key)
+        if not matches:
             raise ValueError("Bridge arguments differ from the durable intent.")
     if Path(payload["journalPath"]).resolve() != Path(payload["runDirectory"], "modal.sqlite").resolve() or not re.fullmatch(r"[a-z0-9_-]{1,80}", payload.get("effectKey", "")):
         raise ValueError("The original operation journal and stable key are required.")
@@ -152,6 +160,17 @@ def required_artifact_validation(payload, resources=None):
     if resources is not None and not exact_artifact_fields(resources.get("modelArtifactValidation"), identity):
         raise ValueError("The deployed model artifact validator differs from the admitted prefetch.")
     return identity, expected
+
+
+def required_http_resume_validation(payload, resources=None):
+    # Existing retirement operations never require the newly added helper.
+    from http_resume import guard_identity
+    expected = guard_identity()
+    if not exact_artifact_fields(payload.get("httpResumeValidation"), expected):
+        raise ValueError("The HTTP resume guard differs from the admitted intent.")
+    if resources is not None and not exact_artifact_fields(resources.get("httpResumeValidation"), expected):
+        raise ValueError("The deployed HTTP resume guard differs from the admitted prefetch.")
+    return expected
 
 
 def owned_billing_observation(rows, resources, start, end):
@@ -291,6 +310,7 @@ def operate(payload):
     operation = verify_input(payload)
     if operation == "prepare":
         artifact_identity, _ = required_artifact_validation(payload)
+        resume_identity = required_http_resume_validation(payload)
     profile = payload.get("profile") or active_profile()
     for variable in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "MODAL_SERVER_URL"):
         os.environ.pop(variable, None)
@@ -316,6 +336,7 @@ def operate(payload):
         return {"state": "prepared", "profile": profile, "workspaceName": workspace.name,
                 "environment": "main", "credentialsAccepted": True,
                 "modelArtifactValidation": artifact_identity,
+                "httpResumeValidation": resume_identity,
                 "appAbsent": absent(lambda: modal.App.lookup(payload["appName"], environment_name="main")),
                 "volumeAbsent": absent(lambda: modal.Volume.from_name(payload["volumeName"], environment_name="main", create_if_missing=False).hydrate())}
 
@@ -331,6 +352,7 @@ def operate(payload):
     if operation == "deploy":
         download_profile = required_download_profile(payload)
         artifact_identity, _ = required_artifact_validation(payload)
+        resume_identity = required_http_resume_validation(payload)
         resources = checkpoint(payload)
         volume = owned_weights(modal, payload, resources)
         try:
@@ -343,7 +365,7 @@ def operate(payload):
         inference = importlib.import_module("inference")
         inference.app.deploy(environment_name="main", strategy="recreate", tag=payload["runId"])
         checkpoint(payload, {"appId": inference.app.app_id, "appDeployed": True, "prefetchDownload": download_profile,
-                             "modelArtifactValidation": artifact_identity})
+                             "modelArtifactValidation": artifact_identity, "httpResumeValidation": resume_identity})
         serve = modal.Function.from_name(payload["appName"], "serve", environment_name="main").hydrate()
         prefetch = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         result = {"appId": inference.app.app_id, "serveFunctionId": serve.object_id,
@@ -354,17 +376,18 @@ def operate(payload):
     if operation == "prefetch":
         download_profile = required_download_profile(payload, resources)
         _, expected_artifacts = required_artifact_validation(payload, resources)
+        resume_identity = required_http_resume_validation(payload, resources)
         volume = owned_weights(modal, payload, resources)
         function = modal.Function.from_name(payload["appName"], "prefetch", environment_name="main").hydrate()
         if function.object_id != resources.get("prefetchFunctionId"):
             raise ValueError("Prefetch Function identity changed.")
-        result = function.remote()
+        result = function.remote(http_resume_validation=resume_identity)
         if (result.get("state") != "weights-cached" or result.get("volumeId") != volume.object_id
                 or result.get("volumeFsVersion") != resources["volumeFsVersion"]
                 or result.get("model") != CONFIG["model"] or result.get("revision") != CONFIG["revision"]):
             raise ValueError("Pinned weights were not confirmed.")
         downloaded = result.get("download")
-        expected_fields = set(download_profile) | {"hfXetVersion", "xetDisabled", "hfTransferDisabled"}
+        expected_fields = set(download_profile) | {"hfXetVersion", "xetDisabled", "hfTransferDisabled", "resumeValidation"}
         if (not isinstance(downloaded, dict) or set(downloaded) != expected_fields or any(downloaded.get(key) != value for key, value in download_profile.items())
                 or type(downloaded.get("maxWorkers")) is not int or downloaded.get("xetDisabled") is not True
                 or downloaded.get("hfTransferDisabled") is not True):
@@ -372,10 +395,15 @@ def operate(payload):
         native_version = downloaded["hfXetVersion"]
         if native_version is not None and (not isinstance(native_version, str) or not re.fullmatch(r"[A-Za-z0-9.!+-]{1,80}", native_version)):
             raise ValueError("Native dependency metadata was not confirmed.")
+        resume_proof = downloaded["resumeValidation"]
+        if (not isinstance(resume_proof, dict) or set(resume_proof) != set(resume_identity) | {"validatedResponses"}
+                or not exact_artifact_fields({key: resume_proof[key] for key in resume_identity}, resume_identity)
+                or type(resume_proof["validatedResponses"]) is not int or resume_proof["validatedResponses"] < 0):
+            raise ValueError("Actual HTTP resume validation was not confirmed.")
         artifact_proof = result.get("artifactProof")
         if not exact_artifact_fields(artifact_proof, expected_artifacts):
             raise ValueError("Complete pinned model artifact validation was not confirmed.")
-        checkpoint(payload, {"weightsCached": True, "artifactProof": artifact_proof})
+        checkpoint(payload, {"weightsCached": True, "artifactProof": artifact_proof, "httpResumeProof": resume_proof})
         return {key: result[key] for key in ("state", "model", "revision", "volumeId", "volumeFsVersion", "download", "artifactProof")}
     if operation == "create-proxy-token":
         if not resources.get("appDeployed") or not resources.get("serveFunctionId") or not resources.get("weightsCached"):

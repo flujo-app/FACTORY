@@ -6,11 +6,12 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
+from http_resume import guard_identity, require_identity
 
 
 class InferenceVolumeTests(unittest.TestCase):
     def definition(self):
-        calls, functions, environments, packages = [], {}, [], []
+        calls, functions, environments, packages, local_files = [], {}, [], [], []
         fake = ModuleType("modal")
         class App:
             def __init__(self, name): self.name = name
@@ -24,7 +25,7 @@ class InferenceVolumeTests(unittest.TestCase):
             def debian_slim(cls, *args, **kwargs): return cls()
             def entrypoint(self, *args): return self
             def uv_pip_install(self, *args): packages.extend(args); return self
-            def add_local_file(self, *args): return self
+            def add_local_file(self, *args): local_files.append(args); return self
             def env(self, values): environments.append(values); return self
         class Volume:
             @staticmethod
@@ -39,6 +40,7 @@ class InferenceVolumeTests(unittest.TestCase):
         with patch.dict("sys.modules", {"modal": fake}), patch.dict(os.environ, {
             "FACTORY_MODAL_APP_NAME": "factory-offline-model", "FACTORY_MODAL_VOLUME_NAME": "factory-offline-weights", "FACTORY_MODAL_VOLUME_ID": "vo-owned",
         }): spec.loader.exec_module(module)
+        module.offline_local_files = local_files
         return module, calls, functions, environments, packages
 
     def test_import_is_lazy_v2_without_hydration_or_implicit_creation(self):
@@ -50,6 +52,7 @@ class InferenceVolumeTests(unittest.TestCase):
         self.assertTrue(all(environment["FACTORY_MODAL_VOLUME_ID"] == "vo-owned" for environment in environments))
         self.assertEqual(module.CONFIG["revision"], "c03e6d358207e414f1eca0bb1891e29f1db0e242")
         self.assertIn("huggingface_hub==0.36.0", packages)
+        self.assertEqual(sum(target == "/opt/factory/http_resume.py" for _, target in module.offline_local_files), 2)
         download_environment = environments[-1]
         self.assertEqual(download_environment["HF_HUB_DISABLE_XET"], "1")
         self.assertEqual(download_environment["HF_XET_HIGH_PERFORMANCE"], "0")
@@ -61,7 +64,7 @@ class InferenceVolumeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): module.checked_weights()
         self.assertEqual(calls[-1], "hydrate")
 
-    def download(self, *, environment=None, hub_version="0.36.0", xet_version="1.6.0", stale_constants=False, failure=None, artifact_failure=None):
+    def download(self, *, environment=None, hub_version="0.36.0", xet_version="1.6.0", stale_constants=False, failure=None, artifact_failure=None, resume_validation=None):
         module, calls, functions, environments, _ = self.definition()
         captured = []
         fake_hub = ModuleType("huggingface_hub")
@@ -83,20 +86,27 @@ class InferenceVolumeTests(unittest.TestCase):
             calls.append("validate-artifacts")
             if artifact_failure: raise artifact_failure
             return {"mocked": True}
+        def install(expected):
+            require_identity(expected)
+            calls.append("guard-installed")
+            return SimpleNamespace(close=lambda: calls.append("guard-closed"),
+                                   receipt=lambda: {**guard_identity(), "validatedResponses": 0})
         with patch.dict("sys.modules", {"huggingface_hub": fake_hub}), patch.dict(os.environ, env), \
-                patch.object(module, "version", metadata), patch.object(module, "validate_model_artifacts", artifacts):
-            try: result = module.prefetch()
+                patch.object(module, "version", metadata), patch.object(module, "validate_model_artifacts", artifacts), \
+                patch.object(module, "install_http_resume_guard", install):
+            try: result = module.prefetch(guard_identity() if resume_validation is None else resume_validation)
             except Exception as error: return error, calls, captured, functions
         return result, calls, captured, functions
 
     def test_anonymous_single_thread_http_download_binds_revision_patterns_and_private_metadata(self):
         result, calls, captured, functions = self.download(environment={"HF_TOKEN": "private-inherited-token"})
-        self.assertEqual(calls[-3:], ["hydrate", "validate-artifacts", "commit"])
+        self.assertEqual(calls[-4:], ["hydrate", "guard-closed", "validate-artifacts", "commit"])
         self.assertEqual(result["artifactProof"], {"mocked": True})
         self.assertEqual(captured, [{"repo_id": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242", "local_dir": "/models/c03e6d358207e414f1eca0bb1891e29f1db0e242",
             "allow_patterns": ["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"], "max_workers": 1, "token": False}])
-        self.assertEqual(result["download"], {"transport": "http", "maxWorkers": 1, "hubVersion": "0.36.0", "hfXetVersion": "1.6.0", "xetDisabled": True, "hfTransferDisabled": True})
+        self.assertEqual(result["download"], {"transport": "http", "maxWorkers": 1, "hubVersion": "0.36.0", "hfXetVersion": "1.6.0", "xetDisabled": True, "hfTransferDisabled": True,
+                                           "resumeValidation": {**guard_identity(), "validatedResponses": 0}})
         self.assertNotIn("private-inherited-token", str(result))
         self.assertEqual(functions["prefetch"]["max_containers"], 1)
         self.assertEqual(functions["prefetch"]["retries"], 0)
@@ -125,6 +135,17 @@ class InferenceVolumeTests(unittest.TestCase):
         self.assertIs(result, failure)
         self.assertEqual(len(captured), 1)
         self.assertNotIn("commit", calls)
+        self.assertEqual(calls[-1], "guard-closed")
+
+    def test_unadmitted_http_resume_guard_refuses_before_hydration_or_download(self):
+        for validation in [{}, {**guard_identity(), "guardSha256": "0" * 64},
+                           {**guard_identity(), "schemaVersion": True}, {**guard_identity(), "extra": True}]:
+            with self.subTest(validation=validation):
+                result, calls, captured, _ = self.download(resume_validation=validation)
+                self.assertIsInstance(result, RuntimeError)
+                self.assertNotIn("hydrate", calls)
+                self.assertNotIn("commit", calls)
+                self.assertEqual(captured, [])
 
     def test_artifact_failure_does_not_commit_or_claim_cached_weights(self):
         failure = RuntimeError("offline simulated incomplete model")

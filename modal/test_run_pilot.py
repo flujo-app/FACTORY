@@ -1,6 +1,7 @@
 """Fake-SDK ownership/auth/durability tests; no Modal RPCs or GPU execution."""
 
 import hashlib
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import run_pilot as pilot
+from http_resume import guard_identity
 
 
 class NotFoundError(Exception):
@@ -93,12 +95,15 @@ class BridgeTests(unittest.TestCase):
             def from_name(*args, **kwargs):
                 if test.function_failure:
                     raise ValueError("private SDK diagnostic")
-                def remote():
+                def remote(**kwargs):
+                    if kwargs != {"http_resume_validation": guard_identity()}:
+                        raise AssertionError("The remote guard must bind the admitted source")
                     test.calls.append("prefetch-call")
                     return test.prefetch_result or {"state": "weights-cached", "volumeId": test.volume_id, "volumeFsVersion": test.volume_version,
                         "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
                         "artifactProof": pilot.expected_artifact_proof(pilot.CONFIG),
-                        "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": "1.6.0", "xetDisabled": True, "hfTransferDisabled": True}}
+                        "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": "1.6.0", "xetDisabled": True, "hfTransferDisabled": True,
+                                     "resumeValidation": {**guard_identity(), "validatedResponses": 0}}}
                 return SimpleNamespace(hydrate=lambda: SimpleNamespace(object_id="fu-owned", get_web_url=lambda: "https://factory--serve.modal.run", remote=remote))
 
         self.fake = ModuleType("modal")
@@ -109,7 +114,7 @@ class BridgeTests(unittest.TestCase):
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
 
-    def payload(self, operation, state="running", *, legacy_download=False, legacy_artifacts=False):
+    def payload(self, operation, state="running", *, legacy_download=False, legacy_artifacts=False, legacy_resume=False):
         request = {"operation": operation, "runId": "offline-run", "appName": "factory-offline-model",
                    "volumeName": "factory-offline-weights", "profile": "fake-profile", "environment": "main",
                    "workspaceName": "factory-account", "runDirectory": str(self.root)}
@@ -120,6 +125,8 @@ class BridgeTests(unittest.TestCase):
         if operation in {"prepare", "deploy", "prefetch"} and not legacy_artifacts:
             expected = pilot.expected_artifact_proof(pilot.CONFIG)
             request["modelArtifactValidation"] = {key: expected[key] for key in ("schemaVersion", "manifestSha256", "validatorSha256")}
+        if operation in {"prepare", "deploy", "prefetch"} and not legacy_resume:
+            request["httpResumeValidation"] = guard_identity()
         payload = {**request, "request": request, "effectKey": operation, "journalPath": str(self.root / "modal.sqlite")}
         encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         connection = sqlite3.connect(payload["journalPath"])
@@ -140,6 +147,8 @@ class BridgeTests(unittest.TestCase):
                     value.setdefault("prefetchDownload", payload["prefetchDownload"])
                 if "modelArtifactValidation" in payload:
                     value.setdefault("modelArtifactValidation", payload["modelArtifactValidation"])
+                if "httpResumeValidation" in payload:
+                    value.setdefault("httpResumeValidation", payload["httpResumeValidation"])
         pilot.write_json(self.root / "resources.private.json", value)
 
     def meter_payload(self):
@@ -534,7 +543,8 @@ class BridgeTests(unittest.TestCase):
         valid = {"state": "weights-cached", "volumeId": "vo-owned", "volumeFsVersion": 2,
                  "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
                  "artifactProof": pilot.expected_artifact_proof(pilot.CONFIG),
-                 "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None, "xetDisabled": True, "hfTransferDisabled": True}}
+                 "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None, "xetDisabled": True, "hfTransferDisabled": True,
+                              "resumeValidation": {**guard_identity(), "validatedResponses": 0}}}
         cases = [{"revision": "a" * 40}, {"model": "other/model"},
                  *[{"download": {**valid["download"], **change}} for change in ({"transport": "xet"}, {"maxWorkers": True},
                    {"hubVersion": "1.29.0"}, {"xetDisabled": False}, {"hfTransferDisabled": False},
@@ -572,7 +582,94 @@ class BridgeTests(unittest.TestCase):
                          {key: expected[key] for key in ("schemaVersion", "manifestSha256", "validatorSha256")})
         self.assertNotIn("artifactProof", result)
         self.assertNotIn("weightsCached", result)
+        self.assertEqual(result["httpResumeValidation"], guard_identity())
         self.assertEqual(self.calls, [])
+
+    def test_fresh_operations_require_admitted_http_resume_source_before_any_cloud_action(self):
+        for operation in ("prepare", "deploy", "prefetch"):
+            with self.subTest(operation=operation):
+                request = self.payload(operation, legacy_resume=True)
+                self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+                with patch.object(self.fake.Workspace, "from_context") as lookup:
+                    if operation == "prepare":
+                        with self.assertRaises(ValueError): pilot.operate(request)
+                        lookup.assert_not_called()
+                    else:
+                        lookup.return_value.name = "factory-account"
+                        with self.assertRaises(ValueError): pilot.operate(request)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.volume_lookups, [])
+
+    def test_http_resume_source_must_match_intent_and_deployment_before_prefetch_invocation(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+        request["httpResumeValidation"] = {**guard_identity(), "guardSha256": "a" * 64}
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned", httpResumeValidation={})
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+
+    def test_boolean_http_resume_schema_in_running_journal_cannot_admit_integer_payload(self):
+        request = self.payload("prefetch")
+        self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+        resources_before = (self.root / "resources.private.json").read_bytes()
+        request["request"] = {**request["request"], "httpResumeValidation": {**guard_identity(), "schemaVersion": True}}
+        encoded = json.dumps(request["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        digest = hashlib.sha256(encoded).hexdigest()
+        with closing(sqlite3.connect(request["journalPath"])) as connection:
+            connection.execute("UPDATE modal_operations SET request_json=?,request_digest=? WHERE key=?",
+                               (json.dumps(request["request"]), digest, "prefetch"))
+            connection.commit()
+            recorded = connection.execute("SELECT request_json,request_digest,state FROM modal_operations WHERE key='prefetch'").fetchone()
+        self.assertIs(json.loads(recorded[0])["httpResumeValidation"]["schemaVersion"], True)
+        self.assertIs(type(request["httpResumeValidation"]["schemaVersion"]), int)
+        self.assertEqual(recorded[1:], (digest, "running"))
+        with self.assertRaises(ValueError): pilot.operate(request)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.volume_lookups, [])
+        self.assertEqual((self.root / "resources.private.json").read_bytes(), resources_before)
+        with closing(sqlite3.connect(request["journalPath"])) as connection:
+            self.assertEqual(connection.execute("SELECT request_json,request_digest,state FROM modal_operations WHERE key='prefetch'").fetchone(), recorded)
+
+    def test_http_resume_identity_presence_and_null_are_not_legacy_omission(self):
+        missing = object()
+        variants = [(None, missing), (missing, None), (None, None),
+                    (guard_identity(), missing), (missing, guard_identity())]
+        for durable, supplied in variants:
+            with self.subTest(durable_present=durable is not missing, supplied_present=supplied is not missing):
+                request = self.payload("stop-app")
+                if durable is not missing: request["request"]["httpResumeValidation"] = durable
+                if supplied is not missing: request["httpResumeValidation"] = supplied
+                encoded = json.dumps(request["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+                with closing(sqlite3.connect(request["journalPath"])) as connection:
+                    connection.execute("UPDATE modal_operations SET request_json=?,request_digest=? WHERE key=?",
+                                       (json.dumps(request["request"]), hashlib.sha256(encoded).hexdigest(), "stop-app"))
+                    connection.commit()
+                with self.assertRaises(ValueError): pilot.operate(request)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.volume_lookups, [])
+
+    def test_guard_receipt_is_closed_exact_source_and_observation_counters_are_not_model_validation(self):
+        variants = [None, {}, {**guard_identity(), "validatedResponses": True},
+                    {**guard_identity(), "validatedResponses": -1},
+                    {**guard_identity(), "validatedResponses": 0, "extra": True},
+                    {**guard_identity(), "guardSha256": "a" * 64, "validatedResponses": 1}]
+        for receipt in variants:
+            with self.subTest(receipt=receipt):
+                request = self.payload("prefetch")
+                self.resource(request, volumeCreated=True, volumeId="vo-owned", prefetchFunctionId="fu-owned")
+                self.prefetch_result = {"state": "weights-cached", "volumeId": "vo-owned", "volumeFsVersion": 2,
+                    "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"],
+                    "artifactProof": pilot.expected_artifact_proof(pilot.CONFIG),
+                    "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None,
+                                 "xetDisabled": True, "hfTransferDisabled": True, "resumeValidation": receipt}}
+                with self.assertRaises(ValueError): pilot.operate(request)
+                resources = json.loads((self.root / "resources.private.json").read_text())
+                self.assertNotIn("weightsCached", resources)
+                self.assertNotIn("artifactProof", resources)
+                self.assertNotIn("httpResumeProof", resources)
 
     def test_artifact_identity_must_match_intent_and_recorded_deployment(self):
         request = self.payload("prefetch")
@@ -599,7 +696,8 @@ class BridgeTests(unittest.TestCase):
                 self.prefetch_result = {"state": "weights-cached", "volumeId": "vo-owned", "volumeFsVersion": 2,
                     "model": pilot.CONFIG["model"], "revision": pilot.CONFIG["revision"], "artifactProof": receipt,
                     "download": {**pilot.CONFIG["prefetchDownload"], "hfXetVersion": None,
-                                 "xetDisabled": True, "hfTransferDisabled": True}}
+                                 "xetDisabled": True, "hfTransferDisabled": True,
+                                 "resumeValidation": {**guard_identity(), "validatedResponses": 0}}}
                 with self.assertRaises(ValueError): pilot.operate(request)
                 resources = json.loads((self.root / "resources.private.json").read_text())
                 self.assertNotIn("weightsCached", resources)
@@ -618,7 +716,10 @@ class BridgeTests(unittest.TestCase):
         self.resource(request, volumeCreated=True, volumeId="vo-owned", volumeFsVersion=1, appDeployed=True, appStopped=True)
         self.volume_version = 1
         self.assertNotIn("volumeFsVersion", request)
-        result = pilot.operate(request)
+        self.assertNotIn("httpResumeValidation", request)
+        self.assertNotIn("httpResumeValidation", request["request"])
+        with patch.object(pilot, "required_http_resume_validation", side_effect=AssertionError("Legacy cleanup must not load the new guard")):
+            result = pilot.operate(request)
         self.assertEqual(result["volumeId"], "vo-owned")
         self.assertEqual(self.calls, ["volume-delete"])
         self.assertTrue(all("version" not in item and item["create_if_missing"] is False for item in self.volume_lookups))

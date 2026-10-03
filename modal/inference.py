@@ -10,6 +10,7 @@ import sys
 
 import modal
 from model_artifacts import validate_model_artifacts
+from http_resume import install_http_resume_guard
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
@@ -24,10 +25,13 @@ if not POLICY_PATH.is_file():
     POLICY_PATH = Path("/opt/factory/factory_policy.py")
 ARTIFACT_HELPER_PATH = HERE / "model_artifacts.py"
 ARTIFACT_MANIFEST_PATH = HERE / "model-artifacts.json"
+HTTP_RESUME_PATH = HERE / "http_resume.py"
 if not ARTIFACT_HELPER_PATH.is_file():
     ARTIFACT_HELPER_PATH = Path("/opt/factory/model_artifacts.py")
 if not ARTIFACT_MANIFEST_PATH.is_file():
     ARTIFACT_MANIFEST_PATH = Path("/opt/factory/model-artifacts.json")
+if not HTTP_RESUME_PATH.is_file():
+    HTTP_RESUME_PATH = Path("/opt/factory/http_resume.py")
 
 
 def resource_name(variable):
@@ -59,6 +63,7 @@ image = (
     .add_local_file(CONFIG_PATH, "/opt/factory/config.json")
     .add_local_file(ARTIFACT_HELPER_PATH, "/opt/factory/model_artifacts.py")
     .add_local_file(ARTIFACT_MANIFEST_PATH, "/opt/factory/model-artifacts.json")
+    .add_local_file(HTTP_RESUME_PATH, "/opt/factory/http_resume.py")
 )
 download_image = modal.Image.debian_slim(python_version=CONFIG["pythonVersion"]).uv_pip_install(
     f'huggingface_hub=={DOWNLOAD_PROFILE["hubVersion"]}'
@@ -67,7 +72,8 @@ download_image = modal.Image.debian_slim(python_version=CONFIG["pythonVersion"])
        "HF_XET_HIGH_PERFORMANCE": "0", "HF_HUB_ENABLE_HF_TRANSFER": "0"}).add_local_file(
     CONFIG_PATH, "/opt/factory/config.json"
 ).add_local_file(ARTIFACT_HELPER_PATH, "/opt/factory/model_artifacts.py").add_local_file(
-    ARTIFACT_MANIFEST_PATH, "/opt/factory/model-artifacts.json")
+    ARTIFACT_MANIFEST_PATH, "/opt/factory/model-artifacts.json").add_local_file(
+    HTTP_RESUME_PATH, "/opt/factory/http_resume.py")
 
 
 def checked_weights():
@@ -80,7 +86,7 @@ def checked_weights():
               memory=(2048, 2048), timeout=CONFIG["prefetchTimeoutSeconds"],
               min_containers=0, max_containers=1, buffer_containers=0,
               scaledown_window=2, retries=0)
-def prefetch():
+def prefetch(http_resume_validation):
     # Image environment is set before Python imports the Hub. Refuse inherited
     # overrides or a previously imported Hub with stale transport constants.
     expected_environment = {"HF_HUB_DISABLE_XET": "1", "HF_XET_HIGH_PERFORMANCE": "0",
@@ -100,18 +106,23 @@ def prefetch():
         xet_version = None
     if xet_version is not None and not re.fullmatch(r"[A-Za-z0-9.!+-]{1,80}", xet_version):
         raise RuntimeError("Invalid native dependency version metadata")
-    volume = checked_weights()
-
-    snapshot_download(repo_id=CONFIG["model"], revision=CONFIG["revision"],
-                      local_dir=MODEL_PATH,
-                      allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"],
-                      max_workers=DOWNLOAD_PROFILE["maxWorkers"], token=False)
+    guard = install_http_resume_guard(http_resume_validation)
+    try:
+        volume = checked_weights()
+        snapshot_download(repo_id=CONFIG["model"], revision=CONFIG["revision"],
+                          local_dir=MODEL_PATH,
+                          allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "LICENSE*", "README.md"],
+                          max_workers=DOWNLOAD_PROFILE["maxWorkers"], token=False)
+    finally:
+        # snapshot_download joins its writer pool before returning or raising.
+        guard.close()
+    resume_proof = guard.receipt()
     artifact_proof = validate_model_artifacts(MODEL_PATH, CONFIG)
     volume.commit()
     return {"state": "weights-cached", "model": CONFIG["model"], "revision": CONFIG["revision"],
             "volumeId": VOLUME_ID, "volumeFsVersion": CONFIG["volumeFsVersion"], "artifactProof": artifact_proof,
             "download": {**DOWNLOAD_PROFILE, "hubVersion": hub_version, "hfXetVersion": xet_version,
-                         "xetDisabled": True, "hfTransferDisabled": True}}
+                         "xetDisabled": True, "hfTransferDisabled": True, "resumeValidation": resume_proof}}
 
 
 @app.function(image=image, gpu=CONFIG["gpu"], volumes={"/models": weights},
