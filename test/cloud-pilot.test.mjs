@@ -338,6 +338,15 @@ test('bounded live path uses two workers, delegated child request, durable effec
     assert.equal(parent.allocation, 6000); assert.equal(child.allocation, 1500); assert.equal(child.parent_id, parent.id);
     assert.equal(control.inbox('root')[0].payload.type, 'independent-verification');
     assert.equal(snapshot.effects.length, 6); assert.ok(snapshot.effects.every(effect => effect.state === 'succeeded'));
+    const launch = control.task('launch-parent');
+    assert.equal(launch.status, 'completed');
+    assert.equal(launch.specification.taskType, 'operation');
+    assert.deepEqual(launch.specification.acceptance, { scope: 'recorded-controller-operation-receipts-only' });
+    assert.deepEqual(launch.specification.operation, { kind: 'provision', cellId: 'parent-worker', app: manifest.workers[0].worker });
+    assert.equal(launch.owner, null); assert.equal(launch.expires, null); assert.equal(launch.control_epoch, null);
+    assert.equal(control.task('parent-candidate').status, 'verified');
+    assert.equal(control.task('child-review').status, 'verified');
+    assert.equal(control.db.prepare("SELECT count(*) AS n FROM events WHERE type='task_completed' AND subject='launch-parent'").get().n, 1);
   } finally { control.close(); }
 });
 
@@ -364,6 +373,13 @@ test('unknown provisioning is preserved and exact original identity is retired w
   assert.deepEqual(f.operations.filter(([kind]) => kind === 'call').length, 0);
   const original = f.operations.find(([kind]) => kind === 'up')[1];
   assert.deepEqual(f.operations.filter(([kind]) => kind === 'down'), [['down', original]]);
+  const control = new FactoryControl(path.join(f.input.outputDirectory, 'control.sqlite'));
+  try {
+    assert.equal(control.task('launch-parent').status, 'running');
+    assert.equal(control.task('launch-parent').specification.taskType, 'operation');
+    assert.equal(control.effect('provision-parent').state, 'unknown');
+    assert.equal(control.db.prepare("SELECT count(*) AS n FROM events WHERE type='task_completed'").get().n, 0);
+  } finally { control.close(); }
   assert.ok(!JSON.stringify(report).includes('PRIVATE'));
 });
 

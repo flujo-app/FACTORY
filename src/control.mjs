@@ -31,7 +31,7 @@ function closureInput(input, keys) {
   return Object.fromEntries(keys.map(key => [key, input[key]]));
 }
 function closureRecord(control, closureId, type, subject, requestDigest) {
-  const records = control.db.prepare("SELECT type,subject,details FROM events WHERE type IN ('task_released','cell_retired')").all();
+  const records = control.db.prepare("SELECT type,subject,details FROM events WHERE type IN ('task_released','cell_retired','task_completed','task_cancelled')").all();
   for (const row of records) {
     const details = JSON.parse(row.details);
     if (details.closureId !== closureId) continue;
@@ -65,6 +65,94 @@ function validateProvisionBindings(control) {
     const cell = control.db.prepare('SELECT parent_id FROM cells WHERE id=?').get(cells[0].slice(5));
     if (!cell || cell.parent_id !== effect.owner) fail('PROVISION_BINDING', 'Provisioning owner does not match the bound cell parent.');
   }
+}
+
+const TASK_CLOSURE_KEYS = ['closureId','expectedAttempt','expectedOwner','expectedStatus','expectedTaskControlEpoch','expectedFactoryEpoch'];
+function taskClosureIdentity(request, statuses) {
+  id(request.closureId); integer(request.expectedAttempt,'expectedAttempt'); integer(request.expectedFactoryEpoch,'expectedFactoryEpoch',1);
+  if (!statuses.includes(request.expectedStatus)) fail('INVALID', 'Unsupported task closure state.');
+  if (request.expectedOwner === null && request.expectedTaskControlEpoch === null) {
+    if (request.expectedStatus !== 'ready') fail('INVALID', 'Only a ready task may have no recorded execution owner.');
+  } else {
+    id(request.expectedOwner); integer(request.expectedTaskControlEpoch,'expectedTaskControlEpoch',1); integer(request.expectedAttempt,'expectedAttempt',1);
+  }
+}
+function operationContract(specification) {
+  const operation = closureInput(specification.operation, ['kind','cellId','app']);
+  if (!['provision','retire'].includes(operation.kind) || typeof operation.app !== 'string' || !/^[a-z][a-z0-9-]{2,62}$/.test(operation.app)) fail('INVALID', 'A bounded provision or retirement operation is required.');
+  id(operation.cellId);
+  const acceptance = closureInput(specification.acceptance,['scope']);
+  if (acceptance.scope !== 'recorded-controller-operation-receipts-only') fail('INVALID', 'Operation acceptance must describe the exact recorded receipt scope.');
+  if (Object.hasOwn(specification,'deliveryTarget')) fail('INVALID', 'An operation cannot carry a software delivery target.');
+  return operation;
+}
+function retainedTaskIdentity(task) {
+  return { projectId:task.project_id, branch:task.branch, specification:task.specification, specDigest:task.spec_digest,
+    candidate:task.candidate, review:task.review };
+}
+function taskClosureRecord(control, taskId, request, type, requestDigest, terminalStatus) {
+  const factory = control.control(), task = control.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  const previous = closureRecord(control,request.closureId,type,taskId,requestDigest);
+  if (previous) {
+    if (!task || task.status !== terminalStatus || task.epoch !== request.expectedAttempt || task.owner !== null
+        || task.token_hash !== null || task.expires !== null || task.control_epoch !== null
+        || canonical(retainedTaskIdentity(task)) !== canonical(previous.retainedTask)
+        || previous.retainedEffects && previous.retainedEffects.some(effect => canonical(control.effect(effect.key)) !== canonical(effect))) fail('STALE', 'Closed task identity changed.');
+    return { task, previous };
+  }
+  if (factory.epoch !== request.expectedFactoryEpoch || !task || task.status !== request.expectedStatus
+      || task.owner !== request.expectedOwner || task.epoch !== request.expectedAttempt
+      || task.control_epoch !== request.expectedTaskControlEpoch) fail('STALE', 'Task or factory identity changed before closure.');
+  if (digest(JSON.parse(task.specification)) !== task.spec_digest) fail('TASK', 'Immutable task specification is inconsistent.');
+  const specification = JSON.parse(task.specification), provisionKeys = [];
+  if (specification.taskType === 'operation' && specification.operation.kind === 'retire') {
+    const operation = operationContract(specification);
+    const cellBinding = control.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('cell:'+operation.cellId);
+    const appBinding = control.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('app:'+operation.app);
+    if (cellBinding || appBinding) provisionKeys.push(provisionIdentity(control,operation));
+  }
+  if (causalOpenEffects(control,{taskIds:[taskId],provisionKeys}).length) fail('UNRECONCILED', 'Causal task, delivery or cleanup effects remain open.');
+  if (control.db.prepare("SELECT key FROM effects WHERE kind='delivery' AND task_id=? AND state='succeeded'").get(taskId)) fail('DELIVERY', 'Successful matching delivery must be finalized before task closure.');
+  return { task, previous:null };
+}
+function operationReceipt(control, key, kind, task = null) {
+  const effect = control.effect(key);
+  let owner = task?.owner, controlEpoch = task?.control_epoch, claimSeq = null, releaseSeq = null;
+  if (task) {
+    const claims = control.db.prepare("SELECT seq,details FROM events WHERE type='task_claimed' AND subject=?").all(task.id)
+      .map(row => ({...row,details:JSON.parse(row.details)})).filter(row => row.details.epoch === task.epoch);
+    if (claims.length !== 1) fail('OPERATION_EVIDENCE', 'Original task claim history is required.');
+    const claim = claims[0]; claimSeq = claim.seq;
+    if (task.status === 'ready') {
+      const released = control.db.prepare("SELECT seq,details FROM events WHERE type='task_released' AND subject=? ORDER BY seq DESC LIMIT 1").get(task.id);
+      const result = released && JSON.parse(released.details).result;
+      if (!released || !result || released.seq <= claim.seq || result.attempt !== task.epoch || result.previousOwner !== claim.details.cellId
+          || result.previousTaskControlEpoch !== claim.details.controlEpoch) fail('OPERATION_EVIDENCE', 'Ready completion requires the exact released attempt provenance.');
+      owner = claim.details.cellId; controlEpoch = claim.details.controlEpoch; releaseSeq = released.seq;
+    } else if (owner !== claim.details.cellId || controlEpoch !== claim.details.controlEpoch) fail('OPERATION_EVIDENCE', 'Recorded owner and task claim disagree.');
+  }
+  if (effect.kind !== kind || effect.state !== 'succeeded' || (task && (effect.scope !== 'task' || effect.scope_id !== task.id
+      || effect.task_id !== task.id || effect.owner !== owner || effect.owner_epoch !== task.epoch
+      || effect.control_epoch !== controlEpoch))) fail('OPERATION_EVIDENCE', 'Successful operation must match this exact task attempt.');
+  const accepted = control.db.prepare("SELECT seq,details FROM events WHERE type='effect_accepted' AND subject=?").all(key);
+  const settled = control.db.prepare("SELECT seq,details FROM events WHERE type='effect_settled' AND subject=? ORDER BY seq DESC LIMIT 1").get(key);
+  if (accepted.length !== 1 || !settled || settled.seq <= accepted[0].seq || claimSeq !== null && accepted[0].seq <= claimSeq
+      || releaseSeq !== null && settled.seq >= releaseSeq) fail('OPERATION_EVIDENCE', 'Original admission and successful settlement history are required.');
+  const admitted = JSON.parse(accepted[0].details), finished = JSON.parse(settled.details);
+  if (admitted.kind !== kind || admitted.scope !== effect.scope || admitted.scopeId !== effect.scope_id || admitted.requestDigest !== effect.request_digest
+      || finished.state !== 'succeeded' || canonical(finished.receipt) !== canonical(effect.receipt)) fail('OPERATION_EVIDENCE', 'Operation history does not match its receipt.');
+  return effect;
+}
+function receiptMatchesApp(receipt, app) {
+  return receipt && (Object.hasOwn(receipt,'app') || Object.hasOwn(receipt,'worker'))
+    && (!Object.hasOwn(receipt,'app') || receipt.app === app) && (!Object.hasOwn(receipt,'worker') || receipt.worker === app);
+}
+function provisionIdentity(control, operation) {
+  validateProvisionBindings(control);
+  const cellBinding = control.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('cell:'+operation.cellId);
+  const appBinding = control.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('app:'+operation.app);
+  if (!cellBinding || !appBinding || cellBinding.effect_key !== appBinding.effect_key) fail('OPERATION_EVIDENCE', 'Exact cell and app provisioning identities are required.');
+  return cellBinding.effect_key;
 }
 
 /** One local transactional authority. No distributed-consensus or provider-idempotency claim. */
@@ -136,6 +224,9 @@ export class FactoryControl {
   createTask({ taskId, projectId, branch, specification }) {
     id(taskId); id(projectId);
     if (typeof branch !== 'string' || !/^codex\/[a-zA-Z0-9/_-]+$/.test(branch) || !specification?.problem || !specification?.acceptance || !specification?.baseline) fail('INVALID', 'Task requires a codex branch, problem, acceptance and baseline.');
+    if (Object.hasOwn(specification,'taskType') && !['software','operation'].includes(specification.taskType)) fail('INVALID', 'Unsupported immutable task type.');
+    if (specification.taskType === 'operation') operationContract(specification);
+    else if (Object.hasOwn(specification,'operation')) fail('INVALID', 'An operation contract requires an explicit operation task type.');
     const payload = canonical(specification), hash = digest(specification);
     return this.transaction(() => {
       this.active(); const previous = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
@@ -185,6 +276,52 @@ export class FactoryControl {
       const result = { taskId, status: 'ready', attempt: task.epoch, previousOwner: task.owner, previousTaskControlEpoch: task.control_epoch };
       this.db.prepare("UPDATE tasks SET status='ready',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
       this.event('task_released', taskId, { closureId: request.closureId, requestDigest, expectedFactoryEpoch: request.expectedFactoryEpoch, result });
+      return result;
+    });
+  }
+  /** Trusted-local completion of a named, immutable provision/retirement operation; no software or provider-absence claim. */
+  completeOperationalTask(taskId, input) {
+    id(taskId);
+    const request = closureInput(input,[...TASK_CLOSURE_KEYS,'completionEffectKeys']);
+    taskClosureIdentity(request,['ready','running']);
+    if (!Array.isArray(request.completionEffectKeys) || request.completionEffectKeys.length !== 1) fail('INVALID', 'One exact operational completion effect is required.');
+    request.completionEffectKeys = request.completionEffectKeys.map(id);
+    const requestDigest = digest({taskId,...request});
+    return this.transaction(() => {
+      const { task, previous } = taskClosureRecord(this,taskId,request,'task_completed',requestDigest,'completed');
+      if (previous) return previous.result;
+      const specification = JSON.parse(task.specification);
+      if (specification.taskType !== 'operation' || task.candidate !== null || task.review !== null) fail('TASK', 'Explicit operation type and no submitted software are required.');
+      const operation = operationContract(specification), provisionKey = provisionIdentity(this,operation);
+      const provision = operationReceipt(this,provisionKey,'provision',operation.kind === 'provision' ? task : null);
+      if (!receiptMatchesApp(provision.receipt,operation.app) || provision.receipt?.state !== 'ready') fail('OPERATION_EVIDENCE', 'Matching recorded provisioning success is required.');
+      const effectKey = request.completionEffectKeys[0];
+      if (operation.kind === 'provision' && effectKey !== provisionKey) fail('OPERATION_EVIDENCE', 'Provisioning completion key must match its permanent binding.');
+      const effect = operation.kind === 'provision' ? provision : operationReceipt(this,effectKey,'retire',task);
+      if (operation.kind === 'retire' && (effect.request_digest !== digest({cellId:operation.cellId,app:operation.app,provisionKey})
+          || !receiptMatchesApp(effect.receipt,operation.app) || effect.receipt?.state !== 'destroyed')) fail('OPERATION_EVIDENCE', 'Matching recorded retirement success is required.');
+      const result = {taskId,status:'completed',attempt:task.epoch,previousOwner:task.owner,previousTaskControlEpoch:task.control_epoch,
+        completionScope:'recorded-controller-operation-receipts-only',operation,completionEffectKeys:request.completionEffectKeys,
+        supportingEffectKeys:operation.kind === 'provision' ? [effectKey] : [provisionKey,effectKey],reviewedSoftwareDelivered:false,workerQuiescence:'unverified'};
+      this.db.prepare("UPDATE tasks SET status='completed',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
+      this.event('task_completed',taskId,{closureId:request.closureId,requestDigest,expectedFactoryEpoch:request.expectedFactoryEpoch,retainedTask:retainedTaskIdentity(task),retainedEffects:result.supportingEffectKeys.map(key => this.effect(key)),result});
+      return result;
+    });
+  }
+  /** Explicit abandonment, including while paused. Candidate/review and unmet acceptance remain historical. */
+  cancelTask(taskId, input) {
+    id(taskId);
+    const request = closureInput(input,[...TASK_CLOSURE_KEYS,'reason']);
+    taskClosureIdentity(request,['ready','running','review','verified']);
+    if (!['abandoned','acceptance-unmet','operation-failed'].includes(request.reason)) fail('INVALID', 'An explicit supported cancellation reason is required.');
+    const requestDigest = digest({taskId,...request});
+    return this.transaction(() => {
+      const { task, previous } = taskClosureRecord(this,taskId,request,'task_cancelled',requestDigest,'cancelled');
+      if (previous) return previous.result;
+      const result = {taskId,status:'cancelled',attempt:task.epoch,previousOwner:task.owner,previousTaskControlEpoch:task.control_epoch,
+        reason:request.reason,specificationAcceptance:'not-established-by-cancellation',reviewedSoftwareDelivered:false};
+      this.db.prepare("UPDATE tasks SET status='cancelled',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
+      this.event('task_cancelled',taskId,{closureId:request.closureId,requestDigest,expectedFactoryEpoch:request.expectedFactoryEpoch,retainedTask:retainedTaskIdentity(task),result});
       return result;
     });
   }
@@ -304,6 +441,18 @@ export class FactoryControl {
         const candidate=JSON.parse(candidateBytes.toString('utf8')), target=task.specification.deliveryTarget;
         if(!target || request?.repository!==target.repository || request.ref!==target.ref || request.expectedHead!==task.specification.baseline || request.candidateHead!==candidate.candidateHead || candidate.repository!==target.repository || candidate.ref!==target.ref || candidate.baseline!==task.specification.baseline || candidate.branch!==task.branch || !/^[a-f0-9]{40}$/.test(request.candidateHead??'') || !/^[a-f0-9]{40}$/.test(request.expectedHead??'')) fail('DELIVERY_BINDING','Delivery target, baseline and candidate must match the reviewed task.');
       } else if (lease.scope!=='task') fail('AUTHORITY','Task authority is required.');
+      if (lease.scope === 'task') {
+        const task = this.task(lease.scopeId);
+        if (task.specification.taskType === 'operation') {
+          const operation = operationContract(task.specification);
+          if (kind !== operation.kind || request?.cellId !== operation.cellId || request?.app !== operation.app || taskId !== null && taskId !== task.id) fail('OPERATION_BINDING', 'Effect must match the immutable operation contract.');
+          if (kind === 'retire') {
+            const retirementRequest = closureInput(request,['cellId','app','provisionKey']);
+            id(retirementRequest.provisionKey);
+            if (provisionIdentity(this,operation) !== retirementRequest.provisionKey) fail('OPERATION_BINDING', 'Retirement must retain exact provisioning bindings.');
+          }
+        }
+      }
       if (this.openEffects(lease.scope,lease.scopeId).length) fail('UNRECONCILED','Previous external effect must settle before a conflicting effect.');
       if(kind==='provision') {
         const cell=this.db.prepare("SELECT * FROM cells WHERE id=? AND status='reserved'").get(id(request?.cellId));

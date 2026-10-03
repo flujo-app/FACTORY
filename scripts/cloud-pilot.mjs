@@ -349,9 +349,11 @@ export async function runCloudPilot(input, dependencies = {}) {
     catch (error) { if (!bestEffort) throw error; }
   };
   const remaining = () => { const value = deadline.value - clock(); if (value < 1000) throw new Error('The pilot admission deadline elapsed.'); return Math.min(PILOT_LIMITS.callMs, value); };
-  const makeTask = (taskId, owner, purpose) => {
+  const makeTask = (taskId, owner, purpose, operation = null) => {
     control.createTask({ taskId, projectId: options.runId, branch: `codex/${options.runId}/${taskId}`,
-      specification: { problem: purpose, acceptance: SPEC, baseline: digest(evidence), scope: 'bounded-live-cloud-pilot' } });
+      specification: { problem: purpose, acceptance: operation ? { scope: 'recorded-controller-operation-receipts-only' } : SPEC,
+        baseline: digest(evidence), scope: 'bounded-live-cloud-pilot',
+        ...(operation ? { taskType: 'operation', operation } : {}) } });
     return control.claimTask(taskId, owner, Math.max(1000, deadline.value - clock()));
   };
   const outcomes = [], cleanup = [];
@@ -402,8 +404,13 @@ export async function runCloudPilot(input, dependencies = {}) {
       if (result.effect.state !== 'succeeded') throw new Error('Flow call is unconfirmed.');
       return completionObject(await readFile(outputPath, 'utf8'));
     };
-    const rootLease = makeTask('launch-parent', 'root', 'Create one explicitly owned temporary worker');
+    const rootLease = makeTask('launch-parent', 'root', 'Create one explicitly owned temporary worker',
+      { kind: 'provision', cellId: 'parent-worker', app: options.apps.parent });
     await provision('parent', rootLease);
+    control.completeOperationalTask('launch-parent', { closureId: 'complete-launch-parent',
+      expectedAttempt: rootLease.epoch, expectedOwner: rootLease.cellId, expectedStatus: 'running',
+      expectedTaskControlEpoch: rootLease.controlEpoch, expectedFactoryEpoch: control.control().epoch,
+      completionEffectKeys: ['provision-parent'] });
     const parentLease = makeTask('parent-candidate', 'parent-worker', SPEC);
     const parentValue = await call('parent', parentLease,
       `${SPEC}\nReturn strict JSON with schemaVersion:1,functionName:"normalizeCheckpoint",source: an exported function in this accepted grammar: export function normalizeCheckpoint(value) { return typeof value === "string" ? value.trim().toLowerCase() : "unknown"; }, and childRequest:{type:"independent-verification",budgetCents:1500,workers:1,depth:2}. Whitespace and quote style may vary; do not add statements. This is a proposal to the coordinator, not permission or a native cloud provisioning capability. No code fences, imports, tools or extra text.`);

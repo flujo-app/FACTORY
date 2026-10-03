@@ -149,7 +149,7 @@ function readSnapshot(db) {
   const tasks = taskRows.map(task => {
     const candidate = optionalJson(task.candidate), review = optionalJson(task.review);
     return { id: identifier(task.id), projectId: identifier(task.project_id), branch: text(task.branch, 256),
-      status: member(task.status, ['ready', 'running', 'review', 'verified', 'rejected', 'delivered']),
+      status: member(task.status, ['ready', 'running', 'review', 'verified', 'rejected', 'delivered', 'completed', 'cancelled']),
       attempt: integer(task.epoch), owner: task.owner === null ? null : identifier(task.owner),
       leaseExpiry: task.expires === null ? null : iso(task.expires), specDigest: hash(task.spec_digest),
       candidate: candidate ? { sha256: hash(candidate.sha256) } : null,
