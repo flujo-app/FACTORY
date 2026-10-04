@@ -11,15 +11,20 @@ const cancellation = new AbortController();
 const stop = () => cancellation.abort();
 let control, paid, previousOutput;
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const STATES = new Set(['stopped','blocked','recovered','unresolved','paused','paid_paused','busy','released','awaiting_review','idle','budget','dispatched']);
+const STATES = new Set(['stopped','blocked','recovered','unresolved','paused','paid_paused','busy','released','awaiting_review','idle','budget','dispatched',
+  'power_transition','power_observed','sleeping']);
 const EFFECT_STATES = new Set(['accepted','running','unknown','succeeded','not_applied']);
 const REASONS = new Set(['original_intent_requires_operator','assignment_owner','lifetime_intent_exists','assignment_changed',
-  'factory_paused','assignment_busy','unstarted_assignment_changed','worker_target_unavailable','worker_not_ready','mission_history','native_conflict','output_binding']);
+  'factory_paused','assignment_busy','unstarted_assignment_changed','worker_target_unavailable','worker_not_ready','mission_history','native_conflict','output_binding',
+  'worker_power_unavailable','worker_power_busy','queue_demand_changed','worker_power_binding','worker_power_stopped','power_reconciliation_required',
+  'power_intent_requires_operator','queue_demand_not_runnable','model_step_reconciliation_required','model_step_manifest_incomplete','original_model_step_runtime_hold']);
 const ERROR_CODES = new Set(['NATIVE_CELL_ARGUMENTS','NATIVE_CELL_NODE_VERSION','NATIVE_CELL_PRIVATE_MODULE','NATIVE_CELL_PROFILE',
   'NATIVE_CELL_DATABASE','NATIVE_CELL_STATUS','NATIVE_CELL_FAILED','NATIVE_CELL_CLOSE_FAILED','NATIVE_MISSION_BINDING',
   'NATIVE_MISSION_INVALID','NATIVE_MISSION_UNAVAILABLE','NATIVE_MISSION_CONFLICT','NATIVE_MISSION_ADMISSION',
   'NATIVE_MISSION_ALREADY_ATTEMPTED','NATIVE_MISSION_DISPATCH_UNKNOWN','NATIVE_MISSION_PRIVATE_OUTPUT',
-  'NATIVE_MISSION_OUTPUT_LIMIT','NATIVE_MISSION_OUTPUT_CONFLICT','INVALID','SCHEMA','UNINITIALIZED','BUSY','PAUSED','BUDGET','OVERFLOW','STALE','AUTHORITY']);
+  'NATIVE_MISSION_OUTPUT_LIMIT','NATIVE_MISSION_OUTPUT_CONFLICT','INVALID','SCHEMA','UNINITIALIZED','BUSY','PAUSED','BUDGET','OVERFLOW','STALE','AUTHORITY',
+  'WORKER_POWER_AUTHORITY','WORKER_POWER_BINDING','WORKER_POWER_ENROLLMENT','WORKER_POWER_HISTORY','WORKER_POWER_QUEUE',
+  'WORKER_POWER_OWNER','WORKER_POWER_UNAVAILABLE','WORKER_POWER_BUDGET','WORKER_POWER_REQUEST','WORKER_POWER_STOPPED']);
 function check(value, code = 'NATIVE_CELL_PROFILE') {
   if (!value) throw Object.assign(new Error(code), { code });
 }
@@ -112,7 +117,7 @@ function observation(value) {
 }
 function printStatus(value) {
   check(value && Object.getPrototypeOf(value) === Object.prototype && STATES.has(value.state)
-    && Object.keys(value).every(key => ['state','taskId','key','effectState','reason','unallocatedCents','observations'].includes(key)), 'NATIVE_CELL_STATUS');
+    && Object.keys(value).every(key => ['state','taskId','key','effectState','reason','unallocatedCents','observations','runtimeAdmission'].includes(key)), 'NATIVE_CELL_STATUS');
   const safe = { state: value.state };
   for (const key of ['taskId','key']) if (Object.hasOwn(value, key)) {
     check(typeof value[key] === 'string' && ID.test(value[key]), 'NATIVE_CELL_STATUS'); safe[key] = value[key];
@@ -125,6 +130,7 @@ function printStatus(value) {
   if (Object.hasOwn(value, 'observations')) {
     check(Array.isArray(value.observations) && value.observations.length <= 1000, 'NATIVE_CELL_STATUS'); safe.observations = value.observations.map(observation);
   }
+  if (Object.hasOwn(value, 'runtimeAdmission')) { check(value.runtimeAdmission === 'HOLD', 'NATIVE_CELL_STATUS'); safe.runtimeAdmission = 'HOLD'; }
   const output = JSON.stringify(safe);
   if (output !== previousOutput) { process.stdout.write(output + '\n'); previousOutput = output; }
 }
@@ -143,7 +149,8 @@ try {
   for (const name of ['readPrivateJson','writePrivateJson','ensurePrivateDirectory','assertPrivateDirectory'])
     check(typeof privateFiles[name] === 'function', 'NATIVE_CELL_PRIVATE_MODULE');
   const profile = await privateFiles.readPrivateJson(flags['--profile'], { maxBytes: 65536 });
-  closed(profile, ['controlDatabase','spendingDatabase','client','cell']);
+  const usePower = Boolean(profile && Object.hasOwn(profile, 'powerScheduling'));
+  closed(profile, ['controlDatabase','spendingDatabase','client','cell', ...(usePower ? ['powerScheduling'] : [])]);
   closed(profile.client, ['origin','tokenFile','worker','timeoutMs']);
   closed(profile.cell, ['cellId','app','provisionKey','worker','outputDirectory','ttlMs','pollMs']);
   check(absolute(profile.cell.outputDirectory));
@@ -151,6 +158,22 @@ try {
   closed(profile.cell.worker, ['workspace','archiveSha256','compatibility']);
   check(absolute(profile.client.tokenFile));
   const token = await privateFiles.readPrivateJson(profile.client.tokenFile, { maxBytes: 4096 }); closed(token, ['token']);
+  let powerCredentials = null;
+  if (usePower) {
+    closed(profile.powerScheduling, ['flyTokenFile','managementLeaseFile','wakeCeilingCents','timeoutMs']);
+    const value = profile.powerScheduling;
+    check(absolute(value.flyTokenFile) && absolute(value.managementLeaseFile)
+      && Number.isSafeInteger(value.wakeCeilingCents) && value.wakeCeilingCents > 0
+      && Number.isSafeInteger(value.timeoutMs) && value.timeoutMs >= 100 && value.timeoutMs <= 60000);
+    const fly = await privateFiles.readPrivateJson(value.flyTokenFile, { maxBytes: 4096 }); closed(fly, ['token']);
+    const lease = await privateFiles.readPrivateJson(value.managementLeaseFile, { maxBytes: 4096 });
+    closed(lease, ['scope','scopeId','cellId','epoch','controlEpoch','expires','token']);
+    check(lease.scope === 'task' && typeof lease.scopeId === 'string' && ID.test(lease.scopeId)
+      && typeof lease.cellId === 'string' && ID.test(lease.cellId)
+      && ['epoch','controlEpoch','expires'].every(key => Number.isSafeInteger(lease[key]) && lease[key] > 0)
+      && typeof lease.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(lease.token));
+    powerCredentials = { flyToken: fly.token, managementLease: lease };
+  }
   check(absolute(profile.controlDatabase) && absolute(profile.spendingDatabase), 'NATIVE_CELL_DATABASE');
   const controlPaths = ['', '-wal', '-shm'].map(suffix => pathKey(profile.controlDatabase + suffix));
   const paidPaths = ['', '-wal', '-shm'].map(suffix => pathKey(profile.spendingDatabase + suffix));
@@ -165,17 +188,29 @@ try {
   const { SpendingLedger } = await import('../src/spending.mjs');
   const { createNativeMissionClient } = await import('../src/native-mission-client.mjs');
   const { createNativeCell } = await import('../src/native-cell.mjs');
+  const fetchBound = (url, init = {}) => {
+    const signal = AbortSignal.any(init.signal ? [init.signal, cancellation.signal] : [cancellation.signal]);
+    return globalThis.fetch(url, { ...init, signal });
+  };
   const client = createNativeMissionClient({ ...profile.client.worker, origin: profile.client.origin,
-    token: token.token, timeoutMs: profile.client.timeoutMs, fetchImpl(url, init = {}) {
-      const signal = AbortSignal.any(init.signal ? [init.signal, cancellation.signal] : [cancellation.signal]);
-      return globalThis.fetch(url, { ...init, signal });
-    } });
+    token: token.token, timeoutMs: profile.client.timeoutMs, fetchImpl: fetchBound });
   check(digest(client.binding) === digest(profile.client.worker) && digest(profile.client.worker) === digest(profile.cell.worker));
   check(sameFile(controlFile.info, await fs.lstat(profile.controlDatabase)) && sameFile(paidFile.info, await fs.lstat(profile.spendingDatabase)), 'NATIVE_CELL_DATABASE');
   if (cancellation.signal.aborted) printStatus({ state: 'stopped' });
   else {
     control = new FactoryControl(profile.controlDatabase); paid = new SpendingLedger(profile.spendingDatabase);
-    const cell = createNativeCell({ control, paidAdmission: paid, client, privateFiles, profile: profile.cell });
+    let powerScheduling = null;
+    if (usePower) {
+      const binding = control.workerPowerBinding(profile.cell.app);
+      const target = value => ({ cellId: value.cellId, app: value.app, provisionKey: value.provisionKey, worker: value.worker });
+      check(digest(target(binding)) === digest(target(profile.cell)), 'WORKER_POWER_BINDING');
+      const { createWorkerPowerController } = await import('../src/worker-power.mjs');
+      const controller = createWorkerPowerController({ control, paidAdmission: paid, binding,
+        flyToken: powerCredentials.flyToken, workerToken: token.token, workerOrigin: profile.client.origin,
+        fetchImpl: fetchBound, timeoutMs: profile.powerScheduling.timeoutMs });
+      powerScheduling = { controller, managementLease: powerCredentials.managementLease, wakeCeilingCents: profile.powerScheduling.wakeCeilingCents };
+    }
+    const cell = createNativeCell({ control, paidAdmission: paid, client, privateFiles, profile: profile.cell, powerScheduling });
     // The cell's validated tick ensures its explicit output directory is private before any output write.
     if (command === 'once') printStatus(await cell.tick({ signal: cancellation.signal }));
     else printStatus(await cell.run({ signal: cancellation.signal, onChange: printStatus }));

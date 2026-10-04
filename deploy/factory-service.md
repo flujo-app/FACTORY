@@ -44,6 +44,22 @@ client.tokenFile: /authority/token.private.json
 cell.outputDirectory: /authority/outputs
 ```
 
+The native-cell role also accepts the optional closed `powerScheduling` profile
+in [NATIVE_CELLS.md](../NATIVE_CELLS.md). For an existing enrolled Fly worker,
+its additional private paths can be `/authority/fly-token.private.json` and
+`/authority/management-lease.private.json`; set an explicit wake ceiling and a
+100–60,000 ms power timeout. The worker binding is read from the original
+controller enrollment. `client.origin` must point at an existing Machine-specific
+private HTTP loopback proxy reachable within this coordinator's network namespace.
+This service does not
+create that proxy, enroll/provision a Machine, claim or renew management authority,
+or add public Fly services. Omitted power configuration keeps the default inert.
+After explicit lease renewal, update its private file and restart the service.
+
+This opt-in source wiring has focused fake-transport CLI coverage. Previous image
+acceptance below applies to its recorded source; a new image build and independent
+live power/lifecycle acceptance remain required before claiming deployed behavior.
+
 The three image directories `/authority`, `/data` and `/fixture` are empty,
 owner-private directories created at build time. The image declares no
 anonymous volume. Production mounts only its explicit authority directory;

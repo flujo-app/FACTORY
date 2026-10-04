@@ -13,8 +13,10 @@ node bin/native-cell.mjs run --private-module ABS --profile PRIVATE_JSON
 node bin/native-cell.mjs once --private-module ABS --profile PRIVATE_JSON
 ```
 
-The strict private profile contains exactly `controlDatabase`,
-`spendingDatabase`, `client` and `cell`. Both databases must already exist and be
+The strict private profile contains `controlDatabase`,
+`spendingDatabase`, `client` and `cell`, with an optional `powerScheduling` field.
+Omitting that field retains the existing queue behavior and makes no power calls.
+Both databases must already exist and be
 initialized in private directories; this command cannot initialize or reset
 either policy. `client` is exactly `{ origin, tokenFile, worker, timeoutMs }`,
 as described in [NATIVE_MISSIONS.md](NATIVE_MISSIONS.md). Its private token file
@@ -29,6 +31,32 @@ contains exactly `{ token }`.
 | `outputDirectory` | Absolute private result directory |
 | `ttlMs` | Claim lifetime, 1,000–86,400,000 ms |
 | `pollMs` | Queue/observation interval, 100–60,000 ms |
+
+Optional `powerScheduling` contains exactly `{ flyTokenFile, managementLeaseFile,
+wakeCeilingCents, timeoutMs }`. Both file paths are absolute owner-private JSON.
+The Fly file contains exactly `{ token }`; the management file contains the
+existing lease's exact `{ scope, scopeId, cellId, epoch, controlEpoch, expires,
+token }`, with `scope: "task"`. `wakeCeilingCents` is an explicit positive integer;
+power `timeoutMs` is 100–60,000 ms. The command does not claim or renew this lease.
+After explicit renewal, update its private file and restart the process.
+
+Power configuration requires an already persisted `worker_power_enrolled`
+binding for `cell.app`, matching the exact cell/app/provision/worker tuple. The
+CLI constructs `createWorkerPowerController` with the same opened controller and
+paid ledger, that original binding, the private Fly token, and the existing
+`client.origin`/worker token. For power management, this origin must be an
+existing Machine-specific HTTP loopback proxy reachable within this coordinator's
+network namespace. Construction does not enroll,
+start, stop or provision a worker; an explicit queue tick decides the transition.
+No proxy is started automatically. See [WORKER_POWER.md](WORKER_POWER.md).
+
+Power statuses are limited to `power_transition`, `power_observed`, `sleeping`
+and the existing safe blocked/budget/paused results. Unknown/accepted/running
+power intents permit observation only, including while paused. Expired management
+authority refuses fresh transitions. Sleep retains the existing live-task/effect
+fences; wake reserves its configured ceiling while leaving enough free allowance
+for the selected mission. Machine/snapshot identity and current demand are
+rechecked before mutation. Stopping compute does not settle paid reservations.
 
 Outputs use `missionId + '.private.json'` under the configured directory.
 An original intent whose destination does not match that binding is refused.
