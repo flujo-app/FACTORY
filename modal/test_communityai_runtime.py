@@ -2,8 +2,13 @@
 
 import asyncio
 import importlib.util
+import json
+import os
 from pathlib import Path
+import signal
+import sys
 import tempfile
+import threading
 from types import ModuleType
 import time
 import unittest
@@ -12,6 +17,9 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location("communityai_runtime", Path(__file__).with_name("communityai_runtime.py"))
 runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
+WATCHDOG_SPEC = importlib.util.spec_from_file_location("communityai_runtime_watchdog", Path(__file__).with_name("communityai_runtime_watchdog.py"))
+watchdog = importlib.util.module_from_spec(WATCHDOG_SPEC)
+WATCHDOG_SPEC.loader.exec_module(watchdog)
 
 
 def config():
@@ -130,7 +138,13 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(result["cleanup"], "dht_process_closed")
         self.assertEqual(result["provider_retirement"], "unverified")
         self.assertEqual(result["configuration_provenance"], "not_authenticated")
+        self.assertEqual(result["startup_publication"], "completed")
+        self.assertEqual(result["final_publication"], "completed")
+        self.assertEqual(result["descendant_retirement"], "unverified")
         self.assertEqual(observations[0]["phase"], "started_reachability_unverified")
+        self.assertEqual(observations[0]["startup_publication"], "in_progress")
+        self.assertEqual(observations[1]["phase"], "supervisor_stop")
+        self.assertEqual(observations[1]["final_publication"], "in_progress")
         self.assertIn("/tcp/41234/p2p/", result["bootstrap_peers"][0])
         self.assertEqual(len(transport.constructor_calls), 1)
 
@@ -198,6 +212,62 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(failed.exception.record["cleanup"], "dht_process_closed")
         self.assertEqual(failed.exception.record["cleanup_errors"], ["observer:OSError"])
 
+    def test_blocked_startup_publication_closes_the_same_dht_without_hanging(self):
+        transport, entered, release = TransportDouble(), threading.Event(), threading.Event()
+        calls = []
+
+        def observer(record):
+            calls.append(record["phase"])
+            entered.set()
+            release.wait(5)
+
+        try:
+            with patch.object(runtime, "OBSERVER_TIMEOUT_SECONDS", 0.05):
+                began = time.monotonic()
+                with self.assertRaises(runtime.BootstrapError) as failed:
+                    transport.run(observer=observer)
+                self.assertLess(time.monotonic() - began, 1)
+            self.assertTrue(entered.is_set())
+            self.assertEqual(calls, ["started_reachability_unverified"])
+            self.assertEqual(len(transport.constructor_calls), 1)
+            self.assertEqual(transport.events.count("shutdown"), 1)
+            record = failed.exception.record
+            self.assertEqual(record["phase"], "failed")
+            self.assertEqual(record["failure_type"], "TimeoutError")
+            self.assertEqual(record["cleanup"], "dht_process_closed")
+            self.assertEqual(record["startup_publication"], "stalled")
+            self.assertEqual(record["final_publication"], "skipped_startup_stalled")
+            self.assertEqual(record["observer_late_side_effects"], "possible_stalled_daemon")
+            self.assertEqual(record["descendant_retirement"], "unverified")
+        finally:
+            release.set()
+
+    def test_blocked_final_publication_returns_after_the_same_dht_closed(self):
+        transport, release = TransportDouble(), threading.Event()
+        calls = []
+
+        def observer(record):
+            calls.append(record["phase"])
+            if len(calls) == 2:
+                release.wait(5)
+
+        try:
+            with patch.object(runtime, "OBSERVER_TIMEOUT_SECONDS", 0.05):
+                began = time.monotonic()
+                with self.assertRaises(runtime.BootstrapError) as failed:
+                    transport.run(observer=observer)
+                self.assertLess(time.monotonic() - began, 1)
+            self.assertEqual(calls, ["started_reachability_unverified", "supervisor_stop"])
+            self.assertEqual(transport.events.count("shutdown"), 1)
+            record = failed.exception.record
+            self.assertEqual(record["cleanup"], "dht_process_closed")
+            self.assertEqual(record["startup_publication"], "completed")
+            self.assertEqual(record["final_publication"], "stalled")
+            self.assertEqual(record["cleanup_errors"], ["observer:TimeoutError"])
+            self.assertEqual(record["observer_late_side_effects"], "possible_stalled_daemon")
+        finally:
+            release.set()
+
     def test_incomplete_cleanup_cannot_be_reported_as_closed(self):
         transport = TransportDouble(close_alive=True)
         with self.assertRaises(runtime.BootstrapError) as failed:
@@ -216,6 +286,71 @@ class BootstrapTests(unittest.TestCase):
 
 
 class RecipeTests(unittest.TestCase):
+    def test_cli_raw_stdout_backpressure_is_a_publication_failure(self):
+        with patch.object(runtime.os, "write", side_effect=BlockingIOError(11, "full pipe")) as write:
+            with self.assertRaises(BlockingIOError):
+                runtime._emit_cli_record({"phase": "started_reachability_unverified"}, fd=42)
+        self.assertEqual(write.call_count, 1)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux raw stdout pipe contract")
+    def test_full_nonblocking_cli_pipe_never_waits_for_a_reader(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.set_blocking(write_fd, False)
+            with self.assertRaises(BlockingIOError):
+                while True:
+                    os.write(write_fd, b"x" * 4096)
+            began = time.monotonic()
+            with self.assertRaises(BlockingIOError):
+                runtime._emit_cli_record({"phase": "started_reachability_unverified"}, fd=write_fd)
+            self.assertLess(time.monotonic() - began, 1)
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
+    def test_process_watchdog_bounds_a_stalled_child_at_expiry(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
+            path = Path(folder) / "bootstrap.json"
+            value = config()
+            value["expires_at_unix"] = time.time() + 0.5
+            path.write_text(json.dumps(value))
+            began = time.monotonic()
+            result = watchdog.supervise_bootstrap(path, grace_seconds=0.1,
+                                                  child_argv=[sys.executable, "-c", "import time; time.sleep(30)"])
+        self.assertLess(time.monotonic() - began, 3)
+        self.assertEqual(result["reason"], "expiry_stop")
+        self.assertIsNotNone(result["child_returncode"])
+        self.assertEqual(result["descendant_retirement"], "unverified")
+        self.assertEqual(result["provider_retirement"], "unverified")
+
+    def test_process_watchdog_does_not_spawn_after_stop(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
+            path = Path(folder) / "bootstrap.json"
+            path.write_text(json.dumps(config()))
+            stopped = threading.Event()
+            stopped.set()
+            def forbidden(*_args, **_kwargs):
+                raise AssertionError("Stopped supervisor must not launch a child")
+            result = watchdog.supervise_bootstrap(path, stop_event=stopped,
+                                                  child_argv=[sys.executable, "-c", "pass"], popen=forbidden)
+        self.assertEqual(result["reason"], "stopped_before_child")
+        self.assertEqual(result["descendant_retirement"], "no_child_created")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux process-group hard kill contract")
+    def test_process_watchdog_force_kills_a_child_ignoring_stop(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
+            path = Path(folder) / "bootstrap.json"
+            value = config()
+            value["expires_at_unix"] = time.time() + 0.5
+            path.write_text(json.dumps(value))
+            command = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(30)"
+            began = time.monotonic()
+            result = watchdog.supervise_bootstrap(path, grace_seconds=0.1,
+                                                  child_argv=[sys.executable, "-c", command])
+        self.assertLess(time.monotonic() - began, 3)
+        self.assertTrue(result["forced_kill"])
+        self.assertEqual(result["child_returncode"], -signal.SIGKILL)
+
     def test_build_command_requires_immutable_build_tools_image(self):
         with self.assertRaises(ValueError):
             runtime.image_build_argv("context", build_runtime_image="compiler:latest", image_tag="factory:test")
