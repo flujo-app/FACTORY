@@ -22,8 +22,14 @@ const encode = value => Buffer.from(canonicalMissionPacket(value), 'utf8');
 const clone = value => structuredClone(value);
 const denied = operation => assert.throws(operation, error => error.code === 'ORIGINAL_RECEIVER_V3_DENIED');
 const proof = Buffer.from('fixture-original-signature-only');
+function proxyPolicyFixture(headerAdditions = []) {
+  return { format: 'factory-original-receiver-proxy-policy', schemaVersion: 1,
+    generationSha256: 'c'.repeat(64), senderUrl: wireFixture.url, receiverRoute: '/v1/chat/completions',
+    methodTransform: 'preserve-post', bodyTransform: 'identity-utf8', headerRemovals: [],
+    headerAdditions: clone(headerAdditions), transportGenerationSha256: 'd'.repeat(64) };
+}
 
-function record() {
+function record(proxyPolicy = proxyPolicyFixture()) {
   const classification = { confidentialityClass: 'ordinary', classVersion: 1 };
   const call = { requestId: 'a'.repeat(32), nonce: 'b'.repeat(32), slot: { nodeId: 'model-node', ordinal: 0 },
     principalId: 'developer-fixture', role: 'developer', recipientId: 'community-fixture' };
@@ -33,12 +39,12 @@ function record() {
     identitySha256: '4'.repeat(64), buildSha256: '5'.repeat(64), generationSha256: '6'.repeat(64), classification };
   const sender = { principalId: 'factory-original-fixture', role: 'physical-owner' };
   const credential = { ownerId: sender.principalId, credentialId: 'communityai-fixture', generationSha256: '7'.repeat(64) };
-  const receiver = { profile: { format: 'factory-communityai-receiver-profile', schemaVersion: 2,
+  const receiver = { profile: { format: 'factory-communityai-receiver-profile', schemaVersion: 3,
     recipientId: recipient.id, recipientOrigin: recipient.origin,
     recipientIdentitySha256: recipient.identitySha256, recipientBuildSha256: recipient.buildSha256,
     recipientGenerationSha256: recipient.generationSha256, endpoint: '/v1/chat/completions',
     ingressSchemaSha256: '8'.repeat(64), normalizerSha256: '9'.repeat(64), runtimeSha256: 'a'.repeat(64),
-    bodyPolicy: 'strict-stream-usage-cache-key-v1' },
+    bodyPolicy: 'strict-stream-usage-cache-key-v1', proxyPolicySha256: originalReceiverV3Digest(proxyPolicy) },
     normalizedBody: { canonicalUtf8: receiverNormalizedUtf8, byteLength: Buffer.byteLength(receiverNormalizedUtf8),
       sha256: receiverNormalizedSha256 } };
   const nativeMission = { schemaVersion: 1, missionId: 'c'.repeat(32), cellId: 'child', app: 'factory-child',
@@ -144,6 +150,7 @@ test('wire, profile, plan and specification edits require fresh matching Origina
     x => { x.wire.headers[0][1] = 'text/plain'; },
     x => { x.credential.generationSha256 = 'f'.repeat(64); rebind(x); },
     x => { x.receiver.profile.runtimeSha256 = 'f'.repeat(64); rebind(x); },
+    x => { x.receiver.profile.proxyPolicySha256 = 'f'.repeat(64); rebind(x); },
     x => { x.receiver.normalizedBody.canonicalUtf8 += ' '; rebind(x); },
     x => { x.call.slot.ordinal = 1; rebind(x); },
   ]) {
@@ -194,6 +201,7 @@ test('version collision, missing observer and caller-made capability cannot ente
     x => { x.plan.schemaVersion = 2; rebind(x); },
     x => { x.task.specification.originalInference.schemaVersion = 2; rebind(x); },
     x => { x.receiver.profile.schemaVersion = 1; rebind(x); },
+    x => { x.receiver.profile.schemaVersion = 2; delete x.receiver.profile.proxyPolicySha256; rebind(x); },
   ]) {
     const changed = clone(r); mutate(changed);
     const f = host(changed);
@@ -211,13 +219,9 @@ test('version collision, missing observer and caller-made capability cannot ente
 const postDenied = (operation, label = '') => assert.throws(operation,
   error => error.code === 'ORIGINAL_RECEIVER_POST_RECEIPT_DENIED', label);
 const receiverProof = Buffer.from('synthetic-receiver-receipt-proof');
-function postFixture() {
-  const r = record(), f = host(r), capability = f.contract.authenticate(f.bytes, proof);
+function postFixture(policy = proxyPolicyFixture()) {
+  const r = record(policy), f = host(r), capability = f.contract.authenticate(f.bytes, proof);
   const held = f.contract.compareHeld(capability);
-  const policy = { format: 'factory-original-receiver-proxy-policy', schemaVersion: 1,
-    generationSha256: 'c'.repeat(64), senderUrl: r.wire.url, receiverRoute: '/v1/chat/completions',
-    methodTransform: 'preserve-post', bodyTransform: 'identity-utf8', headerRemovals: [], headerAdditions: [],
-    transportGenerationSha256: 'd'.repeat(64) };
   const observation = { format: 'communityai-factory-asgi-ingress-observation', schemaVersion: 2,
     method: 'POST', route: '/v1/chat/completions', headers: clone(r.wire.headers),
     rawBodyByteLength: r.wire.bodyByteLength, rawBodySha256: r.wire.bodySha256,
@@ -295,17 +299,31 @@ test('separate signed post receipt joins exact ASGI v2 observation under an expl
 });
 
 test('four ASGI routing headers require a separately pinned proxy addition profile', () => {
-  const { held, policy, receipt } = postFixture();
+  const original = postFixture();
   const additions = [['http-referer', 'https://example.invalid'], ['openai-organization', 'org-fixture'],
     ['openai-project', 'project-fixture'], ['x-title', 'Factory fixture']];
-  receipt.receiver.observation.headers = [...receipt.receiver.observation.headers, ...additions]
+  original.receipt.receiver.observation.headers = [...original.receipt.receiver.observation.headers, ...additions]
     .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-  rehashObservation(receipt.receiver.observation);
-  postDenied(() => postJoin(policy, receipt).joined.join(held, encode(receipt), receiverProof));
-  policy.headerAdditions = additions;
-  receipt.proxyPolicySha256 = originalReceiverV3Digest(policy);
-  const result = postJoin(policy, receipt).joined.join(held, encode(receipt), receiverProof);
-  assert.equal(receipt.receiver.observation.headers.length, 14);
+  rehashObservation(original.receipt.receiver.observation);
+  postDenied(() => postJoin(original.policy, original.receipt).joined.join(
+    original.held, encode(original.receipt), receiverProof));
+  const changedPolicy = proxyPolicyFixture(additions);
+  original.receipt.proxyPolicySha256 = originalReceiverV3Digest(changedPolicy);
+  // Even a matching host policy and newly signed receiver receipt cannot
+  // extend the already approved Original's proxy policy.
+  postDenied(() => postJoin(changedPolicy, original.receipt).joined.join(
+    original.held, encode(original.receipt), receiverProof));
+  const fresh = postFixture(changedPolicy);
+  fresh.receipt.receiver.observation.headers = [...fresh.receipt.receiver.observation.headers, ...additions]
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  rehashObservation(fresh.receipt.receiver.observation);
+  const result = postJoin(fresh.policy, fresh.receipt).joined.join(
+    fresh.held, encode(fresh.receipt), receiverProof);
+  assert.notEqual(fresh.r.plan.slots[0].bindingSha256, original.r.plan.slots[0].bindingSha256);
+  assert.notEqual(fresh.r.task.specification.originalInference.planSha256,
+    original.r.task.specification.originalInference.planSha256);
+  assert.notEqual(fresh.r.task.specDigest, original.r.task.specDigest);
+  assert.equal(fresh.receipt.receiver.observation.headers.length, 14);
   assert.equal(result.runtimeAdmission, 'HOLD');
 });
 

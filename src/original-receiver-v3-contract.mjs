@@ -136,12 +136,12 @@ function validate(record, configured) {
   bodyProjection(JSON.parse(raw.toString('utf8')), record.model);
   closed(record.receiver, ['profile', 'normalizedBody']);
   const profile = record.receiver.profile;
-  closed(profile, ['format', 'schemaVersion', 'recipientId', 'recipientOrigin', 'recipientIdentitySha256', 'recipientBuildSha256', 'recipientGenerationSha256', 'endpoint', 'ingressSchemaSha256', 'normalizerSha256', 'runtimeSha256', 'bodyPolicy']);
-  check(profile.format === 'factory-communityai-receiver-profile' && profile.schemaVersion === 2
+  closed(profile, ['format', 'schemaVersion', 'recipientId', 'recipientOrigin', 'recipientIdentitySha256', 'recipientBuildSha256', 'recipientGenerationSha256', 'endpoint', 'ingressSchemaSha256', 'normalizerSha256', 'runtimeSha256', 'bodyPolicy', 'proxyPolicySha256']);
+  check(profile.format === 'factory-communityai-receiver-profile' && profile.schemaVersion === 3
     && profile.recipientId === recipient.id && profile.recipientOrigin === recipient.origin
     && profile.recipientIdentitySha256 === recipient.identitySha256 && profile.recipientBuildSha256 === recipient.buildSha256
     && profile.recipientGenerationSha256 === recipient.generationSha256 && profile.endpoint === '/v1/chat/completions'
-    && [profile.ingressSchemaSha256, profile.normalizerSha256, profile.runtimeSha256].every(hex)
+    && [profile.ingressSchemaSha256, profile.normalizerSha256, profile.runtimeSha256, profile.proxyPolicySha256].every(hex)
     && profile.bodyPolicy === 'strict-stream-usage-cache-key-v1');
   closed(record.receiver.normalizedBody, ['canonicalUtf8', 'byteLength', 'sha256']);
   const normalized = record.receiver.normalizedBody;

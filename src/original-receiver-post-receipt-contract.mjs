@@ -76,7 +76,8 @@ function compareReceipt(record, held, receipt, policy) {
   closed(receipt, ['format', 'schemaVersion', 'held', 'attempt', 'proxyPolicySha256', 'receiver', 'state']);
   check(receipt.format === 'factory-original-receiver-post-receipt' && receipt.schemaVersion === 1
     && receipt.state === 'ASGI_OBSERVED_BEFORE_DISPATCH'
-    && receipt.proxyPolicySha256 === originalReceiverV3Digest(policy));
+    && receipt.proxyPolicySha256 === originalReceiverV3Digest(policy)
+    && receipt.proxyPolicySha256 === record.receiver.profile.proxyPolicySha256);
   closed(receipt.held, ['envelopeSha256', 'comparisonSha256', 'claimWitnessSha256']);
   check(receipt.held.envelopeSha256 === held.claimWitness.envelopeSha256
     && receipt.held.comparisonSha256 === held.comparisonSha256
