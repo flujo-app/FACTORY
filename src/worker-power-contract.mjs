@@ -19,3 +19,15 @@ export function validateWorkerPowerBinding(value) {
     flowId: 'power-binding', flowSha256: '0'.repeat(64), paid: { provider: 'fly', ceilingCents: 1 } });
   return structuredClone(value);
 }
+
+/** A detached immutable queue decision, never a readiness or authority assertion. */
+export function validateWorkerPowerQueue(value) {
+  const fields = ['previousKey', 'taskId', 'taskSpecDigest', 'missionCeilingCents'];
+  powerCheck(value && Object.getPrototypeOf(value) === Object.prototype
+    && Object.keys(value).length === fields.length && fields.every(k => Object.hasOwn(value, k)), 'WORKER_POWER_QUEUE');
+  powerCheck(value.previousKey === null || typeof value.previousKey === 'string' && ID.test(value.previousKey), 'WORKER_POWER_QUEUE');
+  powerCheck(value.taskId === null ? value.taskSpecDigest === null && value.missionCeilingCents === null
+    : typeof value.taskId === 'string' && ID.test(value.taskId) && HASH.test(value.taskSpecDigest ?? '')
+      && Number.isSafeInteger(value.missionCeilingCents) && value.missionCeilingCents > 0, 'WORKER_POWER_QUEUE');
+  return Object.freeze(structuredClone(value));
+}

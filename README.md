@@ -29,8 +29,8 @@ checks an independently pinned supplied receipt against that binding. A passing
 receipt marks the proposal checked with explicitly unauthenticated provenance.
 Applied code remains not_applied, income remains no_evidence and admission is
 NO_ADMISSION; external sends require the named owner bridge.
-Distributed CommunityAI workers, recursive provisioning and queue-driven
-scale-to-zero remain subsequent integration work.
+Distributed CommunityAI workers, recursive provisioning and live verification of
+queue-driven scale-to-zero remain subsequent integration work.
 
 The original FACTORY controller remains paused with its $100 fully held,
 $0 unallocated and final spending unknown. The new cloud lane keeps separate
@@ -38,8 +38,10 @@ ownership; its observations do not reset the original journals or reservations.
 
 An opt-in existing-worker power slice records owned Fly sleep/wake effects on the
 original controller and shared paid ledger. Sleeping and unresolved workers fence
-native dispatch; wake retains a separate spending allowance. Automatic queue
-power scheduling and live Fly qualification remain open. See [WORKER_POWER.md](WORKER_POWER.md).
+native dispatch; wake retains a separate spending allowance. Explicit native-cell
+queue power scheduling now selects idle sleep or demand wake through that same
+authority, with 87 focused local checks passing. Live Fly qualification remains
+open. See [WORKER_POWER.md](WORKER_POWER.md).
 
 The local model-step journal retains an immutable witness for each logical claim.
 Unclaimed or missing model steps cannot satisfy parent completion, and retries

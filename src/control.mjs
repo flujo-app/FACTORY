@@ -7,7 +7,7 @@ import { consumeGitRefusalProof } from './git-effect.mjs';
 import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
 import { validateGrowthPolicy } from './growth-policy.mjs';
-import { validateWorkerPowerBinding } from './worker-power-contract.mjs';
+import { validateWorkerPowerBinding, validateWorkerPowerQueue } from './worker-power-contract.mjs';
 import { validateOriginalInferenceSpecification } from './original-inference-contract.mjs';
 import { requireModelStepSchema, refuseMixedModelStepSchema, installModelStepMutationGuard, verifyModelStepManifestProof, materializeModelStepManifest,
   assertModelStepParentTerminal, modelStepCompletion, modelStepRequiredForTask, MODEL_STEP_DATABASE_VERSION, MODEL_PARENT_START_DATABASE_VERSION } from './model-step-contract.mjs';
@@ -550,7 +550,77 @@ export class FactoryControl {
     if(digest(this.workerPowerRequest(key))!==digest(request))fail('CONFLICT','Power key is bound to another request.');
     return this.effect(key);
   }
-  admitWorkerPower(lease,{key,request}) {
+  workerPowerQueue(key) {
+    this.workerPowerRequest(key);
+    const row=this.db.prepare("SELECT details FROM events WHERE type='worker_power_admitted' AND subject=?").get(key);
+    const record=JSON.parse(row.details);return Object.hasOwn(record,'queue')?validateWorkerPowerQueue(record.queue):null;
+  }
+  #workerQueueTasks(binding) {
+    const target={cellId:binding.cellId,app:binding.app,provisionKey:binding.provisionKey,worker:binding.worker};
+    return this.db.prepare('SELECT id,specification FROM tasks ORDER BY id').all().filter(row=>{
+      const spec=JSON.parse(row.specification),m=spec.nativeMission;
+      return spec.taskType!=='operation' && m && digest({cellId:m.cellId,app:m.app,provisionKey:m.provisionKey,worker:m.worker})===digest(target);
+    }).map(row=>this.task(row.id));
+  }
+  #workerQueuePrevious(app,exceptKey=null) {
+    return this.db.prepare("SELECT key,kind,state FROM effects WHERE scope='worker' AND scope_id=? AND kind IN ('worker_sleep','worker_wake') AND key IS NOT ? ORDER BY rowid DESC LIMIT 1").get(app,exceptKey)??null;
+  }
+  #workerQueueStopped(app,exceptKey=null) {
+    return this.db.prepare("SELECT kind FROM effects WHERE scope='worker' AND scope_id=? AND state='succeeded' AND kind IN ('worker_sleep','worker_wake') AND key IS NOT ? ORDER BY rowid DESC LIMIT 1").get(app,exceptKey)?.kind==='worker_sleep';
+  }
+  workerPowerPending(app) {
+    this.workerPowerBinding(app);
+    const latest=this.#workerQueuePrevious(app);
+    return latest && ['accepted','running','unknown'].includes(latest.state)?latest.key:null;
+  }
+  assertWorkerPowerAuthority(lease,app) {
+    return this.transaction(()=>{
+      if(lease?.scope!=='task')fail('AUTHORITY','Power requires task authority.');
+      this.authority(lease);
+      if(this.task(lease.scopeId).specification.taskType==='operation')fail('OPERATION_BINDING','Power requires its own management task.');
+      const binding=this.workerPowerBinding(app);this.#workerPowerOwner(binding,lease.cellId);return binding;
+    });
+  }
+  /** Read-only authoritative demand selection; no supplied readiness or queue booleans. */
+  workerQueuePowerPlan(app,{wakeCeilingCents,maxMissionCeilingCents=Number.MAX_SAFE_INTEGER}) {
+    integer(wakeCeilingCents,'wakeCeilingCents',1);
+    integer(maxMissionCeilingCents,'maxMissionCeilingCents',0);
+    const binding=this.workerPowerBinding(app),previous=this.#workerQueuePrevious(app);
+    if(previous && ['accepted','running','unknown'].includes(previous.state))return{state:'observe',key:previous.key};
+    if(previous && !['succeeded','not_applied'].includes(previous.state))return{state:'blocked',key:previous.key,reason:'power_intent_requires_operator'};
+    const ready=this.#workerQueueTasks(binding).filter(task=>task.status==='ready');
+    const runnable=ready.filter(task=>!this.requiresOriginalModelStep(task.id) && !this.db.prepare("SELECT key FROM effects WHERE scope='task' AND scope_id=?").get(task.id));
+    const stopped=this.#workerQueueStopped(app);
+    if(!runnable.length && ready.length)return{state:'blocked',taskId:ready[0].id,reason:'queue_demand_not_runnable'};
+    const task=stopped?runnable.find(task=>task.specification.nativeMission.paid.ceilingCents<=maxMissionCeilingCents):runnable[0];
+    if(stopped && !task && runnable.length)return{state:'budget',taskId:runnable[0].id};
+    if(task && !stopped)return{state:'ready'};
+    this.#workerPowerIdle(binding);
+    if(!task && stopped)return{state:'sleeping'};
+    const action=task?'wake':'sleep',queue={previousKey:previous?.key??null,taskId:task?.id??null,
+      taskSpecDigest:task?.spec_digest??null,missionCeilingCents:task?.specification.nativeMission.paid.ceilingCents??null};
+    const request={app:binding.app,bindingDigest:digest(binding),action,paid:action==='wake'?{provider:'fly',ceilingCents:wakeCeilingCents}:null};
+    return{state:'transition',key:'queue-power.'+digest({request,queue}),request,queue};
+  }
+  #assertWorkerQueuePower(binding,key,request,input) {
+    const queue=validateWorkerPowerQueue(input);
+    const previous=this.#workerQueuePrevious(binding.app,key);
+    if((previous?.key??null)!==queue.previousKey || previous && !['succeeded','not_applied'].includes(previous.state)
+      || key!=='queue-power.'+digest({request,queue}))fail('WORKER_POWER_QUEUE','Queue transition changed.');
+    const ready=this.#workerQueueTasks(binding).filter(task=>task.status==='ready');
+    if(request.action==='sleep') {
+      if(this.#workerQueueStopped(binding.app,key) || ready.length || queue.taskId!==null || queue.taskSpecDigest!==null || queue.missionCeilingCents!==null)
+        fail('WORKER_POWER_QUEUE','Worker has queued demand.');
+    } else {
+      const task=ready.find(task=>task.id===queue.taskId);
+      if(!this.#workerQueueStopped(binding.app,key) || !task || task.spec_digest!==queue.taskSpecDigest || this.requiresOriginalModelStep(task.id)
+        || this.db.prepare("SELECT key FROM effects WHERE scope='task' AND scope_id=?").get(task.id)
+        || task.specification.nativeMission.paid.ceilingCents!==queue.missionCeilingCents)
+        fail('WORKER_POWER_QUEUE','Runnable wake demand changed.');
+    }
+    return queue;
+  }
+  admitWorkerPower(lease,{key,request,queue=null}) {
     id(key);if(key.length>120)fail('INVALID','Power key must leave room for its paid reservation prefix.');
     const value=closureInput(request,['app','bindingDigest','action','paid']);
     if(!['wake','sleep'].includes(value.action) || !/^[a-f0-9]{64}$/.test(value.bindingDigest))fail('INVALID','Invalid worker power request.');
@@ -562,16 +632,20 @@ export class FactoryControl {
       const binding=this.workerPowerBinding(value.app);if(digest(binding)!==value.bindingDigest)fail('WORKER_POWER_BINDING','Power profile differs.');
       this.#workerPowerOwner(binding,lease.cellId);const previous=this.workerPowerEffect(key,value);if(previous)return{fresh:false,effect:previous};
       this.#workerPowerIdle(binding);if(this.openTaskEffects(lease.scopeId).length)fail('UNRECONCILED','Management task effects remain unresolved.');
+      const checkedQueue=queue===null?null:this.#assertWorkerQueuePower(binding,key,value,queue);
       const now=this.clock();this.db.prepare('INSERT INTO effects(key,scope,scope_id,task_id,owner,owner_epoch,control_epoch,kind,request_digest,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(key,'worker',binding.app,lease.scopeId,lease.cellId,lease.epoch,lease.controlEpoch,'worker_'+value.action,digest(value),'accepted',now,now);
-      this.event('worker_power_admitted',key,{request:value});return{fresh:true,effect:this.effect(key)};
+      this.event('worker_power_admitted',key,{request:value,...(checkedQueue===null?{}:{queue:checkedQueue})});return{fresh:true,effect:this.effect(key)};
     });
   }
   startWorkerPowerEffect(lease,key,dispatch) {
     const verify=()=>{this.authority(lease);const effect=this.effect(key),request=this.workerPowerRequest(key),binding=this.workerPowerBinding(request.app);
       if(effect.owner!==lease.cellId || effect.owner_epoch!==lease.epoch || effect.control_epoch!==lease.controlEpoch
         || effect.task_id!==lease.scopeId || digest(binding)!==request.bindingDigest || typeof dispatch!=='function')fail('STALE','Power admission changed.');
-      this.#workerPowerOwner(binding,lease.cellId);this.#workerPowerIdle(binding,key);return effect;};
+      this.#workerPowerOwner(binding,lease.cellId);this.#workerPowerIdle(binding,key);
+      const history=this.db.prepare("SELECT details FROM events WHERE type='worker_power_admitted' AND subject=?").get(key);
+      const record=JSON.parse(history.details);if(Object.hasOwn(record,'queue'))this.#assertWorkerQueuePower(binding,key,request,record.queue);
+      return effect;};
     // A crash/rollback after this durable commit burns this original mutation attempt.
     this.transaction(()=>{if(verify().state!=='accepted')fail('WORKER_POWER_HISTORY','Only a fresh accepted power intent may start.');
       this.db.prepare("UPDATE effects SET state='running',updated=? WHERE key=?").run(this.clock(),key);});

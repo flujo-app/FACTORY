@@ -3,8 +3,9 @@
 `createWorkerPowerController` in `src/worker-power.mjs` provides an opt-in controller
 slice for sleeping and waking an existing Fly Machine. Sleep stops compute;
 retirement remains the separate destructive ManagedCloud/controller operation.
-The native queue reports an enrolled sleeping or unresolved worker as blocked.
-Automatic queue sleep/wake scheduling is still absent.
+The native queue reports an enrolled sleeping or unresolved worker as blocked by
+default. An explicit `powerScheduling` option now enables queue-driven sleep/wake
+for that cell using the same controller and spending ledger.
 
 Private ManagedCloud Machines have `services: []`. Fly Proxy autostop/autostart
 does not cover direct private networking, so adding autostop settings alone
@@ -34,6 +35,27 @@ await power.enroll(managementLease); // once, while the existing worker is ready
 await power.execute(managementLease, { key: 'sleep-001', action: 'sleep' });
 await power.execute(managementLease, { key: 'wake-001', action: 'wake', ceilingCents: 500 });
 ```
+
+For queue scheduling, pass `powerScheduling: { controller: power, managementLease,
+wakeCeilingCents: 500 }` to `createNativeCell` alongside its existing arguments.
+Construction remains inert. Each explicit `tick()` observes pending power first,
+including while paused, then sleeps a worker with no queued demand or wakes it for
+a ready runnable native task with the exact cell/app/provision/snapshot tuple.
+Wake requires free allowance for both its configured ceiling and the selected
+mission. The management lease must be current; after renewal, construct a cell
+with the renewed lease. `power.schedule(managementLease, { wakeCeilingCents })`
+also exposes this opt-in scheduling operation directly.
+
+Queue transition keys bind the immutable power request, preceding terminal
+power effect and selected task/specification. A definitely `not_applied` intent
+can advance the next decision; current power derives from the last successful
+observation. Admission and the immediate
+before-POST transaction recheck queued demand, including demand arriving during
+authenticated readiness reads. Accepted, running and unknown intents remain
+observation-only and never obtain a replacement key. A refusal known to have
+made no POST can recover after rechecking current demand and authority.
+Task reconciliation and Original model-step HOLDs retain precedence. A native
+task still running while awaiting review continues to prevent idle sleep.
 
 Every new operation has its own durable `worker_sleep` or `worker_wake` effect in
 the existing controller. It never substitutes a provision receipt. Sleep requires
@@ -71,8 +93,12 @@ separate.
 Focused tests use only fake HTTP transport and fresh owned local databases. They
 exercise actual controller leases and spending gates, durable dispatch, lost
 responses, pause races, immutable ownership, native queue fencing and the existing
-single-POST native mission path. The loopback proxy lifecycle, automatic queue
-scheduling, live Fly transport, provider-side atomic ownership fencing and remote
+single-POST native mission path, plus queue sleep/demand wake, restart/duplicate
+suppression and demand/budget races. The loopback proxy lifecycle,
+live Fly transport, provider-side atomic ownership fencing and remote
 shared authority are unqualified. No live Machine was started/stopped and no
 paid deployment is admitted by this source change. Results/capabilities explicitly
-report `productionQualified: false` and `queuePowerScheduling: false`.
+report `productionQualified: false`. The controller advertises the available
+opt-in `queuePowerScheduling: true`; per-operation results report whether the
+original persisted intent used queue scheduling. Queue test results do not
+qualify live Fly transport or zero total cost.

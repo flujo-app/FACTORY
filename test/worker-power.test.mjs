@@ -78,11 +78,11 @@ async function fixture(t, { enroll = true } = {}) {
     workerOrigin: origin, fetchImpl, timeoutMs: 1000 });
   if (enroll) await client().enroll(lease);
   calls.length = 0;
-  function task(taskId = 'develop') {
+  function task(taskId = 'develop', { ceilingCents = 500 } = {}) {
     return control.createTask({ taskId, projectId: 'factory', branch: 'codex/' + taskId, specification: {
       problem: 'Improve FLUJO', acceptance: ['independent review'], baseline: 'fixture', nativeMission: {
         schemaVersion: 1, missionId: digest(taskId).slice(0, 32), cellId: 'child', app: binding.app, provisionKey: 'provision',
-        worker, flowId: 'flow', flowSha256: 'c'.repeat(64), paid: { provider: 'fly', ceilingCents: 500 },
+        worker, flowId: 'flow', flowSha256: 'c'.repeat(64), paid: { provider: 'fly', ceilingCents },
       } } });
   }
   const claim = taskId => {
@@ -384,3 +384,184 @@ for (const failure of ['malformed-json', 'fetch-error']) {
     assert.throws(() => f.control.workerPowerBinding(f.binding.app), { code: 'WORKER_POWER_ENROLLMENT' });
   });
 }
+
+function queueCell(f, { power = f.client(), ceilingCents = 100 } = {}) {
+  const calls = { posts: 0, prepares: 0, observes: 0 };
+  const client = { binding: f.binding.worker,
+    async prepare() { calls.prepares++; },
+    async observe() { calls.observes++; return { state: 'absent', body: null }; },
+    async dispatch(input, { admitPost }) {
+      await admitPost(() => { calls.posts++; return Promise.resolve(); });
+      return { state: 'completed', body: JSON.stringify({ id: input.conversationId, flowId: input.flowId,
+        status: 'completed', messages: [{ role: 'assistant', content: 'queue fixture result' }] }) };
+    },
+  };
+  const privateFiles = { ensurePrivateDirectory: async p => fs.mkdir(p, { recursive: true }),
+    readPrivateJson: async p => JSON.parse(await fs.readFile(p, 'utf8')),
+    writePrivateJson: async (p, value) => fs.writeFile(p, JSON.stringify(value), { flag: 'wx', mode: 0o600 }) };
+  return { calls, power, cell: createNativeCell({ control: f.control, paidAdmission: f.paid, client, privateFiles,
+    profile: { cellId: 'child', app: f.binding.app, provisionKey: 'provision', worker: f.binding.worker,
+      outputDirectory: path.join(f.directory, 'queue-outputs'), ttlMs: 1000, pollMs: 100 },
+    powerScheduling: { controller: power, managementLease: f.lease, wakeCeilingCents: ceilingCents } }) };
+}
+
+test('opt-in queue sleeps idle, restarts without replay, wakes exact demand and dispatches one native Flow', async t => {
+  const f = await fixture(t); let q = queueCell(f);
+  const sleep = await q.cell.tick(); assert.equal(sleep.state, 'power_transition');
+  assert.equal(f.machine.state, 'stopped'); assert.equal(f.posts.length, 1); assert.equal(f.paid.rows().length, 0);
+  f.reopen(); q = queueCell(f);
+  assert.deepEqual(await q.cell.tick(), { state: 'sleeping' }); assert.equal(f.posts.length, 1);
+  f.task(); const wake = await q.cell.tick(); assert.equal(wake.state, 'power_transition');
+  assert.notEqual(wake.key, sleep.key); assert.equal(f.machine.state, 'started'); assert.equal(f.posts.length, 2);
+  assert.equal(f.paid.row('power.' + wake.key).ceiling_cents, 100);
+  assert.equal((await q.cell.tick()).state, 'dispatched'); assert.equal(q.calls.posts, 1);
+  assert.equal((await q.cell.tick()).state, 'awaiting_review'); assert.equal(q.calls.posts, 1); assert.equal(f.posts.length, 2);
+  await assert.rejects(q.power.schedule(f.lease, { wakeCeilingCents: 100 }), { code: 'WORKER_POWER_BUSY' });
+});
+
+test('queue power construction refuses a fabricated controller or a different local spending authority', async t => {
+  const f = await fixture(t);
+  assert.throws(() => queueCell(f, { power: { binding: f.binding, schedule() {}, reconcile() {} } }), { code: 'WORKER_POWER_AUTHORITY' });
+  const other = new SpendingLedger(path.join(f.directory, 'other-paid.sqlite'));
+  t.after(() => other.close()); other.initialize({ limitCents: 10000, currency: 'USD' });
+  const power = createWorkerPowerController({ control: f.control, paidAdmission: other, binding: f.binding,
+    flyToken, workerToken, workerOrigin: origin, fetchImpl: () => { throw new Error('never called'); } });
+  assert.throws(() => queueCell(f, { power }), { code: 'WORKER_POWER_AUTHORITY' }); assert.equal(f.calls.length, 0);
+});
+
+test('irrelevant queued tuples and ordinary tasks do not wake a sleeping worker', async t => {
+  const f = await fixture(t); const q = queueCell(f); await q.cell.tick();
+  f.control.createTask({ taskId: 'ordinary', projectId: 'factory', branch: 'codex/ordinary',
+    specification: { problem: 'unrelated', acceptance: ['review'], baseline: 'fixture' } });
+  for (const [taskId, override] of [['other-cell', { cellId: 'other' }], ['other-app', { app: 'factory-other' }],
+    ['other-provision', { provisionKey: 'other-provision' }], ['other-worker', { worker: { ...f.binding.worker, archiveSha256: 'e'.repeat(64) } }]]) {
+    f.control.createTask({ taskId, projectId: 'factory', branch: 'codex/' + taskId, specification: {
+      problem: 'unrelated worker', acceptance: ['review'], baseline: 'fixture', nativeMission: {
+        schemaVersion: 1, missionId: digest(taskId).slice(0, 32), cellId: 'child', app: f.binding.app, provisionKey: 'provision',
+        worker: f.binding.worker, flowId: 'flow', flowSha256: 'c'.repeat(64), paid: { provider: 'fly', ceilingCents: 500 }, ...override } } });
+  }
+  assert.deepEqual(await q.cell.tick(), { state: 'sleeping' });
+  assert.equal(f.posts.length, 1); assert.equal(q.calls.posts, 0); assert.equal(f.paid.rows().length, 0);
+});
+
+test('new ready demand during authenticated idle reads prevents sleep at the final dispatch fence', async t => {
+  const f = await fixture(t); const q = queueCell(f); let inserted = false;
+  f.hook(record => { if (!inserted && record.path === '/api/snapshot/info') { inserted = true; f.task(); } });
+  const first = await q.cell.tick(); assert.equal(first.state, 'blocked');
+  assert.equal(f.control.effect(first.key).state, 'not_applied'); assert.equal(f.posts.length, 0);
+  f.hook(null); f.reopen(); const restarted = queueCell(f);
+  const second = await restarted.cell.tick(); assert.equal(second.state, 'dispatched');
+  assert.equal(f.posts.length, 0); assert.equal(restarted.calls.posts, 1);
+  assert.equal((await restarted.cell.tick()).state, 'awaiting_review'); assert.equal(restarted.calls.posts, 1);
+});
+
+test('accepted queue intent survives restart and never resumes or obtains a new transition key', async t => {
+  const f = await fixture(t); const plan = f.control.workerQueuePowerPlan(f.binding.app, { wakeCeilingCents: 100 });
+  f.control.admitWorkerPower(f.lease, { key: plan.key, request: plan.request, queue: plan.queue });
+  f.reopen(); const q = queueCell(f); f.task();
+  const result = await q.cell.tick(); assert.equal(result.state, 'blocked'); assert.equal(result.key, plan.key);
+  assert.equal(result.effectState, 'accepted'); assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 0);
+  assert.equal((await q.cell.tick()).key, plan.key); assert.equal(f.paid.rows().length, 0);
+});
+
+test('unknown power can only be observed while OFF and paid-paused; changed identity stays held', async t => {
+  const f = await fixture(t); let q = queueCell(f); f.lose();
+  const first = await q.cell.tick(); assert.equal(first.effectState, 'unknown'); assert.equal(f.posts.length, 1);
+  f.reopen(); q = queueCell(f); f.control.pause(); f.paid.pauseAdmission();
+  f.machine.instance_id = 'foreign-instance';
+  const held = await q.cell.tick(); assert.equal(held.state, 'blocked'); assert.equal(held.key, first.key); assert.equal(held.effectState, 'unknown');
+  f.machine.instance_id = f.binding.instanceId;
+  const observed = await q.cell.tick(); assert.equal(observed.state, 'power_observed'); assert.equal(observed.key, first.key);
+  assert.equal(observed.effectState, 'succeeded'); assert.equal(f.posts.length, 1);
+  assert.deepEqual(await q.cell.tick(), { state: 'paused' }); assert.equal(f.paid.rows().length, 0);
+});
+
+for (const reason of ['factory-paused', 'paid-paused', 'free-zero', 'wake-plus-mission-short', 'expired-management']) {
+  test('queue wake retains fences for ' + reason, async t => {
+    const f = await fixture(t); const q = queueCell(f); await q.cell.tick(); f.task();
+    if (reason === 'factory-paused') f.control.pause();
+    if (reason === 'paid-paused') f.paid.pauseAdmission();
+    if (['free-zero', 'wake-plus-mission-short'].includes(reason)) {
+      f.paid.reserve({ reservationId: 'other-held', provider: 'modal', ceilingCents: reason === 'free-zero' ? 10000 : 9450 });
+      f.paid.start('other-held');
+    }
+    if (reason === 'expired-management') f.advance(600001);
+    const outcome = await q.cell.tick(); assert.ok(['paused', 'paid_paused', 'budget', 'blocked'].includes(outcome.state));
+    assert.equal(f.posts.length, 1); assert.equal(q.calls.posts, 0);
+    assert.equal(f.control.task('develop').status, 'ready'); assert.equal(f.control.task('develop').epoch, 0);
+    assert.equal(f.control.db.prepare("SELECT count(*) n FROM effects WHERE kind='worker_wake'").get().n, 0);
+    assert.equal(f.paid.rows().some(row => row.id.startsWith('power.')), false);
+  });
+}
+
+test('wake preserves the selected task and paid gates across asynchronous identity reads', async t => {
+  const f = await fixture(t); const q = queueCell(f); await q.cell.tick(); f.task(); let changed = false;
+  f.hook(record => { if (!changed && record.origin === 'https://api.machines.dev' && record.method === 'GET') {
+    changed = true; f.paid.reserve({ reservationId: 'competing-spend', provider: 'modal', ceilingCents: 9500 }); f.paid.start('competing-spend');
+  } });
+  const result = await q.cell.tick(); assert.equal(result.state, 'blocked'); assert.equal(result.effectState, 'unknown');
+  assert.equal(f.posts.length, 1); assert.equal(f.machine.state, 'stopped');
+  assert.equal((await q.cell.tick()).key, result.key); assert.equal(f.posts.length, 1); assert.equal(q.calls.posts, 0);
+});
+
+test('duplicate queue schedulers share one durable key and issue one stop attempt', async t => {
+  const f = await fixture(t); const first = f.client(), second = f.client();
+  const outcomes = await Promise.all([first.schedule(f.lease, { wakeCeilingCents: 100 }), second.schedule(f.lease, { wakeCeilingCents: 100 })]);
+  assert.equal(outcomes[0].key, outcomes[1].key); assert.equal(f.posts.length, 1);
+  assert.equal(f.control.db.prepare("SELECT count(*) n FROM effects WHERE kind='worker_sleep'").get().n, 1);
+  assert.equal((await second.schedule(f.lease, { wakeCeilingCents: 100 })).state, 'sleeping');
+});
+
+test('an already-awake queue keeps existing next-mission throughput while prior output awaits review', async t => {
+  const f = await fixture(t); const q = queueCell(f); f.task('first');
+  assert.equal((await q.cell.tick()).state, 'dispatched'); f.task('second');
+  assert.equal((await q.cell.tick()).state, 'dispatched'); assert.equal(q.calls.posts, 2); assert.equal(f.posts.length, 0);
+  assert.equal((await q.cell.tick()).state, 'awaiting_review');
+  await assert.rejects(q.power.schedule(f.lease, { wakeCeilingCents: 100 }), { code: 'WORKER_POWER_BUSY' });
+});
+
+test('wake selects affordable exact demand after accounting for its own reservation', async t => {
+  const f = await fixture(t); const q = queueCell(f); await q.cell.tick();
+  f.task('a-expensive', { ceilingCents: 600 }); f.task('b-affordable', { ceilingCents: 400 });
+  f.paid.reserve({ reservationId: 'other-cost', provider: 'modal', ceilingCents: 9450 }); f.paid.start('other-cost');
+  const wake = await q.cell.tick(); assert.equal(wake.state, 'power_transition');
+  assert.equal(f.control.workerPowerQueue(wake.key).taskId, 'b-affordable');
+  const flow = await q.cell.tick(); assert.equal(flow.state, 'dispatched'); assert.equal(flow.taskId, 'b-affordable');
+  assert.equal(f.control.task('a-expensive').status, 'ready'); assert.equal(q.calls.posts, 1); assert.equal(f.posts.length, 2);
+});
+
+test('task cancellation during wake reads prevents POST and definite non-application preserves sleeping state', async t => {
+  const f = await fixture(t); const q = queueCell(f); await q.cell.tick(); f.task(); let cancelled = false;
+  f.hook(record => { if (!cancelled && record.origin === 'https://api.machines.dev' && record.method === 'GET') {
+    cancelled = true; const task = f.control.task('develop');
+    f.control.cancelTask('develop', { closureId: 'cancel-demand', expectedAttempt: task.epoch, expectedOwner: task.owner,
+      expectedStatus: task.status, expectedTaskControlEpoch: task.control_epoch, expectedFactoryEpoch: f.control.control().epoch, reason: 'abandoned' });
+  } });
+  const outcome = await q.cell.tick(); assert.equal(outcome.state, 'blocked'); assert.equal(outcome.effectState, 'not_applied');
+  assert.equal(f.posts.length, 1); assert.equal(f.machine.state, 'stopped'); f.hook(null);
+  assert.deepEqual(await q.cell.tick(), { state: 'sleeping' }); assert.equal(f.posts.length, 1);
+  f.task('new-demand'); const fresh = await q.cell.tick(); assert.equal(fresh.state, 'power_transition');
+  assert.notEqual(fresh.key, outcome.key); assert.equal(f.control.workerPowerQueue(fresh.key).previousKey, outcome.key);
+  assert.equal(f.posts.length, 2); assert.equal(f.machine.state, 'started');
+});
+
+test('caller mutation cannot reduce the persisted queue mission allowance at the final wake fence', async t => {
+  const f = await fixture(t); const power = f.client(); await power.schedule(f.lease, { wakeCeilingCents: 100 }); f.task();
+  const plan = f.control.workerQueuePowerPlan(f.binding.app, { wakeCeilingCents: 100 }), queue = structuredClone(plan.queue); let mutated = false;
+  f.hook(record => { if (!mutated && record.origin === 'https://api.machines.dev' && record.method === 'GET') {
+    mutated = true; queue.missionCeilingCents = 1;
+    f.paid.reserve({ reservationId: 'competing-spend', provider: 'modal', ceilingCents: 9500 }); f.paid.start('competing-spend');
+  } });
+  const outcome = await power.execute(f.lease, { key: plan.key, action: 'wake', ceilingCents: 100, queue });
+  assert.equal(outcome.effect.state, 'unknown'); assert.equal(outcome.queuePowerScheduling, true);
+  assert.equal(f.control.workerPowerQueue(plan.key).missionCeilingCents, 500); assert.equal(f.posts.length, 1);
+});
+
+test('queue metadata has closed fields and cannot be supplied as a readiness assertion', async t => {
+  const f = await fixture(t); const plan = f.control.workerQueuePowerPlan(f.binding.app, { wakeCeilingCents: 100 });
+  for (const queue of [{ ...plan.queue, ready: true }, { ...plan.queue, previousKey: '' },
+    { ...plan.queue, taskId: 'develop' }, { ...plan.queue, missionCeilingCents: 1 }]) {
+    await assert.rejects(f.client().execute(f.lease, { key: plan.key, action: 'sleep', queue }), { code: 'WORKER_POWER_QUEUE' });
+  }
+  assert.equal(f.calls.length, 0); assert.equal(f.control.db.prepare("SELECT count(*) n FROM effects WHERE scope='worker'").get().n, 0);
+});

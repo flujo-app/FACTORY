@@ -4,13 +4,14 @@ import { FactoryControl,digest } from './control.mjs';
 import { SpendingLedger } from './spending.mjs';
 import { validateNativeMission } from './native-mission-contract.mjs';
 import { claimNativeMission,runNativeMission,observeNativeMission } from './native-mission.mjs';
+import { assertWorkerPowerController } from './worker-power.mjs';
 
 function check(value){if(!value)throw Object.assign(new Error('Invalid native cell configuration.'),{code:'NATIVE_CELL_PROFILE'});}
 function closed(value,keys){check(value && Object.getPrototypeOf(value)===Object.prototype && Object.keys(value).length===keys.length && keys.every(k=>Object.hasOwn(value,k)));}
 const terminal=new Set(['completed','cancelled','delivered','rejected']);
 function target(m){return {cellId:m.cellId,app:m.app,provisionKey:m.provisionKey,worker:m.worker};}
 /** An explicit queue worker at the authoritative coordinator, not a replicated spending ledger. */
-export function createNativeCell({control,paidAdmission,client,privateFiles,profile}) {
+export function createNativeCell({control,paidAdmission,client,privateFiles,profile,powerScheduling=null}) {
   check(control instanceof FactoryControl && paidAdmission instanceof SpendingLedger);
   closed(profile,['cellId','app','provisionKey','worker','outputDirectory','ttlMs','pollMs']);
   // Reuse the closed native identity contract without manufacturing a runnable assignment.
@@ -20,6 +21,14 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
   check(client && ['prepare','dispatch','observe'].every(k=>typeof client[k]==='function') && digest(client.binding)===digest(profile.worker));
   check(privateFiles && ['ensurePrivateDirectory','readPrivateJson','writePrivateJson'].every(k=>typeof privateFiles[k]==='function'));
   const binding=structuredClone(target(profile)),options=structuredClone(profile),bindingDigest=digest(binding);
+  let power=null;
+  if(powerScheduling!==null){
+    closed(powerScheduling,['controller','managementLease','wakeCeilingCents']);
+    assertWorkerPowerController(powerScheduling.controller,control,paidAdmission,binding);
+    check(Number.isSafeInteger(powerScheduling.wakeCeilingCents) && powerScheduling.wakeCeilingCents>0);
+    power={controller:powerScheduling.controller,managementLease:structuredClone(powerScheduling.managementLease),wakeCeilingCents:powerScheduling.wakeCeilingCents};
+  }
+  const schedulePower=signal=>power.controller.schedule(power.managementLease,{wakeCeilingCents:power.wakeCeilingCents,signal});
   const matches=task=>task.specification.taskType!=='operation' && task.specification.nativeMission && digest(target(task.specification.nativeMission))===bindingDigest;
   let busy=false,running=false,lastAttempted=null;
   async function tick({signal}={}) {
@@ -52,6 +61,7 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
         }
         return {state:observations.every(row=>row.effectState==='succeeded')?'recovered':'unresolved',observations};
       }
+      if(power){const observation=await power.controller.reconcile();if(observation!==null)return observation;}
       if(snapshot.control.status!=='active')return {state:'paused'};
       try{paidAdmission.assertAdmission();}catch(error){if(error.code==='PAUSED')return {state:'paid_paused'};throw error;}
       const unfinished=tasks.filter(task=>!terminal.has(task.status));
@@ -69,7 +79,9 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
         const awaiting=unfinished.find(task=>effects.some(effect=>effect.scope_id===task.id && effect.state==='succeeded'));
         if(awaiting)return {state:'awaiting_review',taskId:awaiting.id};
         const stopped=unfinished.find(task=>effects.some(effect=>effect.scope_id===task.id));
-        return stopped?{state:'blocked',taskId:stopped.id,reason:'lifetime_intent_exists'}:{state:'idle'};
+        if(stopped)return{state:'blocked',taskId:stopped.id,reason:'lifetime_intent_exists'};
+        if(power){const status=await schedulePower(signal);if(status.state!=='ready')return status;}
+        return{state:'idle'};
       }
       const spend=paidAdmission.snapshot();
       const pivot=lastAttempted===null?0:eligible.findIndex(task=>task.id>lastAttempted),offset=pivot<0?0:pivot;
@@ -77,6 +89,7 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
       const task=spend.overCommittedCents===0?ordered.find(task=>task.specification.nativeMission.paid.ceilingCents<=spend.unallocatedCents):null;
       if(!task)return {state:'budget',taskId:ordered[0].id,unallocatedCents:spend.unallocatedCents};
       if(signal?.aborted)return {state:'stopped'};
+      if(power){const status=await schedulePower(signal);if(status.state!=='ready')return status;}
       lastAttempted=task.id;
       const outputFile=path.join(options.outputDirectory,task.specification.nativeMission.missionId+'.private.json');
       const lease=await claimNativeMission({control,taskId:task.id,client,outputFile,ttlMs:options.ttlMs});
@@ -88,7 +101,8 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
       const reasons={STALE:'assignment_changed',PAUSED:'factory_paused',BUSY:'assignment_busy',UNRECONCILED:'original_intent_requires_operator',
         NATIVE_MISSION_UNSTARTED:'unstarted_assignment_changed',NATIVE_MISSION_TARGET:'worker_target_unavailable',NATIVE_MISSION_UNRESOLVED:'worker_not_ready',
         NATIVE_MISSION_HISTORY:'mission_history',NATIVE_MISSION_CONFLICT:'native_conflict',NATIVE_MISSION_UNAVAILABLE:'worker_not_ready',
-        WORKER_POWER_UNAVAILABLE:'worker_power_unavailable'};
+        WORKER_POWER_UNAVAILABLE:'worker_power_unavailable',WORKER_POWER_BUSY:'worker_power_busy',WORKER_POWER_QUEUE:'queue_demand_changed',
+        WORKER_POWER_BINDING:'worker_power_binding',WORKER_POWER_STOPPED:'worker_power_stopped'};
       if(reasons[error.code])return {state:'blocked',reason:reasons[error.code]};
       throw error;
     }finally{busy=false;}
