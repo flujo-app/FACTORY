@@ -5,11 +5,10 @@ provider supervisor owns every start, identity file, model cache and retirement.
 The bootstrap observes only its own DHT startup; it cannot prove peer reachability,
 distributed inference, Original admission or provider retirement.
 
-Image inputs use CommunityAI source commit ac790bae452be9ad2fcb9ffd7d7a4f85bd7de931,
-its lock, and digest-pinned Python/uv images. The retained lock currently omits
-httpx from drift[api], and cpufeature has no Linux CPython 3.12 wheel. A coherent
-owner-supplied lock and immutable Python 3.12.13 compiler/build-tools image are
-required before building. No dependency re-resolution or build is attempted here.
+Image inputs use CommunityAI source commit a30a95ce53e4a1eeb3242d2326d2fe1632f2f222,
+its repaired API lock, and digest-pinned Python/uv images. cpufeature has no
+Linux CPython 3.12 wheel. The owner-exported coherent source context and immutable
+Python 3.12.13 compiler/build-tools image are required before building. No dependency re-resolution or build is attempted here.
 The copied model manifest is distinct from catalog approval. Signed catalog
 freshness and strict Original receiver compatibility remain owner prerequisites.
 """
@@ -29,8 +28,8 @@ import threading
 import time
 import tomllib
 
-SOURCE_COMMIT = "ac790bae452be9ad2fcb9ffd7d7a4f85bd7de931"
-RETAINED_LOCK_SHA256 = "ddfed748385e4aac6931f2b12ee1c293dcbfc876fb804cd6cc0006f526921392"
+SOURCE_COMMIT = "a30a95ce53e4a1eeb3242d2326d2fe1632f2f222"
+RETAINED_LOCK_SHA256 = "5348107dfc88034c60197d03379dac789cafd2b97e12cce1577c6c2ea14d5fb5"
 PYTHON_IMAGE = "python:3.12.13-slim-bookworm@sha256:6e13e65c55e33adf203d77ee371cf8bf5d81bd4902ef07565721f46bf44917af"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.11.21@sha256:6f1fa8fc4040ad7197d7e652057219871e5f6640abfe2b790f1419fdb2319e6b"
 IDENTITY_PATH = "/run/communityai/bootstrap.key"

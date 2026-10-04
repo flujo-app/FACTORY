@@ -61,10 +61,10 @@ startup deadline, expiry/stop handling and cleanup without retry. Fourteen
 offline component-double lifecycle/recipe tests pass. The
 [image recipe](modal/Dockerfile.communityai-runtime) requires an immutable
 Python/compiler/build-tools image and a coherent locked source context.
-Its recorded receiver base is ac790bae; the updated [PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35)
-and [PR38 lock/recipe repair](https://github.com/flujo-app/CommunityAI/pull/38)
-must be integrated and source labels updated before the next image build.
-The owner repair preserves resolved dependency versions; its image is unbuilt.
+Its source context is [PR38](https://github.com/flujo-app/CommunityAI/pull/38)
+revision a30a95ce53e4a1eeb3242d2326d2fe1632f2f222, containing the updated
+[PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35) and API lock repair.
+The repair preserves resolved dependency versions; images remain unbuilt.
 Model cache/image creation, actual TLS transport formation, distributed inference
 and owned retirement remain unverified. Recursive provisioning and live
 queue-driven scale-to-zero also remain subsequent integration work.
