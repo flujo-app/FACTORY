@@ -6,6 +6,36 @@ constraints. This directory contains the first runnable **local coordination and
 recovery pilot**. The larger design is in [FACTORY_DESIGN.md](FACTORY_DESIGN.md) and
 [FEDERATION.md](FEDERATION.md).
 
+## October 4 priority
+
+Make the supervised WebUI → Fly FLUJO workers → private Modal route usable first.
+Development that produces and checks code comes next; broad scorecards,
+polishing and audit expansion wait.
+
+The existing cloud lane is owned by [Review linked Codex thread](codex://threads/01a0ff01-f462-7712-a465-eb234970f7e9).
+Its [recorded acceptance](C:/Users/Moe/Documents/GitHub/iambrokeplshlp/artifacts/cloud-spike-live-acceptance-20261004.json)
+establishes one supervised text job through two Fly workers using private
+Ollama Qwen3 4B on Modal, followed by exact completed-job recovery after restart
+with no inference replay. The developer gave an incorrect arithmetic answer
+and the reviewer corrected it. FACTORY read the public receipt and recovery
+contract; that recorded scope does not include code tools or income.
+
+Reuse that working gateway and worker lane. Root/Auth own its code executor.
+FACTORY provides the supplied-task and immutable test/result receipt
+contract in [src/development-job-contract.mjs](src/development-job-contract.mjs).
+Its 14 focused tests pass. bindDevelopmentJob() freezes the task, candidate
+file hashes, executor build and fixed Node test target; projectDevelopmentJob()
+checks an independently pinned supplied receipt against that binding. A passing
+receipt marks the proposal checked with explicitly unauthenticated provenance.
+Applied code remains not_applied, income remains no_evidence and admission is
+NO_ADMISSION; external sends require the named owner bridge.
+Distributed CommunityAI workers, recursive provisioning and queue-driven
+scale-to-zero remain subsequent integration work.
+
+The original FACTORY controller remains paused with its $100 fully held,
+$0 unallocated and final spending unknown. The new cloud lane keeps separate
+ownership; its observations do not reset the original journals or reservations.
+
 An opt-in existing-worker power slice records owned Fly sleep/wake effects on the
 original controller and shared paid ledger. Sleeping and unresolved workers fence
 native dispatch; wake retains a separate spending allowance. Automatic queue
