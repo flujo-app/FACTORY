@@ -10,7 +10,7 @@ import { validateGrowthPolicy } from './growth-policy.mjs';
 import { validateWorkerPowerBinding } from './worker-power-contract.mjs';
 import { validateOriginalInferenceSpecification } from './original-inference-contract.mjs';
 import { requireModelStepSchema, refuseMixedModelStepSchema, installModelStepMutationGuard, verifyModelStepManifestProof, materializeModelStepManifest,
-  assertModelStepParentTerminal, modelStepCompletion, modelStepRequiredForTask, MODEL_STEP_DATABASE_VERSION } from './model-step-contract.mjs';
+  assertModelStepParentTerminal, modelStepCompletion, modelStepRequiredForTask, MODEL_STEP_DATABASE_VERSION, MODEL_PARENT_START_DATABASE_VERSION } from './model-step-contract.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -194,11 +194,11 @@ export class FactoryControl {
     this.db = new DatabaseSync(path);
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
     try {
-      if (![0,1,2,MODEL_STEP_DATABASE_VERSION].includes(version)) fail('SCHEMA', 'Unsupported factory schema.');
+      if (![0,1,2,MODEL_STEP_DATABASE_VERSION,MODEL_PARENT_START_DATABASE_VERSION].includes(version)) fail('SCHEMA', 'Unsupported factory schema.');
       refuseMixedModelStepSchema(this,version);
     } catch (error) { this.db.close(); throw error; }
     this.db.exec('PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
-    if (version === MODEL_STEP_DATABASE_VERSION) { installModelStepMutationGuard(this); return; }
+    if ([MODEL_STEP_DATABASE_VERSION,MODEL_PARENT_START_DATABASE_VERSION].includes(version)) { installModelStepMutationGuard(this); return; }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY CHECK(id=1), epoch INTEGER NOT NULL, status TEXT NOT NULL, policy TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cells(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES cells(id), depth INTEGER NOT NULL, role TEXT NOT NULL, allocation INTEGER NOT NULL, spent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, purpose TEXT NOT NULL, heartbeat INTEGER NOT NULL);
@@ -216,7 +216,9 @@ export class FactoryControl {
   transaction(operation) {
     this.db.exec('BEGIN IMMEDIATE');
     try { const result = operation(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    // A COMMIT may succeed before its acknowledgment fails. A subsequent
+    // ROLLBACK failure must not replace the causal error; callers inspect state.
+    catch (error) { try { this.db.exec('ROLLBACK'); } catch {} throw error; }
   }
   event(type, subject, details = {}) { this.db.prepare('INSERT INTO events(type,subject,details,observed) VALUES(?,?,?,?)').run(type, subject, canonical(details), this.clock()); }
   control() {

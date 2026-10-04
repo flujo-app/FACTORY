@@ -9,6 +9,7 @@ const equal = (a, b) => canonical(a) === canonical(b);
 const proofs = new WeakMap();
 const mutationGuards = new WeakMap();
 export const MODEL_STEP_DATABASE_VERSION = 3;
+export const MODEL_PARENT_START_DATABASE_VERSION = 4;
 /** Pure admission-snapshot construction; this cannot open the journal's private insertion window. */
 export function modelStepClaimWitness(record, receiverSha256, { chargedCents, overCommittedCents, admittedAt }) {
   check(receiverSha256===modelStepDigest({format:'factory-original-model-step-receiver-comparison',schemaVersion:1,
@@ -49,6 +50,8 @@ export function installModelStepMutationGuard(control) {
   control.db.function('factory_model_step_claim_matches',claimMatches);
   // Registered readers resolve the function but receive no insertion/start authority.
   control.db.function('factory_model_step_claim_guard',(_key,_witness,_stage)=>0);
+  control.db.function('factory_model_parent_start_matches', parentStartMatches);
+  control.db.function('factory_model_parent_start_guard',(_key,_witness,_stage)=>0);
 }
 export function guardedModelStepMutation(control, operation) {
   installModelStepMutationGuard(control);
@@ -84,20 +87,24 @@ export function verifyModelStepManifestProof(control, lease, request, proof) {
 }
 
 export function requireModelStepSchema(control) {
-  check(control.db.prepare('PRAGMA user_version').get().user_version === MODEL_STEP_DATABASE_VERSION, 'MODEL_STEP_SCHEMA_REQUIRED');
+  const version = control.db.prepare('PRAGMA user_version').get().user_version;
+  check([MODEL_STEP_DATABASE_VERSION, MODEL_PARENT_START_DATABASE_VERSION].includes(version), 'MODEL_STEP_SCHEMA_REQUIRED');
+  const parentStart = version === MODEL_PARENT_START_DATABASE_VERSION;
   const tables = new Set(control.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name));
   const expected = ['control','cells','tasks','integrations','effects','effect_bindings','messages','events','model_step_manifests','model_step_slots','model_step_bindings','model_step_aborts','model_step_claims'];
+  if (parentStart) expected.push('model_parent_starts');
   check(tables.size === expected.length && expected.every(t => tables.has(t)), 'MODEL_STEP_SCHEMA_REQUIRED');
   const triggers = new Set(control.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all().map(r => r.name));
   const expectedTriggers=['model_manifest_no_update','model_manifest_no_delete','model_slots_no_update','model_slots_no_delete',
     'model_bindings_no_update','model_bindings_no_delete','model_child_state_guard','model_effect_identity_guard','model_parent_completion_guard',
     'model_enrolled_task_identity_guard','model_abort_no_update','model_abort_no_delete','model_claim_insert_guard','model_claim_no_update','model_claim_no_delete'];
+  if (parentStart) expectedTriggers.push('model_parent_start_insert_guard','model_parent_start_no_update','model_parent_start_no_delete','model_parent_state_guard','model_parent_abort_guard');
   check(triggers.size===expectedTriggers.length && expectedTriggers.every(t => triggers.has(t)), 'MODEL_STEP_SCHEMA_REQUIRED');
   const normalize = sql => sql.trim().replace(/;$/, '').replace(/\s+/g, ' ');
   const actual = new Map(control.db.prepare("SELECT type,name,sql FROM sqlite_master WHERE type IN ('table','trigger')").all()
     .map(row => [row.type + ':' + row.name, row.sql]));
-  const expectedObjects = [...MODEL_STEP_SCHEMA_SQL.matchAll(/CREATE (TABLE|TRIGGER) (\w+)([\s\S]*?)(?=\n  CREATE|\n  PRAGMA|$)/g)];
-  check(expectedObjects.length === 20 && expectedObjects.every(match => {
+  const expectedObjects = [...(parentStart ? MODEL_PARENT_START_SCHEMA_SQL : MODEL_STEP_SCHEMA_SQL).matchAll(/CREATE (TABLE|TRIGGER) (\w+)([\s\S]*?)(?=\n  CREATE|\n  PRAGMA|$)/g)];
+  check(expectedObjects.length === (parentStart ? 26 : 20) && expectedObjects.every(match => {
     const sql = actual.get(match[1].toLowerCase() + ':' + match[2]);
     return typeof sql === 'string' && normalize(sql) === normalize(match[0]);
   }), 'MODEL_STEP_SCHEMA_REQUIRED');
@@ -108,7 +115,7 @@ export function modelStepRequiredForTask(control, taskId) {
   return Object.hasOwn(task.specification, 'originalInference') || Boolean(hasTable && control.db.prepare('SELECT 1 FROM model_step_manifests WHERE task_id=?').get(taskId));
 }
 export function refuseMixedModelStepSchema(control, version) {
-  if (version === MODEL_STEP_DATABASE_VERSION) { requireModelStepSchema(control); return; }
+  if ([MODEL_STEP_DATABASE_VERSION, MODEL_PARENT_START_DATABASE_VERSION].includes(version)) { requireModelStepSchema(control); return; }
   check(version!==2,'MODEL_STEP_SCHEMA_REQUIRED'); // Previous schema2 is refused, never upgraded or inferred.
   check(!control.db.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'model_%'").get(), 'MODEL_STEP_SCHEMA_INCONSISTENT');
 }
@@ -140,6 +147,7 @@ export function modelStepCompletion(control, parentKey) {
   if (!modelStepRequiredForTask(control, task.id)) return { required: false, complete: true, scope: 'legacy-no-model-step-authority' };
   requireModelStepSchema(control);
   validateOriginalInferenceSpecification(task.specification.originalInference);
+  assertModelParentStart(control, parent);
   const expected = task.specification.originalInference.plan, manifest = control.db.prepare('SELECT * FROM model_step_manifests WHERE parent_key=?').get(parentKey);
   check(manifest && manifest.task_id === task.id && manifest.spec_digest === task.spec_digest
     && manifest.plan_sha256 === modelStepDigest(expected) && manifest.plan_json === canonical(expected), 'MODEL_STEP_MANIFEST_REQUIRED');
@@ -286,4 +294,97 @@ export const MODEL_STEP_SCHEMA_SQL = `
         THEN RAISE(ABORT,'required model steps unresolved') END;
     END;
   PRAGMA user_version=3;
+`;
+
+/** Pure witness construction only; exported helpers cannot open the private start window. */
+export function modelParentStartWitness(record, { generation, startNonce, chargedCents, overCommittedCents, admittedAt }) {
+  check(typeof generation === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(generation)
+    && typeof startNonce === 'string' && /^[a-f0-9]{64}$/.test(startNonce), 'MODEL_PARENT_START_REQUIRED');
+  check(Number.isSafeInteger(admittedAt) && admittedAt > 0 && admittedAt < record.lease.expires
+    && overCommittedCents === 0 && (chargedCents === null || Number.isSafeInteger(chargedCents)
+      && chargedCents >= 0 && chargedCents < record.reservation.ceilingCents), 'MODEL_PARENT_START_REQUIRED');
+  const witness = { format:'factory-original-model-parent-start', schemaVersion:1, mode:'trusted-fixture-only',
+    parent:{effectKey:record.parent.effectKey,requestSha256:record.parent.requestSha256},
+    task:{id:record.task.id,specDigest:record.task.specDigest}, planSha256:modelStepDigest(record.plan),
+    enrollmentEnvelopeSha256:modelStepDigest(record), lease:record.lease,
+    reservation:{...record.reservation,chargedCents}, overCommittedCents, admittedAt, startNonce,
+    runtime:{mode:'trusted-fixture-only',generation} };
+  return {parent_key:record.parent.effectKey,enrollment_envelope_sha256:modelStepDigest(record),
+    envelope_json:canonical(record),start_nonce:startNonce,generation,witness_json:canonical(witness),
+    witness_sha256:modelStepDigest(witness),admitted_at:admittedAt};
+}
+function parentStartMatches(witnessJson,witnessSha256,startNonce,generation,admittedAt,parentKey,envelopeSha256,envelopeJson,
+  requestDigest,taskId,specDigest,planSha256,owner,ownerEpoch,controlEpoch) {
+  try {
+    check(typeof witnessJson==='string' && typeof envelopeJson==='string' && Buffer.byteLength(witnessJson)<=262144 && Buffer.byteLength(envelopeJson)<=262144);
+    const record=JSON.parse(envelopeJson),witness=JSON.parse(witnessJson);
+    const expected=modelParentStartWitness(record,{generation,startNonce,admittedAt,
+      chargedCents:witness.reservation?.chargedCents,overCommittedCents:witness.overCommittedCents});
+    return expected.witness_json===witnessJson && expected.witness_sha256===witnessSha256
+      && expected.parent_key===parentKey && expected.enrollment_envelope_sha256===envelopeSha256
+      && expected.envelope_json===envelopeJson && record.parent.requestSha256===requestDigest
+      && record.task.id===taskId && record.task.specDigest===specDigest && modelStepDigest(record.plan)===planSha256
+      && record.lease.cellId===owner && record.lease.epoch===ownerEpoch && record.lease.controlEpoch===controlEpoch ? 1:0;
+  } catch { return 0; }
+}
+/** Historical coherence only. OFF, expiry or changed generation cannot grant fresh entry. */
+export function assertModelParentStart(control,parent,record=null) {
+  if (control.db.prepare('PRAGMA user_version').get().user_version!==MODEL_PARENT_START_DATABASE_VERSION) return null;
+  const start=control.db.prepare('SELECT * FROM model_parent_starts WHERE parent_key=?').get(parent.key);
+  if (['accepted','not_applied'].includes(parent.state)) { check(!start,'MODEL_PARENT_START_INCONSISTENT'); return null; }
+  const manifest=control.db.prepare('SELECT * FROM model_step_manifests WHERE parent_key=?').get(parent.key);
+  check(['running','unknown','succeeded'].includes(parent.state) && start && manifest
+    && start.enrollment_envelope_sha256===manifest.enrollment_envelope_sha256
+    && parentStartMatches(start.witness_json,start.witness_sha256,start.start_nonce,start.generation,start.admitted_at,
+      parent.key,manifest.enrollment_envelope_sha256,start.envelope_json,parent.request_digest,manifest.task_id,
+      manifest.spec_digest,manifest.plan_sha256,parent.owner,parent.owner_epoch,parent.control_epoch)===1,'MODEL_PARENT_START_REQUIRED');
+  if (record) {
+    const enrolled=JSON.parse(start.envelope_json);
+    check(equal(record.parent,enrolled.parent) && equal(record.task,enrolled.task) && equal(record.plan,enrolled.plan)
+      && equal(record.lease,enrolled.lease) && equal(record.reservation,enrolled.reservation),'MODEL_PARENT_START_INCONSISTENT');
+  }
+  return start;
+}
+
+/** Explicit schema4 candidate; never automatically upgrades an existing schema3 journal. */
+export const MODEL_PARENT_START_SCHEMA_SQL = MODEL_STEP_SCHEMA_SQL.replace('PRAGMA user_version=3;', '') + `
+  CREATE TABLE model_parent_starts(
+    parent_key TEXT PRIMARY KEY NOT NULL REFERENCES model_step_manifests(parent_key),enrollment_envelope_sha256 TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,start_nonce TEXT NOT NULL UNIQUE,generation TEXT NOT NULL,witness_json TEXT NOT NULL,
+    witness_sha256 TEXT NOT NULL,admitted_at INTEGER NOT NULL CHECK(admitted_at>0)
+  );
+  CREATE TRIGGER model_parent_start_insert_guard BEFORE INSERT ON model_parent_starts BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM model_step_manifests m JOIN effects e ON e.key=m.parent_key
+      WHERE m.parent_key=NEW.parent_key AND e.kind='flow_call' AND e.scope='task' AND e.task_id=m.task_id AND e.scope_id=m.task_id
+        AND e.state='accepted' AND m.enrollment_envelope_sha256=NEW.enrollment_envelope_sha256
+        AND NOT EXISTS(SELECT 1 FROM model_step_aborts WHERE parent_key=NEW.parent_key)
+        AND factory_model_parent_start_matches(NEW.witness_json,NEW.witness_sha256,NEW.start_nonce,NEW.generation,NEW.admitted_at,
+          m.parent_key,m.enrollment_envelope_sha256,NEW.envelope_json,e.request_digest,m.task_id,m.spec_digest,m.plan_sha256,
+          e.owner,e.owner_epoch,e.control_epoch)=1)
+      OR factory_model_parent_start_guard(NEW.parent_key,NEW.witness_json,'insert')!=1
+      THEN RAISE(ABORT,'dedicated parent start required') END;
+  END;
+  CREATE TRIGGER model_parent_start_no_update BEFORE UPDATE ON model_parent_starts BEGIN SELECT RAISE(ABORT,'immutable parent start'); END;
+  CREATE TRIGGER model_parent_start_no_delete BEFORE DELETE ON model_parent_starts BEGIN SELECT RAISE(ABORT,'immutable parent start'); END;
+  CREATE TRIGGER model_parent_state_guard BEFORE UPDATE OF state ON effects
+    WHEN EXISTS(SELECT 1 FROM model_step_manifests WHERE parent_key=OLD.key) BEGIN
+      SELECT CASE WHEN NOT(OLD.state=NEW.state OR OLD.state='accepted' AND NEW.state IN('running','not_applied')
+        OR OLD.state='running' AND NEW.state IN('unknown','succeeded') OR OLD.state='unknown' AND NEW.state='succeeded')
+        THEN RAISE(ABORT,'invalid started parent transition') END;
+      SELECT CASE WHEN NEW.state IN('accepted','not_applied') AND EXISTS(SELECT 1 FROM model_parent_starts WHERE parent_key=OLD.key)
+        OR NEW.state IN('running','unknown','succeeded') AND NOT EXISTS(SELECT 1 FROM model_parent_starts s
+          JOIN model_step_manifests m ON m.parent_key=s.parent_key WHERE s.parent_key=OLD.key
+            AND s.enrollment_envelope_sha256=m.enrollment_envelope_sha256
+            AND factory_model_parent_start_matches(s.witness_json,s.witness_sha256,s.start_nonce,s.generation,s.admitted_at,
+              m.parent_key,m.enrollment_envelope_sha256,s.envelope_json,OLD.request_digest,m.task_id,m.spec_digest,m.plan_sha256,
+              OLD.owner,OLD.owner_epoch,OLD.control_epoch)=1)
+        THEN RAISE(ABORT,'coherent parent start required') END;
+      SELECT CASE WHEN OLD.state='accepted' AND NEW.state='running' AND NOT EXISTS(SELECT 1 FROM model_parent_starts s
+        WHERE s.parent_key=OLD.key AND factory_model_parent_start_guard(OLD.key,s.witness_json,'start')=1)
+        THEN RAISE(ABORT,'dedicated parent start required') END;
+  END;
+  CREATE TRIGGER model_parent_abort_guard BEFORE INSERT ON model_step_aborts
+    WHEN EXISTS(SELECT 1 FROM model_parent_starts WHERE parent_key=NEW.parent_key)
+    BEGIN SELECT RAISE(ABORT,'started parent cannot be aborted'); END;
+  PRAGMA user_version=4;
 `;

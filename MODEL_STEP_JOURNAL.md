@@ -1,6 +1,6 @@
-# Original model-step journal: isolated source proposal
+# Original model-step journal: source-only components
 
-This proposal extends only its isolated checkout and owned local fixtures. Production inference remains HOLD. There is no upstream sender, production original issuer, deployment, credential loader, reservation creator, model runtime or live migration in this slice. A successful logical journal claim never authorizes a physical send.
+The repository contains components qualified with owned synthetic local fixtures. Production inference remains HOLD. There is no upstream sender, production original issuer, deployment, credential loader, reservation creator, model runtime or live migration in this slice. A successful logical journal claim never authorizes a physical send.
 
 ## Frozen design
 
@@ -70,7 +70,21 @@ The exact eleven qualified files were adopted into the local Factory branch at 1
 
 A strict postadoption reader separately rejected stale metadata on 26 captured Git stdout/stderr files. Their contents, hashes and other nine identity fields remained exact; ctime alone changed. A distinct read-only snapshot bound all 39 current command/raw files before and after and verified thirteen stored Git outcomes. The old metadata failure remains negative. Repeated Windows parent permission protection is the inferred cause; no global process or filesystem quiescence is claimed. No adoption or test action was replayed.
 
-This qualification covers a synthetic logical journal. Original live schema migration, supported flagged-parent start, trusted issuer and receiver, per-step provider allocation, FLUJO SDK request projection, physical sending and CommunityAI descendants remain held. The next offline exercise is described in [FLUJO_OWNER_BRIDGE.md](FLUJO_OWNER_BRIDGE.md).
+This qualification covers a synthetic logical journal. Original live schema migration, production flagged-parent start, trusted issuer and receiver, per-step provider allocation, FLUJO SDK request projection, physical sending and CommunityAI descendants remain held. The next offline exercise is described in [FLUJO_OWNER_BRIDGE.md](FLUJO_OWNER_BRIDGE.md).
+
+## Fixture parent start (schema4)
+
+The explicit `initializeOriginalModelParentStartSchema4(control, {mode: 'trusted-fixture-only'})` initializer creates this separate schema only from a recorded paused/drained schema1 fixture. It refuses schema3 migration. The live Original database remains schema1 and unchanged; the constructor never upgrades it.
+
+`withParentStart(lease, capability, enter)` commits an immutable authenticated enrollment/start witness, the parent accepted-to-running transition and its event before invoking the callback. Fresh child registration and claim require the journal's active opaque parent handle. An ordinary callback return revokes the handle synchronously before queued microtasks. Genuine native Promises retain it until the awaited settlement continuation; this is local callback observation, not a descendant census. Thenables cannot reactivate it.
+
+Duplicate, restarted and interrupted parents remain observation-only. A committed start prevents never-dispatched abort even with zero children. Final OFF, lease, generation or paid-fence failure preserves the committed start and unknown outcome with zero callback entries. Lost commit acknowledgment cannot create another entry. Existing abort history is refused by both the journal and the SQL insertion guard. The control transaction preserves the primary failure when rollback also fails.
+
+Schema4 checks fourteen table names, twenty trigger names and twenty-six extension definitions. This does not validate all base DDL, views or indexes, confine an arbitrary writable database holder, or qualify old writer quiescence. Reopened ordinary controllers receive default-deny start functions. The private one-use gate is available only to the configured journal.
+
+The [Root compatibility capture](C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/budget-growth-activation-20261003/root-parent-v4-actual-qualification-1838a1b8-68c1-42b7-a408-ea83efa81765/records/run.private.json) passed 147/147 cases, covering the 28 new parent-start cases plus existing schema3 journal, original contract and native worker cases. Twenty-six selected source/runtime files remained byte/generation stable; 264 owned post-close fixture files and the two actual journal racer outcomes were retained. Five test workers recorded zero transport attempts. The separately pinned SQLite racers do not inherit that transport preload. Independent review rechecked all 299 selected files. Earlier failed Root launches remain separate evidence: one refused the Windows preload path before fixtures, and one hit a too-short sixty-second limit with incomplete totals. Neither is promoted into the passing capture.
+
+This API remains a synthetic logical journal. It does not enter FLUJO runFlow, issue a production credential, create a provider reservation, admit native POST or authorize physical sending. Envelope/body/receiver-profile qualification is unchanged.
 
 ## Required later work
 

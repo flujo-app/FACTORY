@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import {createFixtureOwnerWire} from '../src/fixture-owner-wire.mjs';
 import {fixedWireCommitment,fixedWireProjection} from './fixtures/owner-wire-input.mjs';
 
@@ -122,3 +123,56 @@ test('a changed commitment cannot reopen the fixture database',async t=>{
   const f=await fixture(t),changed=structuredClone(f.commitment);changed.nonce='changed';
   assert.throws(()=>createFixtureOwnerWire({...f.options,commitment:changed}),code('FIXTURE_COMMITMENT_CHANGED'));
 });
+
+test('ordinary return revokes before queued slot issue and retained-child dispatch',async t=>{
+  const f=await fixture(t);let queued;
+  const started=f.start(parent=>{
+    const child=f.child(parent);
+    queued=new Promise(resolve=>queueMicrotask(()=>{
+      let issueCode=null,dispatchCode=null;
+      try{f.child(parent);}catch(error){issueCode=error.code;}
+      try{f.owner.dispatch(child,fixedWireProjection());}catch(error){dispatchCode=error.code;}
+      resolve({issueCode,dispatchCode,child:f.owner.observe().child});
+    }));
+    return 'ordinary-value';
+  });
+  const observed=await queued;
+  assert.deepEqual(observed,{issueCode:'FIXTURE_RESUME_HOLD',dispatchCode:'FIXTURE_RESUME_HOLD',child:null});
+  assert.equal((await started).value,'ordinary-value');
+  assert.equal(f.owner.observe().child,null);
+});
+
+test('thenable getter and assimilation run after revocation with zero fresh claims',async t=>{
+  const f=await fixture(t),phases=[];
+  const result=await f.start(parent=>{
+    const child=f.child(parent);
+    const probe=phase=>{
+      let issueCode=null,dispatchCode=null;
+      try{f.child(parent);}catch(error){issueCode=error.code;}
+      try{f.owner.dispatch(child,fixedWireProjection());}catch(error){dispatchCode=error.code;}
+      phases.push({phase,issueCode,dispatchCode,child:f.owner.observe().child});
+    };
+    return {get then(){probe('getter');return resolve=>{probe('assimilation');resolve('thenable-value');};}};
+  });
+  assert.equal(result.value,'thenable-value');
+  assert.deepEqual(phases,['getter','assimilation'].map(phase=>({
+    phase,issueCode:'FIXTURE_RESUME_HOLD',dispatchCode:'FIXTURE_RESUME_HOLD',child:null
+  })));
+  assert.equal(f.owner.observe().child,null);
+});
+
+for(const [label,PromiseType] of [['native',Promise],['cross-realm native',vm.runInNewContext('Promise')]]) {
+  test(label+' Promise keeps entry authority until asynchronous work settles',async t=>{
+    const f=await fixture(t);let issued=false;
+    await assert.rejects(f.start(parent=>new PromiseType((resolve,reject)=>{
+      queueMicrotask(()=>{
+        try{const child=f.child(parent);issued=true;f.owner.dispatch(child,fixedWireProjection());resolve();}
+        catch(error){reject(error);}
+      });
+    })),code('PHYSICAL_SEND_HOLD'));
+    assert.equal(issued,true);
+    const observed=f.owner.observe();
+    assert.equal(observed.parent.state,'unknown');assert.equal(observed.child.state,'unknown');
+    assert.equal(observed.physicalSend,'HOLD');
+  });
+}

@@ -1,12 +1,14 @@
 import { FactoryControl } from './control.mjs';
 import { types } from 'node:util';
+import { randomBytes } from 'node:crypto';
 import { SpendingLedger } from './spending.mjs';
 import { safeReceipt } from './receipts.mjs';
 import { withOriginalInferenceCapability } from './original-inference-contract.mjs';
 import { canonicalMissionPacket } from './native-mission-contract.mjs';
 import { MODEL_STEP_SCHEMA_SQL, modelStepDigest, modelStepFail, requireModelStepSchema, refuseMixedModelStepSchema,
   originalModelStepManifestProof, verifyModelStepManifestProof, installModelStepMutationGuard, guardedModelStepMutation, assertModelStepParentTerminal,
-  MODEL_STEP_DATABASE_VERSION,modelStepClaimWitness,assertModelStepClaim } from './model-step-contract.mjs';
+  MODEL_STEP_DATABASE_VERSION,modelStepClaimWitness,assertModelStepClaim,MODEL_PARENT_START_DATABASE_VERSION,
+  MODEL_PARENT_START_SCHEMA_SQL,modelParentStartWitness,assertModelParentStart } from './model-step-contract.mjs';
 
 const canonical = canonicalMissionPacket;
 const check = (ok, code) => { if (!ok) modelStepFail(code); };
@@ -14,6 +16,19 @@ const keyFor = record => 'model.' + record.call.requestId;
 const callBinding = r => modelStepDigest({ call: r.call, model: r.model, recipients: r.recipients, body: r.body });
 // Shared across journal instances, inaccessible to the exported generic mutation helper.
 const privateClaimWindows=new WeakMap();
+const privateParentStartWindows=new WeakMap();
+function installPrivateParentStartGuard(control) {
+  if (privateParentStartWindows.has(control)) return privateParentStartWindows.get(control);
+  const state={active:null}; privateParentStartWindows.set(control,state);
+  control.db.function('factory_model_parent_start_guard',(key,witnessJson,stage)=>{
+    const active=state.active;
+    if (!active || key!==active.key || witnessJson!==active.witnessJson) return 0;
+    if (stage==='insert' && !active.inserted && !active.started) { active.inserted=true; return 1; }
+    if (stage==='start' && active.inserted && !active.started) { active.started=true; return 1; }
+    return 0;
+  });
+  return state;
+}
 function installPrivateClaimGuard(control){
   if(privateClaimWindows.has(control))return privateClaimWindows.get(control);
   const state={active:null};privateClaimWindows.set(control,state);
@@ -45,16 +60,46 @@ export function initializeOriginalModelStepSchema(control) {
   });
 }
 
+/** New drained synthetic databases only. Schema3 and live Original migration remain HOLD. */
+export function initializeOriginalModelParentStartSchema4(control, configuration) {
+  check(control instanceof FactoryControl && configuration && !types.isProxy(configuration)
+    && Object.getPrototypeOf(configuration)===Object.prototype && Reflect.ownKeys(configuration).length===1
+    && Object.getOwnPropertyDescriptor(configuration,'mode')?.value==='trusted-fixture-only','MODEL_PARENT_FIXTURE_MODE_REQUIRED');
+  return control.transaction(()=>{
+    const version=control.db.prepare('PRAGMA user_version').get().user_version;
+    refuseMixedModelStepSchema(control,version);
+    if (version===MODEL_PARENT_START_DATABASE_VERSION) { requireModelStepSchema(control); return {schemaVersion:4,fresh:false,mode:'trusted-fixture-only',liveMigration:'HOLD'}; }
+    check(version===1,'MODEL_PARENT_SCHEMA4_INITIALIZATION_REQUIRED');
+    check(control.control().status==='paused'
+      && !control.db.prepare("SELECT 1 FROM effects WHERE state IN ('accepted','running','unknown')").get()
+      && !control.db.prepare("SELECT 1 FROM tasks WHERE status='running'").get()
+      && !control.db.prepare('SELECT 1 FROM integrations WHERE expires>?').get(control.clock()),'MODEL_STEP_MIGRATION_HOLD');
+    control.db.exec(MODEL_PARENT_START_SCHEMA_SQL); installModelStepMutationGuard(control);
+    control.event('model_parent_start_schema_initialized','root',{schemaVersion:4,mode:'trusted-fixture-only',liveMigration:'HOLD',oldWriterQuiescence:'unverified'});
+    return {schemaVersion:4,fresh:true,mode:'trusted-fixture-only',liveMigration:'HOLD'};
+  });
+}
+
 /** Ledger transitions only. Host-owned bootstrap/handles are not request arguments. No sender exists. */
 export class OriginalModelStepJournal {
-  #control; #paid; #bootstrap; #compareReceiver; #claimWindow;
-  constructor({ control, paidAdmission, bootstrap, compareReceiver = null }) {
+  #control; #paid; #bootstrap; #compareReceiver; #claimWindow; #parentStartWindow; #parentEntry; #parentLifetimes=new WeakMap();
+  constructor({ control, paidAdmission, bootstrap, compareReceiver = null, parentEntry = null }) {
     check(control instanceof FactoryControl && paidAdmission instanceof SpendingLedger, 'MODEL_STEP_HOST_REQUIRED');
     requireModelStepSchema(control); installModelStepMutationGuard(control);
     check(bootstrap && typeof bootstrap.authenticate === 'function' && typeof bootstrap.withVerified === 'function', 'MODEL_STEP_HOST_REQUIRED');
     check(compareReceiver === null || typeof compareReceiver === 'function', 'MODEL_STEP_RECEIVER_REQUIRED');
     this.#control = control; this.#paid = paidAdmission; this.#bootstrap = bootstrap; this.#compareReceiver = compareReceiver;
     this.#claimWindow=installPrivateClaimGuard(control);
+    this.#parentStartWindow=installPrivateParentStartGuard(control);
+    if (parentEntry!==null) {
+      check(control.db.prepare('PRAGMA user_version').get().user_version===MODEL_PARENT_START_DATABASE_VERSION,'MODEL_PARENT_SCHEMA4_REQUIRED');
+      check(parentEntry && !types.isProxy(parentEntry) && Object.getPrototypeOf(parentEntry)===Object.prototype
+        && Reflect.ownKeys(parentEntry).length===3 && Object.getOwnPropertyDescriptor(parentEntry,'mode')?.value==='trusted-fixture-only'
+        && typeof Object.getOwnPropertyDescriptor(parentEntry,'generation')?.value==='string'
+        && /^[a-zA-Z0-9_.:-]{1,128}$/.test(parentEntry.generation)
+        && typeof Object.getOwnPropertyDescriptor(parentEntry,'currentGeneration')?.value==='function','MODEL_PARENT_FIXTURE_MODE_REQUIRED');
+      this.#parentEntry=Object.freeze({mode:parentEntry.mode,generation:parentEntry.generation,currentGeneration:parentEntry.currentGeneration});
+    } else this.#parentEntry=null;
   }
   #record(capability) { return withOriginalInferenceCapability(this.#bootstrap, capability, r => r); }
   #receiver(record) {
@@ -84,6 +129,7 @@ export class OriginalModelStepJournal {
       && parent.task_id === record.task.id && parent.owner === record.lease.cellId
       && parent.owner_epoch === record.lease.epoch && parent.control_epoch === record.lease.controlEpoch
       && parent.request_digest === record.parent.requestSha256 && states.includes(parent.state), 'MODEL_STEP_PARENT_CLOSED');
+    assertModelParentStart(this.#control,parent,record);
     const manifest = this.#control.db.prepare('SELECT * FROM model_step_manifests WHERE parent_key=?').get(parent.key);
     check(manifest && manifest.spec_digest === record.task.specDigest && manifest.plan_sha256 === modelStepDigest(record.plan)
       && manifest.plan_json === canonical(record.plan), 'MODEL_STEP_MANIFEST_REQUIRED');
@@ -119,6 +165,99 @@ export class OriginalModelStepJournal {
     return Object.freeze({ key: child.key, state: child.state, requestDigest: child.request_digest, fresh,
       observationOnly: !fresh, runtimeAdmission: 'HOLD', scope: 'source-only-logical-journal' });
   }
+  #schema4() {
+    requireModelStepSchema(this.#control);
+    check(this.#control.db.prepare('PRAGMA user_version').get().user_version===MODEL_PARENT_START_DATABASE_VERSION,'MODEL_PARENT_SCHEMA4_REQUIRED');
+  }
+  #generationFence() {
+    check(this.#parentEntry?.mode==='trusted-fixture-only','MODEL_PARENT_FIXTURE_MODE_REQUIRED');
+    let generation;
+    try { generation=this.#parentEntry.currentGeneration(); }
+    catch { modelStepFail('MODEL_PARENT_GENERATION_CHANGED'); }
+    if (types.isPromise(generation)) { Promise.prototype.then.call(generation,()=>{},()=>{}); modelStepFail('MODEL_PARENT_GENERATION_CHANGED'); }
+    check(generation===this.#parentEntry.generation,'MODEL_PARENT_GENERATION_CHANGED');
+  }
+  #lifetime(record,parentStart) {
+    if (this.#control.db.prepare('PRAGMA user_version').get().user_version!==MODEL_PARENT_START_DATABASE_VERSION) return;
+    const lifetime=parentStart && this.#parentLifetimes.get(parentStart);
+    check(lifetime?.active && lifetime.parentKey===record.parent.effectKey,'MODEL_PARENT_LIFETIME_REQUIRED');
+    const start=assertModelParentStart(this.#control,this.#parent(record),record);
+    check(start && start.start_nonce===lifetime.startNonce,'MODEL_PARENT_LIFETIME_REQUIRED');
+    this.#generationFence();
+    check(start.generation===this.#parentEntry.generation,'MODEL_PARENT_GENERATION_CHANGED');
+  }
+  #parentView(record, fresh=false) {
+    const parent=this.#parent(record,['accepted','running','unknown','succeeded','not_applied']);
+    const start=assertModelParentStart(this.#control,parent,record);
+    return Object.freeze({key:parent.key,state:parent.state,requestDigest:parent.request_digest,
+      startWitnessSha256:start?.witness_sha256??null,fresh,observationOnly:!fresh,mode:'trusted-fixture-only',
+      runtimeAdmission:'HOLD',scope:'source-only-parent-start-journal'});
+  }
+  #unknownParent(record,startNonce) {
+    this.#control.transaction(()=>{
+      const parent=this.#parent(record,['running','unknown','succeeded']);
+      const start=assertModelParentStart(this.#control,parent,record);
+      check(start.start_nonce===startNonce,'MODEL_PARENT_LIFETIME_REQUIRED');
+      if (parent.state==='running') {
+        this.#control.db.prepare("UPDATE effects SET state='unknown',updated=? WHERE key=? AND state='running'").run(this.#control.clock(),parent.key);
+        this.#control.event('original_model_parent_entry_closed',parent.key,{state:'unknown',startWitnessSha256:start.witness_sha256,mode:'trusted-fixture-only',runtimeAdmission:'HOLD'});
+      }
+    });
+  }
+  /** Durable start before any callback. Existing history never creates a new execution lifetime. */
+  async withParentStart(lease,capability,enter) {
+    this.#schema4(); check(typeof enter==='function','MODEL_PARENT_ENTRY_REQUIRED');
+    const record=this.#record(capability),startNonce=randomBytes(32).toString('hex');
+    let lifetime=null,created=false;
+    try {
+      const fresh=this.#paid.transaction(()=>this.#control.transaction(()=>{
+        const parent=this.#parent(record,['accepted','running','unknown','succeeded','not_applied']);
+        if (parent.state!=='accepted') return false;
+        check(!this.#control.db.prepare('SELECT 1 FROM model_step_aborts WHERE parent_key=?').get(parent.key),'MODEL_PARENT_ABORT_INCONSISTENT');
+        this.#generationFence(); this.#verify(capability,lease); this.#receiver(record);
+        const manifest=this.#control.db.prepare('SELECT * FROM model_step_manifests WHERE parent_key=?').get(parent.key);
+        check(manifest.enrollment_envelope_sha256===modelStepDigest(record),'MODEL_PARENT_ENROLLMENT_REQUIRED');
+        const witness=modelParentStartWitness(record,{generation:this.#parentEntry.generation,startNonce,
+          ...this.#paidFence(record),admittedAt:this.#control.clock()});
+        check(!this.#parentStartWindow.active,'MODEL_PARENT_START_CONFLICT');
+        const active={key:parent.key,witnessJson:witness.witness_json,inserted:false,started:false};
+        this.#parentStartWindow.active=active;
+        try {
+          this.#control.db.prepare('INSERT INTO model_parent_starts(parent_key,enrollment_envelope_sha256,envelope_json,start_nonce,generation,witness_json,witness_sha256,admitted_at) VALUES(?,?,?,?,?,?,?,?)')
+            .run(witness.parent_key,witness.enrollment_envelope_sha256,witness.envelope_json,witness.start_nonce,witness.generation,witness.witness_json,witness.witness_sha256,witness.admitted_at);
+          const update=this.#control.db.prepare("UPDATE effects SET state='running',updated=? WHERE key=? AND state='accepted'").run(witness.admitted_at,parent.key);
+          check(update.changes===1 && active.inserted && active.started,'MODEL_PARENT_START_CONFLICT');
+          created=true;
+        } finally { this.#parentStartWindow.active=null; }
+        this.#control.event('original_model_parent_started',parent.key,{startWitnessSha256:witness.witness_sha256,mode:'trusted-fixture-only',runtimeAdmission:'HOLD'});
+        return true;
+      }));
+      if (!fresh) return {kind:'observation',parent:this.#parentView(record)};
+      // A failed final fence cannot roll back the separately committed start.
+      this.#generationFence();
+      this.#paid.transaction(()=>this.#control.transaction(()=>{
+        this.#verify(capability,lease); this.#parent(record); this.#paidFence(record);
+      }));
+      const parentStart=Object.freeze(Object.create(null));
+      lifetime={parentKey:record.parent.effectKey,startNonce,active:true}; this.#parentLifetimes.set(parentStart,lifetime);
+      // No await between the final local snapshot and callback invocation. This
+      // is not a distributed OFF broker or a physical provider authorization.
+      // Ordinary synchronous returns retire before any queued microtask. Only
+      // genuine Promises keep the lifetime pending; thenables are plain values.
+      const result=enter(parentStart);
+      const value=types.isPromise(result)?await result:result;
+      lifetime.active=false; this.#unknownParent(record,startNonce);
+      return {kind:'fresh',parent:this.#parentView(record,true),value};
+    } catch (error) {
+      if (lifetime) lifetime.active=false;
+      if (created) {
+        const start=this.#control.db.prepare('SELECT * FROM model_parent_starts WHERE parent_key=?').get(record.parent.effectKey);
+        if (start?.start_nonce===startNonce) this.#unknownParent(record,startNonce);
+      }
+      throw error;
+    } finally { if (lifetime) lifetime.active=false; }
+  }
+  observeParent(capability) { this.#schema4(); return this.#parentView(this.#record(capability)); }
   /** Authenticate complete fixed manifest and materialize all slots with parent admission before any POST. */
   admitParent(lease, capability) {
     const record = this.#record(capability); this.#receiver(record);
@@ -126,11 +265,12 @@ export class OriginalModelStepJournal {
     const result = this.#control.admitNativeMissionEffect(lease, record.parent.request, proof);
     return { ...result, runtimeAdmission: 'HOLD', scope: 'source-only-parent-manifest' };
   }
-  register(lease, capability) {
+  register(lease, capability, {parentStart} = {}) {
     const record = this.#record(capability), receiverSha256 = this.#receiver(record);
     return this.#control.transaction(() => {
       const previous = this.#stored(record);
       if (previous) return this.#view(previous);
+      this.#lifetime(record,parentStart);
       this.#verify(capability, lease); this.#parent(record);
       const now = this.#control.clock(), key = keyFor(record);
       this.#control.db.prepare('INSERT INTO effects(key,scope,scope_id,task_id,owner,owner_epoch,control_epoch,kind,request_digest,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -146,6 +286,8 @@ export class OriginalModelStepJournal {
     const record = this.#record(capability), metadata = safeReceipt(receipt);
     return this.#control.transaction(() => {
       requireModelStepSchema(this.#control);
+      if (this.#control.db.prepare('PRAGMA user_version').get().user_version===MODEL_PARENT_START_DATABASE_VERSION)
+        check(!this.#control.db.prepare('SELECT 1 FROM model_parent_starts WHERE parent_key=?').get(record.parent.effectKey),'MODEL_PARENT_ALREADY_STARTED');
       check(!this.#control.db.prepare('SELECT 1 FROM model_step_claims WHERE parent_key=?').get(record.parent.effectKey),'MODEL_STEP_ABORT_STARTED');
       const previous = this.#control.db.prepare('SELECT * FROM model_step_aborts WHERE parent_key=?').get(record.parent.effectKey);
       if (previous) {
@@ -170,11 +312,12 @@ export class OriginalModelStepJournal {
     });
   }
   /** One durable logical CAS across handlers/processes. No physical dispatch approval is returned. */
-  claim(lease, capability) {
+  claim(lease, capability, {parentStart} = {}) {
     const record = this.#record(capability);
     return this.#paid.transaction(() => this.#control.transaction(() => {
       const child = this.#stored(record); check(child, 'MODEL_STEP_NOT_REGISTERED');
       if (child.state !== 'accepted') return this.#view(child);
+      this.#lifetime(record,parentStart);
       this.#verify(capability, lease); this.#parent(record);
       const receiverSha256=this.#receiver(record),paidSnapshot=this.#paidFence(record),admittedAt=this.#control.clock();
       const witness=modelStepClaimWitness(record,receiverSha256,{...paidSnapshot,admittedAt});

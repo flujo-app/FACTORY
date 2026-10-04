@@ -114,7 +114,13 @@ export function createFixtureOwnerWire({ databasePath, commitment, now = Date.no
       });
       const parent = parentHandle(kind);
       if (kind === 'observation') return {kind,parent};
-      try { return {kind,parent,value:await enter(parent)}; }
+      try {
+        const value = enter(parent);
+        // Ordinary values and thenables have finished the entry callback.
+        // Revoke before await can yield or assimilate an untrusted thenable.
+        if (!types.isPromise(value)) parents.get(parent).active = false;
+        return {kind,parent,value:await value};
+      }
       catch (error) { transaction(() => db.prepare("UPDATE fixture_parent SET state='unknown' WHERE id=?").run(fixed.parentId)); throw error; }
       finally { parents.get(parent).active = false; }
     },
