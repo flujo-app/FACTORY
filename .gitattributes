@@ -3,3 +3,4 @@ modal/model_artifacts.py text eol=lf
 deploy/private-files.mjs text eol=lf
 deploy/factory-service.entrypoint.sh text eol=lf
 deploy/managed-cloud/** text eol=lf
+modal/communityai-model-manifest.json -text
