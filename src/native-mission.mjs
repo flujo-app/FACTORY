@@ -18,6 +18,7 @@ function privateContract(privateFiles) { requireValue(privateFiles && ['readPriv
 async function finish(control,key,request,observation,privateFiles) {
   requireValue(observation?.state==='completed' && typeof observation.body==='string','NATIVE_MISSION_UNRESOLVED');
   requireValue(Buffer.byteLength(observation.body)<=1048576,'NATIVE_MISSION_OUTPUT_LIMIT');
+  control.assertNativeMissionCompletion(key);
   privateContract(privateFiles);
   const value={format:'factory-native-mission-result',schemaVersion:1,key,requestDigest:digest(request),
     conversationId:request.conversationId,flowId:request.flowId,body:JSON.parse(observation.body)};
@@ -36,6 +37,7 @@ function unknown(control,key) {
 /** Fresh private assignment. Preparation runs no Flow; enrollment and task claim commit together. */
 export async function claimNativeMission({control,taskId,client,outputFile,ttlMs=60000}) {
   const task=control.task(taskId),epoch=control.active().epoch;
+  requireValue(!control.requiresOriginalModelStep(task.id),'ORIGINAL_MODEL_STEP_RUNTIME_HOLD');
   requireValue(task.status==='ready');
   const provisional={scope:'task',scopeId:task.id,cellId:task.specification.nativeMission.cellId,epoch:task.epoch+1,controlEpoch:epoch};
   const request=nativeMissionRequest(task,provisional,outputFile);clientBinding(client,request);
@@ -44,6 +46,7 @@ export async function claimNativeMission({control,taskId,client,outputFile,ttlMs
 }
 /** Exactly one admitted POST. Existing intents are observed, never sent again. */
 export async function runNativeMission({control,lease,client,paidAdmission,privateFiles,outputFile,signal}) {
+  requireValue(!control.requiresOriginalModelStep(lease.scopeId),'ORIGINAL_MODEL_STEP_RUNTIME_HOLD');
   requireValue(paidAdmission instanceof SpendingLedger,'NATIVE_MISSION_PAID_LEDGER');privateContract(privateFiles);
   const request=nativeMissionRequest(control.task(lease.scopeId),lease,outputFile);clientBinding(client,request);
   const admission=control.admitNativeMissionEffect(lease,request),key=nativeMissionEffectKey(request);
@@ -77,6 +80,7 @@ export async function runNativeMission({control,lease,client,paidAdmission,priva
 /** Authenticated observation may repair native recovery metadata. It cannot run or resume a Flow. */
 export async function observeNativeMission({control,key,client,privateFiles}) {
   privateContract(privateFiles);const effect=control.effect(key);
+  if (effect.state==='succeeded') control.assertNativeMissionCompletion(key);
   const rows=control.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted' AND subject=?").all(key);
   requireValue(rows.length===1,'NATIVE_MISSION_HISTORY');const request=JSON.parse(rows[0].details).request;
   const task=control.task(effect.scope_id),lease={scope:'task',scopeId:task.id,cellId:effect.owner,epoch:effect.owner_epoch,controlEpoch:effect.control_epoch};

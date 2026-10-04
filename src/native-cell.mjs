@@ -26,11 +26,19 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
     check(!busy);busy=true;
     try {
       if(signal?.aborted)return {state:'stopped'};
-      await privateFiles.ensurePrivateDirectory(options.outputDirectory);
       const snapshot=control.status(),tasks=snapshot.tasks.filter(matches),byId=new Map(tasks.map(task=>[task.id,task]));
       const effects=snapshot.effects.filter(effect=>effect.scope==='task' && byId.has(effect.scope_id));
+      const children=effects.filter(effect=>effect.kind==='model_step');
+      const childBlocker=children.find(effect=>['accepted','running','unknown'].includes(effect.state));
+      if(childBlocker)return {state:'blocked',taskId:childBlocker.scope_id,key:childBlocker.key,effectState:childBlocker.state,reason:'model_step_reconciliation_required',runtimeAdmission:'HOLD'};
+      for(const task of tasks.filter(task=>control.requiresOriginalModelStep(task.id))) {
+        const parent=effects.find(effect=>effect.kind==='flow_call' && effect.scope_id===task.id);
+        if(parent && !control.modelStepCompletion(parent.key).complete)return {state:'blocked',taskId:task.id,key:parent.key,reason:'model_step_manifest_incomplete',runtimeAdmission:'HOLD'};
+        return {state:'blocked',taskId:task.id,reason:'original_model_step_runtime_hold',runtimeAdmission:'HOLD'};
+      }
+      await privateFiles.ensurePrivateDirectory(options.outputDirectory);
       // Reconciliation precedes the factory/paid admission switches and never obtains a new POST.
-      const unresolved=effects.filter(effect=>['accepted','running','unknown'].includes(effect.state));
+      const unresolved=effects.filter(effect=>effect.kind!=='model_step' && ['accepted','running','unknown'].includes(effect.state));
       if(unresolved.length){
         const observations=[];
         for(const effect of unresolved){

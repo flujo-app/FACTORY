@@ -8,6 +8,9 @@ import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
 import { validateGrowthPolicy } from './growth-policy.mjs';
 import { validateWorkerPowerBinding } from './worker-power-contract.mjs';
+import { validateOriginalInferenceSpecification } from './original-inference-contract.mjs';
+import { requireModelStepSchema, refuseMixedModelStepSchema, installModelStepMutationGuard, verifyModelStepManifestProof, materializeModelStepManifest,
+  assertModelStepParentTerminal, modelStepCompletion, modelStepRequiredForTask, MODEL_STEP_DATABASE_VERSION } from './model-step-contract.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -189,9 +192,13 @@ export class FactoryControl {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.clock = clock;
     this.db = new DatabaseSync(path);
-    this.db.exec('PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version !== 0 && version !== 1) fail('SCHEMA', 'Unsupported factory schema.');
+    try {
+      if (![0,1,2,MODEL_STEP_DATABASE_VERSION].includes(version)) fail('SCHEMA', 'Unsupported factory schema.');
+      refuseMixedModelStepSchema(this,version);
+    } catch (error) { this.db.close(); throw error; }
+    this.db.exec('PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
+    if (version === MODEL_STEP_DATABASE_VERSION) { installModelStepMutationGuard(this); return; }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY CHECK(id=1), epoch INTEGER NOT NULL, status TEXT NOT NULL, policy TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cells(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES cells(id), depth INTEGER NOT NULL, role TEXT NOT NULL, allocation INTEGER NOT NULL, spent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, purpose TEXT NOT NULL, heartbeat INTEGER NOT NULL);
@@ -202,7 +209,7 @@ export class FactoryControl {
       CREATE TABLE IF NOT EXISTS effect_bindings(target TEXT PRIMARY KEY, effect_key TEXT NOT NULL REFERENCES effects(key));
       CREATE TABLE IF NOT EXISTS messages(sender TEXT NOT NULL REFERENCES cells(id), message_id TEXT NOT NULL, recipient TEXT NOT NULL REFERENCES cells(id), task_id TEXT REFERENCES tasks(id), attempt INTEGER, payload TEXT NOT NULL, digest TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(sender,message_id));
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, subject TEXT NOT NULL, details TEXT NOT NULL, observed INTEGER NOT NULL);
-      PRAGMA user_version=1;
+      PRAGMA user_version=${version || 1};
     `);
   }
   close() { this.db.close(); }
@@ -430,6 +437,11 @@ export class FactoryControl {
       if(specification.taskType==='operation') fail('INVALID','Native mission execution requires a software task.');
       validateNativeMission(specification.nativeMission);
     }
+    if (Object.hasOwn(specification,'originalInference')) {
+      if (specification.taskType !== 'software' || !specification.nativeMission) fail('MODEL_STEP_SPECIFICATION','Original model-step tasks require explicit software/native identity.');
+      validateOriginalInferenceSpecification(specification.originalInference);
+      requireModelStepSchema(this);
+    }
     const payload = canonical(specification), hash = digest(specification);
     return this.transaction(() => {
       this.active(); const previous = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
@@ -619,11 +631,15 @@ export class FactoryControl {
       return this.task(taskId);
     });
   }
-  admitNativeMissionEffect(lease,request) {
+  admitNativeMissionEffect(lease,request,modelStepManifestProof=null) {
     return this.transaction(()=>{
       const task=this.task(lease.scopeId);this.#nativeMissionTarget(task);
       if(digest(request)!==digest(nativeMissionRequest(task,lease,request.outputFile))) fail('NATIVE_MISSION_BINDING','Mission request must match the assigned task.');
-      const key=nativeMissionEffectKey(request),admitted=this.#admitEffect(lease,{key,kind:'flow_call',request});
+      if (task.specification.originalInference) {
+        requireModelStepSchema(this); verifyModelStepManifestProof(this,lease,request,modelStepManifestProof);
+      } else if (modelStepManifestProof !== null) fail('MODEL_STEP_SPECIFICATION','Legacy tasks cannot acquire original model-step class.');
+      const key=nativeMissionEffectKey(request),admitted=this.#admitEffect(lease,{key,kind:'flow_call',request},Boolean(task.specification.originalInference));
+      if (task.specification.originalInference && admitted.fresh) materializeModelStepManifest(this,lease,request,modelStepManifestProof);
       if(!admitted.fresh) {
         const record=this.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted' AND subject=?").all(key);
         if(record.length!==1 || digest(JSON.parse(record[0].details).request)!==digest(request))fail('NATIVE_MISSION_HISTORY','Original mission history is required.');
@@ -633,6 +649,7 @@ export class FactoryControl {
   }
   /** Dispatch is synchronous admission only; the returned promise is awaited outside both writer locks. */
   startNativeMissionEffect(lease,key,dispatch) {
+    if (modelStepRequiredForTask(this,lease.scopeId)) fail('ORIGINAL_MODEL_STEP_RUNTIME_HOLD','Original model-step operational sender is unqualified.');
     const verify=()=>{
       this.authority(lease);const row=this.effect(key),task=this.task(lease.scopeId);this.#nativeMissionTarget(task);
       const records=this.db.prepare("SELECT details FROM events WHERE type='native_mission_admitted' AND subject=?").all(key);
@@ -823,7 +840,7 @@ export class FactoryControl {
     });
   }
   admitEffect(lease, input) { return this.transaction(() => this.#admitEffect(lease, input)); }
-  #admitEffect(lease, { key, kind, request, taskId=null }) {
+  #admitEffect(lease, { key, kind, request, taskId=null }, modelStepManifestAuthorized=false) {
     id(key); if (!['provision','flow_call','retire','delivery'].includes(kind)) fail('INVALID','Unknown effect kind.');
     const hash=digest(request);
       const owner=this.authority(lease);
@@ -843,6 +860,7 @@ export class FactoryControl {
       if(kind==='retire' && this.openEffects('worker',request?.app).length)fail('UNRECONCILED','Worker power must be reconciled before retirement.');
       if (lease.scope === 'task') {
         const task = this.task(lease.scopeId);
+        if (task.specification.originalInference && !modelStepManifestAuthorized) fail('MODEL_STEP_MANIFEST_REQUIRED','Original model-step parents require authenticated manifest admission.');
         if(kind==='flow_call' && task.specification.nativeMission) {
           this.#nativeMissionTarget(task);
           if(key!==nativeMissionEffectKey(request) || digest(request)!==digest(nativeMissionRequest(task,lease,request?.outputFile))) fail('NATIVE_MISSION_BINDING','Native Flow effect must match the assigned mission.');
@@ -871,6 +889,9 @@ export class FactoryControl {
       return {fresh:true,effect:this.effect(key)};
   }
   effect(key) { const row=this.db.prepare('SELECT * FROM effects WHERE key=?').get(id(key)); if (!row) fail('EFFECT','Effect not found.'); return {...row,receipt:row.receipt?JSON.parse(row.receipt):null}; }
+  modelStepCompletion(key) { return modelStepCompletion(this,key); }
+  requiresOriginalModelStep(taskId) { return modelStepRequiredForTask(this,taskId); }
+  assertNativeMissionCompletion(key) { assertModelStepParentTerminal(this,key); }
   /** Trusted local shutdown authority, restricted to an app already admitted for provisioning. */
   admitOwnedRetirement({key,app}) {
     id(key);
@@ -901,11 +922,13 @@ export class FactoryControl {
       return this.effect(key);
     });
   }
-  startEffect(lease,key) { return this.transaction(() => { this.authority(lease); const row=this.effect(key); if(row.kind==='flow_call' && this.task(lease.scopeId).specification.nativeMission) fail('NATIVE_MISSION_DISPATCH_REQUIRED','Native missions require their fenced dispatcher.'); if (row.state!=='accepted' || row.scope!==lease.scope || row.scope_id!==lease.scopeId || row.owner_epoch!==lease.epoch) fail('EFFECT','Accepted effect belongs to another attempt.'); this.db.prepare('UPDATE effects SET state=?,updated=? WHERE key=?').run('running',this.clock(),key); return this.effect(key); }); }
+  startEffect(lease,key) { return this.transaction(() => { this.authority(lease); const row=this.effect(key); if(row.kind==='model_step') fail('MODEL_STEP_METHOD_REQUIRED','Original model steps require dedicated methods.'); if(row.kind==='flow_call' && this.task(lease.scopeId).specification.nativeMission) fail('NATIVE_MISSION_DISPATCH_REQUIRED','Native missions require their fenced dispatcher.'); if (row.state!=='accepted' || row.scope!==lease.scope || row.scope_id!==lease.scopeId || row.owner_epoch!==lease.epoch) fail('EFFECT','Accepted effect belongs to another attempt.'); this.db.prepare('UPDATE effects SET state=?,updated=? WHERE key=?').run('running',this.clock(),key); return this.effect(key); }); }
   settleEffect(key, state, receipt={}) {
     if (!['succeeded','not_applied','unknown'].includes(state)) fail('INVALID','Invalid settlement.');
     return this.transaction(() => {
       const row=this.effect(key);
+      if (row.kind==='model_step') fail('MODEL_STEP_METHOD_REQUIRED','Original model steps require dedicated methods.');
+      if (['succeeded','not_applied'].includes(state)) assertModelStepParentTerminal(this,key,state);
       if (!['accepted','running','unknown'].includes(row.state)) fail('EFFECT','Effect is already settled.');
       if(state==='not_applied' && row.state!=='accepted') fail('NEGATIVE_RECONCILIATION_UNSUPPORTED','A started external action cannot be declared not applied without executor and target reconciliation.');
       const metadata=safeReceipt(receipt);
@@ -913,7 +936,7 @@ export class FactoryControl {
       this.event('effect_settled',key,{state,receipt:metadata}); return this.effect(key);
     });
   }
-  reconcileEffect(key, { applied, evidencePath }) { if(typeof applied!=='boolean') fail('INVALID','Reconciliation outcome is required.'); const proof=evidence(evidencePath); return this.settleEffect(key,applied?'succeeded':'not_applied',{...proof,reconciled:true}); }
+  reconcileEffect(key, { applied, evidencePath }) { if(typeof applied!=='boolean') fail('INVALID','Reconciliation outcome is required.'); if(this.effect(key).kind==='model_step') fail('MODEL_STEP_METHOD_REQUIRED','Original model steps require dedicated methods.'); const proof=evidence(evidencePath); return this.settleEffect(key,applied?'succeeded':'not_applied',{...proof,reconciled:true}); }
   /** A completed local Git CAS refusal is distinct from observing that a remote effect has not applied yet. */
   settleGitRefusal(key, proof) {
     return this.transaction(() => {
@@ -957,6 +980,6 @@ export class FactoryControl {
     const control=this.control(), cells=this.db.prepare('SELECT * FROM cells ORDER BY id').all(), tasks=this.db.prepare('SELECT id FROM tasks ORDER BY id').all().map(row=>this.task(row.id));
     const effects=this.db.prepare('SELECT key FROM effects ORDER BY created,key').all().map(row=>this.effect(row.key));
     const unresolved=effects.filter(effect=>['accepted','running','unknown'].includes(effect.state));
-    return {schemaVersion:1,control,cells,tasks,effects,unresolvedEffects:unresolved.length,effectsDrained:unresolved.length===0,workerQuiescence:'unverified',scope:'local-coordinator'};
+    return {schemaVersion:this.db.prepare('PRAGMA user_version').get().user_version,control,cells,tasks,effects,unresolvedEffects:unresolved.length,effectsDrained:unresolved.length===0,workerQuiescence:'unverified',scope:'local-coordinator'};
   }
 }
