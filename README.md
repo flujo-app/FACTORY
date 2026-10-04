@@ -29,8 +29,33 @@ checks an independently pinned supplied receipt against that binding. A passing
 receipt marks the proposal checked with explicitly unauthenticated provenance.
 Applied code remains not_applied, income remains no_evidence and admission is
 NO_ADMISSION; external sends require the named owner bridge.
-Distributed CommunityAI workers, recursive provisioning and live verification of
-queue-driven scale-to-zero remain subsequent integration work.
+The working Python cloud executor has its own supplied-result contract in
+[src/python-cloud-job-contract.mjs](src/python-cloud-job-contract.mjs).
+bindPythonCloudJob() freezes the selected task and Python source hashes;
+projectPythonCloudJob() checks the retained original request and response bytes
+against the operation and fixed injected arithmetic or invoice suite. Its 17
+focused tests pass. The original runner response must retain trustedSuite,
+trustedMinimum and trustedSuiteComplete; the current MCP text projection drops
+those fields and cannot substitute for the raw receipt. Passing evidence yields
+checked with unauthenticated runtime/suite provenance, NO_ADMISSION,
+not_applied and no_evidence. The existing Node contract remains separate.
+
+The cloud owner's [code acceptance record](C:/Users/Moe/Documents/GitHub/iambrokeplshlp/artifacts/cloud-native-code-acceptance-20261004.json)
+reports a real three-test arithmetic run and a deterministic invoice fallback
+that passed 13 CPU checks with cleanup confirmed. The generated invoice V5
+passed nine fixed cases but retains known whitespace/precision gaps. The phone
+reviewer assessed text; independent code execution is a separate sandbox result.
+FACTORY consumed that public record without replaying the job or inference.
+
+[modal/communityai_bootstrap.py](modal/communityai_bootstrap.py) now wires the
+pinned Qwen3 1.7B manifest, two complementary block workers, a text peer and
+the actual CommunityAI coordinator APIs. A supplied four-role formation retains
+actual public TCP ports and application TLS; host admission and receiver
+authentication must be supplied by its owner. Eleven offline configuration and
+component-double lifecycle tests pass. Image/cache preparation, a real TLS DHT
+bootstrap, provider formation, distributed inference and retirement remain
+unverified. Recursive provisioning and live queue-driven scale-to-zero also
+remain subsequent integration work.
 
 The original FACTORY controller remains paused with its $100 fully held,
 $0 unallocated and final spending unknown. The new cloud lane keeps separate
