@@ -79,7 +79,8 @@ export function createNativeCell({control,paidAdmission,client,privateFiles,prof
     }catch(error){
       const reasons={STALE:'assignment_changed',PAUSED:'factory_paused',BUSY:'assignment_busy',UNRECONCILED:'original_intent_requires_operator',
         NATIVE_MISSION_UNSTARTED:'unstarted_assignment_changed',NATIVE_MISSION_TARGET:'worker_target_unavailable',NATIVE_MISSION_UNRESOLVED:'worker_not_ready',
-        NATIVE_MISSION_HISTORY:'mission_history',NATIVE_MISSION_CONFLICT:'native_conflict',NATIVE_MISSION_UNAVAILABLE:'worker_not_ready'};
+        NATIVE_MISSION_HISTORY:'mission_history',NATIVE_MISSION_CONFLICT:'native_conflict',NATIVE_MISSION_UNAVAILABLE:'worker_not_ready',
+        WORKER_POWER_UNAVAILABLE:'worker_power_unavailable'};
       if(reasons[error.code])return {state:'blocked',reason:reasons[error.code]};
       throw error;
     }finally{busy=false;}

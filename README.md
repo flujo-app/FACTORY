@@ -6,6 +6,11 @@ constraints. This directory contains the first runnable **local coordination and
 recovery pilot**. The larger design is in [FACTORY_DESIGN.md](FACTORY_DESIGN.md) and
 [FEDERATION.md](FEDERATION.md).
 
+An opt-in existing-worker power slice records owned Fly sleep/wake effects on the
+original controller and shared paid ledger. Sleeping and unresolved workers fence
+native dispatch; wake retains a separate spending allowance. Automatic queue
+power scheduling and live Fly qualification remain open. See [WORKER_POWER.md](WORKER_POWER.md).
+
 The controller records missions, delegated allocations, cells, task ownership,
 candidate reviews, messages and external-effect receipts in SQLite. The gateway
 admits an effect before dispatch and preserves uncertainty across interruption.

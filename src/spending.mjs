@@ -121,6 +121,13 @@ export class SpendingLedger {
     });
   }
   reserve(input) {
+    return this.#reserve(input, false);
+  }
+  /** New intent only: existence check and insert share the same write transaction. */
+  reserveFresh(input) {
+    return this.#reserve(input, true);
+  }
+  #reserve(input, fresh) {
     const { reservationId, provider, ceilingCents } = fields(input, ['reservationId', 'provider', 'ceilingCents']);
     identifier(reservationId); integer(ceilingCents, 'ceilingCents');
     if (typeof provider !== 'string' || !PROVIDER.test(provider)) fail('INVALID', 'Provider must be a lowercase identifier.');
@@ -129,7 +136,7 @@ export class SpendingLedger {
       const policy = this.policy();
       const previous = this.db.prepare('SELECT * FROM spending_reservations WHERE id=?').get(reservationId);
       if (previous) {
-        if (previous.provider !== provider || previous.ceiling_cents !== ceilingCents) fail('CONFLICT', 'Reservation identity is already bound to different inputs.');
+        if (fresh || previous.provider !== provider || previous.ceiling_cents !== ceilingCents) fail('CONFLICT', 'Reservation identity is already bound to an existing intent.');
         return reservation(previous);
       }
       const committed = sum(this.rows().map(held));

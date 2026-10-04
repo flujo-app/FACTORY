@@ -7,6 +7,7 @@ import { consumeGitRefusalProof } from './git-effect.mjs';
 import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
 import { validateGrowthPolicy } from './growth-policy.mjs';
+import { validateWorkerPowerBinding } from './worker-power-contract.mjs';
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const OPEN_EFFECTS = "('accepted','running','unknown')";
@@ -76,7 +77,7 @@ function causalOpenEffects(control, { cellId = null, taskIds = [], provisionKeys
   return control.db.prepare(`SELECT key,scope,scope_id,task_id,owner,state FROM effects WHERE state IN ${OPEN_EFFECTS}`).all()
     .filter(effect => (cellId !== null && effect.owner === cellId) || tasks.has(effect.task_id)
       || (effect.scope === 'task' && tasks.has(effect.scope_id)) || provisions.has(effect.key)
-      || (effect.scope === 'cleanup' && apps.has(effect.scope_id)));
+      || (['cleanup','worker'].includes(effect.scope) && apps.has(effect.scope_id)));
 }
 function validateProvisionBindings(control) {
   const effects = control.db.prepare("SELECT key,owner FROM effects WHERE kind='provision'").all();
@@ -440,6 +441,9 @@ export class FactoryControl {
   }
   task(taskId) { const task = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(id(taskId)); if (!task) fail('TASK','Task not found.'); delete task.token_hash; return { ...task, specification:JSON.parse(task.specification), candidate:task.candidate?JSON.parse(task.candidate):null, review:task.review?JSON.parse(task.review):null }; }
   openEffects(scope, scopeId) { return this.db.prepare(`SELECT key,state FROM effects WHERE scope=? AND scope_id=? AND state IN ${OPEN_EFFECTS}`).all(scope,scopeId); }
+  openTaskEffects(taskId) {
+    return this.db.prepare(`SELECT key,state FROM effects WHERE ((scope='task' AND scope_id=?) OR (scope='worker' AND task_id=?)) AND state IN ${OPEN_EFFECTS}`).all(taskId,taskId);
+  }
   claimTask(taskId, cellId, ttlMs = 60000) {
     id(taskId); id(cellId); integer(ttlMs,'ttlMs',1);
     return this.transaction(() => this.#claimTask(taskId,cellId,ttlMs));
@@ -450,7 +454,11 @@ export class FactoryControl {
       if (!cell || !['developer','coordinator'].includes(cell.role)) fail('CELL','Ready developer/coordinator is required.');
       if (!task || !['ready','running'].includes(task.status)) fail('TASK','Task cannot be claimed.');
       if (task.status === 'running' && task.control_epoch===control.epoch && task.expires > this.clock()) fail('BUSY','Task lease is still held.');
-      if (this.openEffects('task',taskId).length) fail('UNRECONCILED','Prior task effects must be reconciled before takeover.');
+      if (this.openTaskEffects(taskId).length) fail('UNRECONCILED','Prior task effects must be reconciled before takeover.');
+      for(const row of this.db.prepare("SELECT subject,details FROM events WHERE type='worker_power_enrolled'").all()) {
+        const binding=JSON.parse(row.details).binding;
+        if(binding.cellId===cellId)this.assertWorkerPowerReady(row.subject,binding.worker);
+      }
       const token = randomBytes(32).toString('base64url'), epoch = task.epoch+1, expires = this.clock()+ttlMs;
       this.db.prepare('UPDATE tasks SET status=?,owner=?,epoch=?,token_hash=?,expires=?,control_epoch=? WHERE id=?').run('running',cellId,epoch,tokenHash(token),expires,control.epoch,taskId);
       this.event('task_claimed',taskId,{cellId,epoch,controlEpoch:control.epoch});
@@ -466,7 +474,107 @@ export class FactoryControl {
       || this.db.prepare("SELECT key FROM effects WHERE kind='retire' AND scope_id=?").get(m.app)
       || this.db.prepare("SELECT t.specification FROM effects e JOIN tasks t ON t.id=e.task_id WHERE e.kind='retire'").all()
         .some(row=>JSON.parse(row.specification).operation?.app===m.app)) fail('NATIVE_MISSION_TARGET','An available provision-bound worker is required.');
+    this.assertWorkerPowerReady(m.app, m.worker);
     return m;
+  }
+  /** Opt-in trusted-local profile enrollment; live transport verification belongs to the power client. */
+  enrollWorkerPower(lease, input) {
+    const binding=validateWorkerPowerBinding(input),bindingDigest=digest(binding);
+    return this.transaction(()=>{
+      this.authority(lease);this.#workerPowerOwner(binding,lease.cellId);
+      const rows=this.db.prepare("SELECT details FROM events WHERE type='worker_power_enrolled' AND subject=?").all(binding.app);
+      if(rows.length) { const prior=this.workerPowerBinding(binding.app);if(digest(prior)!==bindingDigest)fail('CONFLICT','Worker power profile is immutable.');return prior; }
+      this.event('worker_power_enrolled',binding.app,{binding,bindingDigest,taskId:lease.scopeId,owner:lease.cellId,
+        ownerEpoch:lease.epoch,controlEpoch:lease.controlEpoch,scope:'explicit-existing-machine-profile'});
+      return structuredClone(binding);
+    });
+  }
+  workerPowerBinding(app) {
+    const rows=this.db.prepare("SELECT details FROM events WHERE type='worker_power_enrolled' AND subject=?").all(app);
+    if(rows.length!==1)fail('WORKER_POWER_ENROLLMENT','One explicitly enrolled worker power profile is required.');
+    const record=JSON.parse(rows[0].details),binding=validateWorkerPowerBinding(record.binding);
+    if(binding.app!==app || digest(binding)!==record.bindingDigest)fail('WORKER_POWER_HISTORY','Worker power enrollment changed.');
+    return binding;
+  }
+  #workerPowerOwner(binding,owner) {
+    const cell=this.db.prepare('SELECT * FROM cells WHERE id=?').get(binding.cellId),effect=this.effect(binding.provisionKey);
+    if(!cell || !['reserved','ready'].includes(cell.status) || cell.parent_id!==owner
+      || effect.kind!=='provision' || effect.state!=='succeeded' || effect.owner!==owner
+      || effect.receipt?.worker!==binding.app || effect.receipt?.app!==binding.app || effect.receipt?.state!=='ready'
+      || ['cell:'+binding.cellId,'app:'+binding.app].some(target=>this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get(target)?.effect_key!==binding.provisionKey)
+      || this.db.prepare("SELECT key FROM effects WHERE kind='retire' AND scope_id=?").get(binding.app)
+      || this.db.prepare("SELECT t.specification FROM effects e JOIN tasks t ON t.id=e.task_id WHERE e.kind='retire'").all()
+        .some(row=>JSON.parse(row.specification).operation?.app===binding.app))fail('WORKER_POWER_OWNER','An available owned provision-bound worker is required.');
+  }
+  #workerPowerIdle(binding,exceptKey=null) {
+    if(this.db.prepare("SELECT id FROM tasks WHERE owner=? AND status='running'").get(binding.cellId))fail('WORKER_POWER_BUSY','Worker has a live task.');
+    const tasks=new Set(this.db.prepare('SELECT id,specification FROM tasks').all().filter(row=>{
+      const mission=JSON.parse(row.specification).nativeMission;return mission?.cellId===binding.cellId || mission?.app===binding.app;
+    }).map(row=>row.id));
+    if(this.db.prepare(`SELECT key,owner,task_id,scope,scope_id FROM effects WHERE state IN ${OPEN_EFFECTS}`).all().some(effect=>effect.key!==exceptKey
+      && (effect.owner===binding.cellId || tasks.has(effect.task_id) || effect.scope==='task' && tasks.has(effect.scope_id)
+        || ['worker','cleanup'].includes(effect.scope) && effect.scope_id===binding.app)))fail('WORKER_POWER_BUSY','Worker has unresolved work or power intent.');
+  }
+  /** An enrolled sleeping/uncertain worker cannot admit a new native Flow POST. Legacy workers stay unchanged. */
+  assertWorkerPowerReady(app,worker) {
+    if(!this.db.prepare("SELECT 1 FROM events WHERE type='worker_power_enrolled' AND subject=?").get(app))return;
+    const binding=this.workerPowerBinding(app);
+    if(digest(binding.worker)!==digest(worker) || this.openEffects('worker',app).length)fail('WORKER_POWER_UNAVAILABLE','Worker power or snapshot is unresolved.');
+    const latest=this.db.prepare("SELECT kind FROM effects WHERE scope='worker' AND scope_id=? AND state='succeeded' ORDER BY rowid DESC LIMIT 1").get(app);
+    if(latest?.kind==='worker_sleep')fail('WORKER_POWER_UNAVAILABLE','Worker must be explicitly woken before native dispatch.');
+  }
+  workerPowerRequest(key) {
+    const effect=this.effect(key),rows=this.db.prepare("SELECT details FROM events WHERE type='worker_power_admitted' AND subject=?").all(key);
+    if(rows.length!==1 || effect.scope!=='worker' || !['worker_wake','worker_sleep'].includes(effect.kind))fail('WORKER_POWER_HISTORY','An original worker power intent is required.');
+    const record=JSON.parse(rows[0].details);
+    if(digest(record.request)!==effect.request_digest || record.request.app!==effect.scope_id
+      || effect.kind!=='worker_'+record.request.action)fail('WORKER_POWER_HISTORY','Power effect and original request differ.');
+    return record.request;
+  }
+  workerPowerEffect(key,request) {
+    id(key);const existing=this.db.prepare('SELECT key FROM effects WHERE key=?').get(key);if(!existing)return null;
+    if(digest(this.workerPowerRequest(key))!==digest(request))fail('CONFLICT','Power key is bound to another request.');
+    return this.effect(key);
+  }
+  admitWorkerPower(lease,{key,request}) {
+    id(key);if(key.length>120)fail('INVALID','Power key must leave room for its paid reservation prefix.');
+    const value=closureInput(request,['app','bindingDigest','action','paid']);
+    if(!['wake','sleep'].includes(value.action) || !/^[a-f0-9]{64}$/.test(value.bindingDigest))fail('INVALID','Invalid worker power request.');
+    if(value.action==='wake') { const paid=closureInput(value.paid,['provider','ceilingCents']);if(paid.provider!=='fly')fail('INVALID','Wake requires Fly allowance.');integer(paid.ceilingCents,'ceilingCents',1); }
+    else if(value.paid!==null)fail('INVALID','Sleep cannot change paid allowance.');
+    return this.transaction(()=>{
+      if(lease.scope!=='task')fail('AUTHORITY','Power requires task authority.');this.authority(lease);
+      if(this.task(lease.scopeId).specification.taskType==='operation')fail('OPERATION_BINDING','Power requires its own management task.');
+      const binding=this.workerPowerBinding(value.app);if(digest(binding)!==value.bindingDigest)fail('WORKER_POWER_BINDING','Power profile differs.');
+      this.#workerPowerOwner(binding,lease.cellId);const previous=this.workerPowerEffect(key,value);if(previous)return{fresh:false,effect:previous};
+      this.#workerPowerIdle(binding);if(this.openTaskEffects(lease.scopeId).length)fail('UNRECONCILED','Management task effects remain unresolved.');
+      const now=this.clock();this.db.prepare('INSERT INTO effects(key,scope,scope_id,task_id,owner,owner_epoch,control_epoch,kind,request_digest,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(key,'worker',binding.app,lease.scopeId,lease.cellId,lease.epoch,lease.controlEpoch,'worker_'+value.action,digest(value),'accepted',now,now);
+      this.event('worker_power_admitted',key,{request:value});return{fresh:true,effect:this.effect(key)};
+    });
+  }
+  startWorkerPowerEffect(lease,key,dispatch) {
+    const verify=()=>{this.authority(lease);const effect=this.effect(key),request=this.workerPowerRequest(key),binding=this.workerPowerBinding(request.app);
+      if(effect.owner!==lease.cellId || effect.owner_epoch!==lease.epoch || effect.control_epoch!==lease.controlEpoch
+        || effect.task_id!==lease.scopeId || digest(binding)!==request.bindingDigest || typeof dispatch!=='function')fail('STALE','Power admission changed.');
+      this.#workerPowerOwner(binding,lease.cellId);this.#workerPowerIdle(binding,key);return effect;};
+    // A crash/rollback after this durable commit burns this original mutation attempt.
+    this.transaction(()=>{if(verify().state!=='accepted')fail('WORKER_POWER_HISTORY','Only a fresh accepted power intent may start.');
+      this.db.prepare("UPDATE effects SET state='running',updated=? WHERE key=?").run(this.clock(),key);});
+    return this.transaction(()=>{if(verify().state!=='running')fail('WORKER_POWER_HISTORY','Started power intent required.');return dispatch();});
+  }
+  settleWorkerPower(key,proof) {
+    const p=closureInput(proof,['bindingDigest','state','observationSha256','basis']);
+    return this.transaction(()=>{
+      const effect=this.effect(key),request=this.workerPowerRequest(key),binding=this.workerPowerBinding(request.app);
+      if(!['running','unknown'].includes(effect.state) || request.bindingDigest!==p.bindingDigest || digest(binding)!==p.bindingDigest
+        || p.state!==(request.action==='wake'?'started':'stopped') || !/^[a-f0-9]{64}$/.test(p.observationSha256)
+        || p.basis!=='observed-owned-target-state')fail('WORKER_POWER_OBSERVATION','Matching original owned power observation required.');
+      // Trusted-local transport consumer records a bounded digest, never raw config/credentials or a billing settlement.
+      const receipt={worker:binding.app,app:binding.app,state:p.state==='started'?'ready':'stopped',sha256:p.observationSha256};
+      this.db.prepare("UPDATE effects SET state='succeeded',receipt=?,updated=? WHERE key=?").run(canonical(receipt),this.clock(),key);
+      this.event('worker_power_observed',key,{requestDigest:effect.request_digest,basis:p.basis,receipt});return this.effect(key);
+    });
   }
   /** Trusted local enrollment and assignment after authenticated native preparation. */
   claimNativeMission({taskId,expectedSpecDigest,expectedFactoryEpoch,workerProof,ttlMs=60000}) {
@@ -687,7 +795,7 @@ export class FactoryControl {
     return row;
   }
   renew(lease, ttlMs=60000) { integer(ttlMs,'ttlMs',1); return this.transaction(() => { this.authority(lease); const expires=this.clock()+ttlMs; if (lease.scope==='task') this.db.prepare('UPDATE tasks SET expires=? WHERE id=?').run(expires,lease.scopeId); else this.db.prepare('UPDATE integrations SET expires=? WHERE project_id=?').run(expires,lease.scopeId); return {...lease,expires}; }); }
-  submit(lease, { artifactPath }) { const candidate=evidence(artifactPath); return this.transaction(() => { this.authority(lease); if (lease.scope!=='task' || this.openEffects('task',lease.scopeId).length) fail('UNRECONCILED','Task effects must be settled before submission.'); this.db.prepare('UPDATE tasks SET status=?,candidate=?,token_hash=NULL WHERE id=?').run('review',canonical(candidate),lease.scopeId); this.event('candidate_submitted',lease.scopeId,candidate); return this.task(lease.scopeId); }); }
+  submit(lease, { artifactPath }) { const candidate=evidence(artifactPath); return this.transaction(() => { this.authority(lease); if (lease.scope!=='task' || this.openTaskEffects(lease.scopeId).length) fail('UNRECONCILED','Task effects must be settled before submission.'); this.db.prepare('UPDATE tasks SET status=?,candidate=?,token_hash=NULL WHERE id=?').run('review',canonical(candidate),lease.scopeId); this.event('candidate_submitted',lease.scopeId,candidate); return this.task(lease.scopeId); }); }
   reviewTask(taskId, reviewerId, { accepted, evidencePath }) {
     const record=evidence(evidencePath);
     if (typeof accepted!=='boolean') fail('INVALID','Review verdict must be boolean.');
@@ -732,6 +840,7 @@ export class FactoryControl {
         const candidate=JSON.parse(candidateBytes.toString('utf8')), target=task.specification.deliveryTarget;
         if(!target || request?.repository!==target.repository || request.ref!==target.ref || request.expectedHead!==task.specification.baseline || request.candidateHead!==candidate.candidateHead || candidate.repository!==target.repository || candidate.ref!==target.ref || candidate.baseline!==task.specification.baseline || candidate.branch!==task.branch || !/^[a-f0-9]{40}$/.test(request.candidateHead??'') || !/^[a-f0-9]{40}$/.test(request.expectedHead??'')) fail('DELIVERY_BINDING','Delivery target, baseline and candidate must match the reviewed task.');
       } else if (lease.scope!=='task') fail('AUTHORITY','Task authority is required.');
+      if(kind==='retire' && this.openEffects('worker',request?.app).length)fail('UNRECONCILED','Worker power must be reconciled before retirement.');
       if (lease.scope === 'task') {
         const task = this.task(lease.scopeId);
         if(kind==='flow_call' && task.specification.nativeMission) {
@@ -748,7 +857,7 @@ export class FactoryControl {
           }
         }
       }
-      if (this.openEffects(lease.scope,lease.scopeId).length) fail('UNRECONCILED','Previous external effect must settle before a conflicting effect.');
+      if ((lease.scope==='task'?this.openTaskEffects(lease.scopeId):this.openEffects(lease.scope,lease.scopeId)).length) fail('UNRECONCILED','Previous external effect must settle before a conflicting effect.');
       if(kind==='provision') {
         const cell=this.db.prepare("SELECT * FROM cells WHERE id=? AND status='reserved'").get(id(request?.cellId));
         if(!cell || cell.parent_id!==lease.cellId || typeof request.app!=='string' || !/^[a-z][a-z0-9-]{2,62}$/.test(request.app)) fail('RESERVATION','Provisioning requires the owner\'s reserved child and an explicit app identity.');
@@ -770,6 +879,7 @@ export class FactoryControl {
       const control=this.control();
       const binding=this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('app:'+app);
       if(!binding || this.effect(binding.effect_key).kind!=='provision') fail('RESERVATION','Retirement requires this controller\'s recorded provisioning intent.');
+      if(this.openEffects('worker',app).length)fail('UNRECONCILED','Original worker power intent must be reconciled before retirement.');
       const requestDigest=digest({app,provisionKey:binding.effect_key});
       const previous=this.db.prepare('SELECT * FROM effects WHERE key=?').get(key);
       if(previous) {

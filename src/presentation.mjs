@@ -157,9 +157,9 @@ function readSnapshot(db) {
         evidenceDigest: hash(review.sha256), candidateDigest: hash(review.candidateDigest), specDigest: hash(review.specDigest),
         attempt: integer(review.attempt) } : null };
   });
-  const effects = effectRows.map(effect => ({ key: identifier(effect.key), kind: member(effect.kind, ['provision', 'flow_call', 'retire', 'delivery']),
+  const effects = effectRows.map(effect => ({ key: identifier(effect.key), kind: member(effect.kind, ['provision', 'flow_call', 'retire', 'delivery', 'worker_wake', 'worker_sleep']),
     state: member(effect.state, ['accepted', 'running', 'unknown', 'succeeded', 'not_applied']),
-    scope: member(effect.scope, ['task', 'project', 'cleanup']), scopeId: identifier(effect.scope_id),
+    scope: member(effect.scope, ['task', 'project', 'cleanup', 'worker']), scopeId: identifier(effect.scope_id),
     taskId: effect.task_id === null ? null : identifier(effect.task_id), owner: identifier(effect.owner),
     ownerEpoch: integer(effect.owner_epoch), controlEpoch: integer(effect.control_epoch),
     createdAt: iso(effect.created), updatedAt: iso(effect.updated), requestDigest: hash(effect.request_digest) }));
