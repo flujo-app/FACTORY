@@ -194,6 +194,7 @@ class ProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
             root = Path(folder)
             source, factory = root / "owner", root / "factory"
+            factory_commit = "f" * 40
             source.mkdir()
             (factory / "modal").mkdir(parents=True)
             lock = b'[[package]]\nname = "setuptools"\nversion = "81.0.0"\nwheels = [{ url = "https://example.invalid/setuptools-py3-none-any.whl", hash = "sha256:' + b"1" * 64 + b'" }]\n'
@@ -218,16 +219,16 @@ class ProvenanceTests(unittest.TestCase):
 
             def fake_git(worktree, *args):
                 if args == ("rev-parse", "HEAD"):
-                    value = prepare_image.SOURCE_COMMIT if Path(worktree) == source else prepare_image.FACTORY_COMMIT
+                    value = prepare_image.SOURCE_COMMIT if Path(worktree) == source else factory_commit
                     return value.encode()
                 if args[0] in ("status", "diff"):
                     return b""
                 if args == ("show", f"{prepare_image.SOURCE_COMMIT}:uv.lock"):
                     return lock
-                if args == ("show", f"{prepare_image.FACTORY_COMMIT}:{recipe_path}"):
+                if args == ("show", f"{factory_commit}:{recipe_path}"):
                     return committed
                 for name, blob in committed_files.items():
-                    if args == ("show", f"{prepare_image.FACTORY_COMMIT}:modal/{name}"):
+                    if args == ("show", f"{factory_commit}:modal/{name}"):
                         return blob
                 raise AssertionError(f"Unexpected fake Git read: {args}")
 
@@ -240,7 +241,8 @@ class ProvenanceTests(unittest.TestCase):
 
             with patch.object(prepare_image, "git", side_effect=fake_git), \
                     patch.object(prepare_image.subprocess, "run", side_effect=fake_archive):
-                record = prepare_image.prepare(source, factory, root / "prepared")
+                record = prepare_image.prepare(source, factory, root / "prepared", factory_commit=factory_commit)
+            self.assertEqual(record["factory_commit"], factory_commit)
             self.assertEqual((root / "prepared/context/Dockerfile.runtime").read_bytes(), committed)
             self.assertEqual(record["factory_recipe_git_blob_sha256"], hashlib.sha256(committed).hexdigest())
             self.assertEqual((factory / recipe_path).read_bytes(), b"dirty unreviewed working recipe\n")
