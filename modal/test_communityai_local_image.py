@@ -200,6 +200,7 @@ class ProvenanceTests(unittest.TestCase):
             (source / "uv.lock").write_bytes(lock)
             committed_files = {
                 "communityai_bootstrap.py": b"# reviewed bootstrap\n",
+                "communityai_launch_contract.py": b"# reviewed snapshot launch contract\n",
                 "communityai_runtime.py": f'SOURCE_COMMIT = "{prepare_image.SOURCE_COMMIT}"\n'.encode(),
                 "communityai_runtime_watchdog.py": b"# reviewed watchdog\n",
                 "communityai-model-manifest.json": b'{"reviewed": true}\n',

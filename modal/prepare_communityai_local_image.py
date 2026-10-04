@@ -16,7 +16,7 @@ import subprocess
 import tarfile
 import tomllib
 
-SOURCE_COMMIT = "2d08f31aa58c2c7b49304d0367ab51ae9aaccb11"
+SOURCE_COMMIT = "681deb528a2d83a354a991a032c6ffa8d14a4242"
 FACTORY_COMMIT = "0a72966f8b175ad44cff476ed2c59b73ba18c066"
 PYTHON_IMAGE = "python:3.12.13-slim-bookworm@sha256:6e13e65c55e33adf203d77ee371cf8bf5d81bd4902ef07565721f46bf44917af"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.11.21@sha256:6f1fa8fc4040ad7197d7e652057219871e5f6640abfe2b790f1419fdb2319e6b"
@@ -57,7 +57,7 @@ def prepare(source, factory, destination, *, factory_commit=FACTORY_COMMIT):
         raise ValueError("Exported lock differs from the exact committed blob")
     factory_context = context / "factory"
     factory_context.mkdir()
-    for name in ("communityai_bootstrap.py", "communityai_runtime.py", "communityai_runtime_watchdog.py",
+    for name in ("communityai_bootstrap.py", "communityai_launch_contract.py", "communityai_runtime.py", "communityai_runtime_watchdog.py",
                  "communityai-model-manifest.json"):
         # Git blobs preserve exact reviewed bytes, including the manifest's
         # raw-file pin, independently of dirty files or checkout line endings.
