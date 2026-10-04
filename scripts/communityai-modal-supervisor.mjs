@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { FactoryControl, digest } from '../src/control.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
 import { ModalJournal } from './modal-pilot.mjs';
@@ -12,6 +13,8 @@ import { ModalJournal } from './modal-pilot.mjs';
 export const COMMUNITYAI_ROLES = Object.freeze(['bootstrap', 'worker_0', 'worker_1', 'text_peer']);
 const MANIFEST = 'sha256:aef22f8678f9c5dcc5315913cf1cf584fa9e6c2fba8d064f715d78d823c9f056';
 const REVISION = '70d244cc86ccca08cf5af4e1e306ecf908b1ad5e';
+const INDEX_SIZE = 25605;
+const INDEX_SHA256 = '0d660e94b165eb912669a5249dff44b83188c4777a07ddb9611fb78d91b0578d';
 const SPEC_FIELDS = ['runId', 'appName', 'appId', 'imageRef', 'imageId', 'volumeId', 'volumeEvidenceSha256',
   'manifestDigest', 'modelRevision', 'expiresAtUnix', 'reservationId', 'ceilingCents', 'gpu'];
 const RETIRED_STATES = new Set(['terminate_requested_unverified', 'terminate_pending', 'sandbox_terminal_observed']);
@@ -23,6 +26,25 @@ function closed(value, fields) {
   check(value && typeof value === 'object' && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value))
     && Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key)));
+}
+export function prepareCommunityAiModelLaunchInput(role, input) {
+  // Pure public metadata configuration; this grants no Volume, transport,
+  // runtime, resource or inference admission. The live model hold stays ahead.
+  check(['worker_0', 'worker_1', 'text_peer'].includes(role));
+  closed(input, ['resourceId', 'formation', 'indexBase64']);
+  const prepared = snapshot(input);
+  closed(prepared, ['resourceId', 'formation', 'indexBase64']);
+  check(typeof prepared.resourceId === 'string' && /^sb-[A-Za-z0-9_-]{1,128}$/.test(prepared.resourceId), 'COMMUNITYAI_MODEL_TARGET');
+  const encoded = prepared.indexBase64;
+  check(typeof encoded === 'string' && encoded.length === INDEX_SIZE / 3 * 4
+    && /^[A-Za-z0-9+/]+$/.test(encoded), 'COMMUNITYAI_INDEX_CARRIER');
+  const bytes = Buffer.from(encoded, 'base64');
+  check(bytes.length === INDEX_SIZE && bytes.toString('base64') === encoded
+    && createHash('sha256').update(bytes).digest('hex') === INDEX_SHA256, 'COMMUNITYAI_INDEX_CARRIER');
+  closed(prepared.formation, ['run_id', 'manifest_digest', 'expires_at_unix', 'endpoints', 'bootstrap_peers']);
+  check(prepared.formation.manifest_digest === MANIFEST
+    && prepared.formation.endpoints?.[role]?.resource_id === prepared.resourceId, 'COMMUNITYAI_FORMATION');
+  return freeze(prepared);
 }
 function specInput(input) {
   closed(input, SPEC_FIELDS);
@@ -138,17 +160,29 @@ export function createCommunityAiModalSupervisor({ control, paidAdmission, manag
     }
   }
   async function createRole(role) { return perform(role, 'create-role'); }
-  async function launchRole(role, formation = null) {
+  async function launchRole(role, formation = null, indexBase64 = null) {
     check(COMMUNITYAI_ROLES.includes(role));
-    // The pinned reviewed image has no local-only artifact_root loading seam.
-    // Keep the model hold ahead of any private file, journal or driver work.
+    // The live model path still requires qualified owner runtime/cache/resource
+    // admission. Keep the hold ahead of private file, paid or driver work.
     check(role === 'bootstrap', 'COMMUNITYAI_MODEL_RUNTIME_UNQUALIFIED');
     const owned = await record(role);
     check(!RETIRED_STATES.has(owned.retirement), 'COMMUNITYAI_RETIRED_TARGET');
     const create = journal.get(keyFor(role, 'create-role'));
     check(create?.state === 'succeeded' && owned.endpoint !== null, 'COMMUNITYAI_CREATE_RECONCILIATION_REQUIRED');
-    const value = { resourceId: owned.resourceId };
-    check(formation === null, 'COMMUNITYAI_FORMATION');
+    let value;
+    if (role === 'bootstrap') {
+      check(formation === null && indexBase64 === null, 'COMMUNITYAI_FORMATION');
+      value = { resourceId: owned.resourceId };
+    } else {
+      // Preparatory carrier is unreachable until a separately reviewed hold
+      // change. It must pass before perform can admit a paid/journal intent.
+      value = prepareCommunityAiModelLaunchInput(role, { resourceId: owned.resourceId, formation, indexBase64 });
+      check(value.formation.run_id === spec.runId && value.formation.expires_at_unix === spec.expiresAtUnix, 'COMMUNITYAI_FORMATION');
+      for (const target of COMMUNITYAI_ROLES) {
+        const endpoint = (await record(target)).endpoint;
+        check(endpoint !== null && digest(value.formation.endpoints?.[target]) === digest(endpoint), 'COMMUNITYAI_FORMATION');
+      }
+    }
     return perform(role, 'launch-role', value);
   }
   async function observeRole(role) {

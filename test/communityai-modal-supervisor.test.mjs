@@ -6,7 +6,7 @@ import os from 'node:os';
 import { FactoryControl, digest } from '../src/control.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
 import { ModalJournal } from '../scripts/modal-pilot.mjs';
-import { createCommunityAiModalSupervisor, COMMUNITYAI_ROLES } from '../scripts/communityai-modal-supervisor.mjs';
+import { createCommunityAiModalSupervisor, COMMUNITYAI_ROLES, prepareCommunityAiModelLaunchInput } from '../scripts/communityai-modal-supervisor.mjs';
 
 async function fixture(t, { failed = null, cap = 10000 } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-communityai-host-'));
@@ -65,6 +65,63 @@ async function fixture(t, { failed = null, cap = 10000 } = {}) {
 }
 const snapshot = value => JSON.parse(JSON.stringify(value));
 
+test('pure model index carrier retains exact bounded metadata and synthetic formation without admission', async () => {
+  const bytes = await fs.readFile(new URL('../modal/fixtures/communityai-qwen3-model-index.json', import.meta.url));
+  const formation = { run_id: 'factory-carrier-config', manifest_digest: 'sha256:aef22f8678f9c5dcc5315913cf1cf584fa9e6c2fba8d064f715d78d823c9f056',
+    expires_at_unix: 1791119100, endpoints: {}, bootstrap_peers: [] };
+  for (const role of ['worker_0', 'worker_1', 'text_peer']) {
+    formation.endpoints[role] = { resource_id: `sb-synthetic-${role}` };
+    const input = { resourceId: `sb-synthetic-${role}`, formation, indexBase64: bytes.toString('base64') };
+    const prepared = prepareCommunityAiModelLaunchInput(role, input);
+    assert.deepEqual(Object.keys(prepared).sort(), ['formation', 'indexBase64', 'resourceId']);
+    assert.equal(Buffer.from(prepared.indexBase64, 'base64').length, 25605);
+    assert.deepEqual(Buffer.from(prepared.indexBase64, 'base64'), bytes);
+    assert.ok(Object.isFrozen(prepared)); assert.ok(Object.isFrozen(prepared.formation));
+    formation.run_id = 'factory-mutated-source';
+    assert.notEqual(prepared.formation.run_id, formation.run_id);
+    formation.run_id = 'factory-carrier-config';
+  }
+});
+
+test('pure model carrier validates and returns one exact snapshot of getter-backed configuration', async () => {
+  const bytes = await fs.readFile(new URL('../modal/fixtures/communityai-qwen3-model-index.json', import.meta.url));
+  const encoded = bytes.toString('base64');
+  const changed = Buffer.from(bytes); changed[0] ^= 1;
+  const manifest = 'sha256:aef22f8678f9c5dcc5315913cf1cf584fa9e6c2fba8d064f715d78d823c9f056';
+  let indexReads = 0, formationReads = 0, manifestReads = 0;
+  const formation = { run_id: 'factory-carrier-config', expires_at_unix: 1791119100,
+    endpoints: { worker_0: { resource_id: 'sb-synthetic-worker' } }, bootstrap_peers: [] };
+  Object.defineProperty(formation, 'manifest_digest', { enumerable: true,
+    get: () => ++manifestReads === 1 ? manifest : 'sha256:' + 'f'.repeat(64) });
+  const input = { resourceId: 'sb-synthetic-worker' };
+  Object.defineProperty(input, 'formation', { enumerable: true,
+    get: () => ++formationReads === 1 ? formation : null });
+  Object.defineProperty(input, 'indexBase64', { enumerable: true,
+    get: () => ++indexReads === 1 ? encoded : changed.toString('base64') });
+  const prepared = prepareCommunityAiModelLaunchInput('worker_0', input);
+  assert.deepEqual([indexReads, formationReads, manifestReads], [1, 1, 1]);
+  assert.equal(prepared.indexBase64, encoded);
+  assert.equal(prepared.formation.manifest_digest, manifest);
+  assert.equal(Object.getOwnPropertyDescriptor(prepared, 'indexBase64').get, undefined);
+  assert.equal(Object.getOwnPropertyDescriptor(prepared.formation, 'manifest_digest').get, undefined);
+  assert.ok(Object.isFrozen(prepared.formation.endpoints.worker_0));
+});
+
+test('pure model carrier rejects absent, oversized, noncanonical or altered bytes with no fallback', async () => {
+  const bytes = await fs.readFile(new URL('../modal/fixtures/communityai-qwen3-model-index.json', import.meta.url));
+  const input = { resourceId: 'sb-synthetic-worker', formation: { run_id: 'factory-carrier-config',
+    manifest_digest: 'sha256:aef22f8678f9c5dcc5315913cf1cf584fa9e6c2fba8d064f715d78d823c9f056', expires_at_unix: 1791119100,
+    endpoints: { worker_0: { resource_id: 'sb-synthetic-worker' } }, bootstrap_peers: [] }, indexBase64: bytes.toString('base64') };
+  const altered = Buffer.from(bytes); altered[0] ^= 1;
+  for (const encoded of [null, '', bytes, input.indexBase64 + '=', input.indexBase64 + '\n', '_'.repeat(34140), altered.toString('base64')]) {
+    assert.throws(() => prepareCommunityAiModelLaunchInput('worker_0', { ...input, indexBase64: encoded }),
+      { code: 'COMMUNITYAI_INDEX_CARRIER' });
+  }
+  assert.throws(() => prepareCommunityAiModelLaunchInput('worker_0', { ...input, indexBase64: undefined }),
+    { code: 'COMMUNITYAI_HOST_BINDING' });
+  assert.throws(() => prepareCommunityAiModelLaunchInput('worker_0', { ...input, extra: true }));
+});
+
 test('standalone bootstrap journals owned lifecycle and retains its live handle without inference admission', async t => {
   const f = await fixture(t), supervisor = f.make();
   await supervisor.createRole('bootstrap');
@@ -89,7 +146,7 @@ test('known unqualified model runtime holds the batch and model roles before any
   await assert.rejects(supervisor.launchFourRoles({ observeBootstrap: async () => { observations++; } }),
     { code: 'COMMUNITYAI_MODEL_RUNTIME_UNQUALIFIED' });
   for (const role of ['worker_0', 'worker_1', 'text_peer']) {
-    await assert.rejects(supervisor.launchRole(role, {}), { code: 'COMMUNITYAI_MODEL_RUNTIME_UNQUALIFIED' });
+    await assert.rejects(supervisor.launchRole(role, {}, 'invalid-carrier'), { code: 'COMMUNITYAI_MODEL_RUNTIME_UNQUALIFIED' });
     assert.equal(supervisor.liveHandle(role), null);
   }
   assert.equal(observations, 0); assert.equal(f.calls.length, 0); assert.equal(f.gateCalls.length, 0);

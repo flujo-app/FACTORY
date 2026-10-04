@@ -109,8 +109,12 @@ the locked source, with 101 compatible packages. Real runtime imports and all
 four role help commands passed in a network-none container. Its retained local
 image ID is
 `sha256:07fe68fbe314f5ff0bcc3ed1dd82c6644af0253bb0ee0ad410489ea1c77df405`.
-That retained image uses PR38 and lacks PR40's artifact-root interface. A fresh
-image of the current source must qualify before it can replace that evidence.
+That retained image uses PR38 and lacks PR40's artifact-root interface. A new
+local PR40 image is built and checked at
+`sha256:af68ccf4c80b9939467d7e4d4ce2198bea16aedfd2a945bccce9eef093b31116`.
+All 246 copied source files matched the exact prepared Git context; runtime
+imports and four help commands passed with networking disabled. The original
+image and its separate Linux/TLS evidence remain retained.
 Separate retained qualification matches BuildKit's compiler material to the
 inspected rootfs chain and records the compiler tag's configuration ID before
 and after the build. Those local observations do not establish an immutable
@@ -145,10 +149,12 @@ All eight declared artifacts already present in the local Hub cache passed full
 size/SHA verification and were copied into a separate plain-file snapshot.
 The 4,079,422,995 copied bytes passed an independent rehash; the source cache
 was unchanged and no download or model execution occurred. The
-[snapshot smoke](modal/smoke_communityai_snapshot.py) is prepared to check an
-actual read-only mount, writable runtime lock and rejected loader constructors
-in the new image. That container check and remote Volume qualification remain
-pending.
+[snapshot smoke](modal/smoke_communityai_snapshot.py) then passed in the new
+image: all eight files were hashed on an actual read-only mount, `blocks.lock`
+was created in separate writable scratch, and eight actual worker/text-loader
+constructors rejected missing, corrupt, extra and linked inputs. The container
+exited zero and was removed. No model loaded or inference ran. Remote Volume,
+registry image mapping and GPU/runtime qualification remain pending.
 
 Two real DHT nodes in that image then exchanged one exact short-lived value
 over loopback with both p2pd processes configured for TLS. Each same DHT instance
@@ -165,12 +171,16 @@ role resources, retains Sandbox IDs and actual raw TCP sockets, and fences
 uncertain mutations against replay. Per-role OS locks protect observations and
 checkpoint updates; terminal retirement evidence survives later running polls,
 and retired roles cannot launch. Its four-role batch and model-worker/text exec
-are explicitly held before paid creation or driver work until the reviewed
-local-only artifact loader and corresponding image qualify. Standalone
+are explicitly held before paid creation or driver work. The local image and
+snapshot checks above do not qualify the remote mounted artifacts, model runtime
+or its paid/admission authority. Standalone
 bootstrap lifecycle still requires explicit owner admission, existing hydrated
-handles and budget authority. Eleven Node and sixteen Python checks pass on
-fresh owned fixtures and SDK/driver doubles. An actual owner bridge, verified
-cache, registry image mapping, remote Original coordinator authority and live
+handles and budget authority. The exact model index now travels through the held
+Node/Python carrier without a runtime fallback. Fourteen Node and twenty-one
+Python driver checks pass in the main workspace on fresh owned fixtures and
+SDK/driver doubles; the isolated full planner/driver suite passed 38 Python
+checks. An actual owner bridge, verified remote cache, registry image mapping,
+remote Original coordinator authority and live
 distributed inference remain required.
 
 The original FACTORY controller remains paused with its $100 fully held,

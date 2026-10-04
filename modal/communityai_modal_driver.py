@@ -11,6 +11,7 @@ These observations do not authorize inference or release a spending reservation.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import hashlib
 import inspect
 import ipaddress
@@ -28,6 +29,7 @@ from communityai_bootstrap import (
     MANIFEST_DIGEST, REVISION, ROLES, build_launch_plan, create_coordinator_app,
 )
 from communityai_runtime import validate_bootstrap_config
+from communityai_launch_contract import INDEX_SHA256, INDEX_SIZE
 
 
 OPERATIONS = {"create-role", "launch-role", "terminate-role", "observe-role"}
@@ -271,6 +273,37 @@ def _endpoint(sandbox, request, resolve_ipv4):
             "listen_port": 31330, "transport": "modal-raw-tcp", "application_tls": True}, [host, port]
 
 
+def prepare_model_launch(request):
+    """Validate bounded metadata carrier and return held config, without SDK.
+
+    Synthetic formation and exact index content are configuration facts only;
+    they do not verify an artifact Volume, owned resource or live runtime.
+    """
+    if (type(request) is not dict or set(request) != {"operation", "role", "spec", "runDirectory", "input"}
+            or request["operation"] != "launch-role" or request["role"] not in {"worker_0", "worker_1", "text_peer"}):
+        raise ValueError("Closed model launch configuration required")
+    spec = validate_spec(request["spec"])
+    value = request["input"]
+    if (type(value) is not dict or set(value) != {"resourceId", "formation", "indexBase64"}
+            or type(value["resourceId"]) is not str
+            or re.fullmatch(r"sb-[A-Za-z0-9_-]{1,128}", value["resourceId"]) is None):
+        raise ValueError("Closed model target and explicit index carrier required")
+    encoded = value["indexBase64"]
+    if (type(encoded) is not str or len(encoded) != INDEX_SIZE // 3 * 4
+            or re.fullmatch(r"[A-Za-z0-9+/]+", encoded) is None):
+        raise ValueError("Exact bounded canonical checkpoint index carrier required")
+    index_bytes = base64.b64decode(encoded, validate=True)
+    if (len(index_bytes) != INDEX_SIZE or base64.b64encode(index_bytes).decode("ascii") != encoded
+            or hashlib.sha256(index_bytes).hexdigest() != INDEX_SHA256):
+        raise ValueError("Exact retained checkpoint index identity required")
+    plan = build_launch_plan(value["formation"], index_bytes=index_bytes)
+    formation = value["formation"]
+    if (formation["run_id"] != spec["runId"] or formation["expires_at_unix"] != spec["expiresAtUnix"]
+            or formation["endpoints"][request["role"]]["resource_id"] != value["resourceId"]):
+        raise ValueError("Model formation differs from its request binding")
+    return plan
+
+
 def dispatch(payload, *, host_admission, handles=None, sdk=None, resolve_ipv4=None):
     """Perform one explicitly admitted operation, without retry or inference.
 
@@ -281,14 +314,23 @@ def dispatch(payload, *, host_admission, handles=None, sdk=None, resolve_ipv4=No
     Apps, imports registry images, creates/deletes Volumes or downloads models.
     The caller must supervise this whole host invocation and retain its handle.
     """
-    payload = json.loads(canonical(payload))
-    request = _intent(payload, host_admission, observation=payload["request"]["operation"] == "observe-role")
-    # The currently reviewed image lacks the explicit local-only artifact_root
-    # seam. Offline environment variables do not disable upstream custom Hub
-    # downloads, and read-only artifacts cannot own writable blocks.lock.
+    # Current live model runtime/cache/resource admission remains unqualified.
+    # Keep the hold ahead of host gate, journal, role lock or SDK work.
     # No caller-supplied boolean or image digest can lift this Source hold.
-    if request["operation"] == "launch-role" and request["role"] != "bootstrap":
+    request = payload.get("request") if type(payload) is dict else None
+    if (type(request) is dict and request.get("operation") == "launch-role"
+            and type(request.get("role")) is str
+            and request.get("role") in {"worker_0", "worker_1", "text_peer"}):
         raise PermissionError(MODEL_RUNTIME_HOLD)
+    payload = json.loads(canonical(payload))
+    # JSON normalizes dict/str subclasses; apply the same unconditional hold
+    # to the exact plain configuration before journal or owner-gate access.
+    request = payload.get("request") if type(payload) is dict else None
+    if (type(request) is dict and request.get("operation") == "launch-role"
+            and type(request.get("role")) is str
+            and request.get("role") in {"worker_0", "worker_1", "text_peer"}):
+        raise PermissionError(MODEL_RUNTIME_HOLD)
+    request = _intent(payload, host_admission, observation=payload["request"]["operation"] == "observe-role")
     with _role_checkpoint_lock(request):
         return _dispatch_locked(payload, request, host_admission=host_admission,
                                 handles=handles, sdk=sdk, resolve_ipv4=resolve_ipv4)
@@ -299,6 +341,7 @@ def _dispatch_locked(payload, request, *, host_admission, handles, sdk, resolve_
     # protected by the same OS role lock until this invocation finishes.
     _intent(payload, host_admission, observation=request["operation"] == "observe-role")
     spec, role = request["spec"], request["role"]
+    model_plan = prepare_model_launch(request) if request["operation"] == "launch-role" and role != "bootstrap" else None
     if (type(handles) is not dict or set(handles) != {"app", "image", "volume", "client"}
             or handles["client"] is None or handles["app"].app_id != spec["appId"]
             or handles["image"].object_id != spec["imageId"]
@@ -339,6 +382,13 @@ def _dispatch_locked(payload, request, *, host_admission, handles, sdk, resolve_
         raise ValueError("Exact operation target required")
     if request["operation"] == "launch-role" and record["retirement"] in RETIRED_STATES:
         raise PermissionError("Retired role cannot launch")
+    if model_plan is not None:
+        formation = request["input"]["formation"]
+        if formation["endpoints"][role] != record["endpoint"]:
+            raise ValueError("Formation differs from the original resource binding")
+        for target in ROLES:
+            if formation["endpoints"][target] != _owned({**request, "role": target})["endpoint"]:
+                raise ValueError("Formation contains a different owned role endpoint")
     if request["operation"] == "terminate-role" and record["retirement"] == "sandbox_terminal_observed":
         if set(request["input"]) != {"resourceId"} or type(record.get("returncode")) is not int:
             raise ValueError("Retained actual terminal result required")
@@ -394,19 +444,10 @@ def _dispatch_locked(payload, request, *, host_admission, handles, sdk, resolve_
         _sdk_call(payload, host_admission, lambda: sandbox.filesystem.write_bytes(canonical(config), "/run/communityai/bootstrap.json"))
         argv = ["python", "-u", "/opt/factory/communityai_runtime_watchdog.py", "--config", "/run/communityai/bootstrap.json"]
     else:
-        if set(request["input"]) != {"resourceId", "formation"}:
-            raise ValueError("Closed observed formation launch required")
-        formation = request["input"]["formation"]
-        plan = build_launch_plan(formation)
-        if (formation["run_id"] != spec["runId"] or formation["expires_at_unix"] != spec["expiresAtUnix"]
-                or formation["endpoints"][role] != record["endpoint"]):
-            raise ValueError("Formation differs from the original resource binding")
-        for target in ROLES:
-            target_request = {**request, "role": target}
-            if formation["endpoints"][target] != _owned(target_request)["endpoint"]:
-                raise ValueError("Formation contains a different owned role endpoint")
-        argv = (plan["text_peer"]["argv"] if role == "text_peer" else
-                next(worker["argv"] for worker in plan["workers"] if worker["role"] == role))
+        # The exact carrier/plan and owned endpoint join were checked before
+        # any SDK call or dispatch claim. The unconditional model hold remains.
+        argv = (model_plan["text_peer"]["argv"] if role == "text_peer" else
+                next(worker["argv"] for worker in model_plan["workers"] if worker["role"] == role))
     remaining = math.ceil(spec["expiresAtUnix"] - time.time())
     if remaining <= 0:
         raise ValueError("Role expired before exec")

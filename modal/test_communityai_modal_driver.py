@@ -1,6 +1,7 @@
 """Fresh owned SQLite + SDK doubles only: no provider, credential or model call."""
 
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import copy
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import communityai_modal_driver as driver
+from test_communityai_bootstrap import formation
 
 
 NOW = 1791118800
@@ -202,6 +204,105 @@ class DriverTests(unittest.TestCase):
             self.assertFalse((self.f.directory / f"{role}-launch-role-dispatch.private.json").exists())
             self.assertFalse((self.f.directory / f"{role}-checkpoint.lock").exists())
         self.assertEqual(self.f.calls, [])
+        self.assertEqual(self.f.gates, [])
+
+    def test_model_hold_precedes_host_gate_journal_lock_sdk_and_carrier_validation(self):
+        payload = {"request": {"operation": "launch-role", "role": "worker_0", "input": {"indexBase64": "invalid"}}}
+        with patch.object(driver, "_intent", side_effect=AssertionError("Journal/gate must not run")), \
+                patch.object(driver, "prepare_model_launch", side_effect=AssertionError("Carrier must not run")):
+            with self.assertRaisesRegex(PermissionError, "local-only artifact_root"):
+                driver.dispatch(payload, host_admission=None)
+        self.assertEqual(self.f.calls, [])
+        self.assertEqual(self.f.gates, [])
+
+    def test_canonicalized_dict_and_str_subclasses_cannot_bypass_public_model_hold(self):
+        class DictSubclass(dict):
+            pass
+
+        class StrSubclass(str):
+            pass
+
+        with patch.object(driver, "_intent", side_effect=AssertionError("Journal/gate must not run")), \
+                patch.object(driver, "_role_checkpoint_lock", side_effect=AssertionError("Lock must not run")), \
+                patch.object(driver, "prepare_model_launch", side_effect=AssertionError("Carrier must not run")), \
+                patch.object(driver, "_sdk_call", side_effect=AssertionError("SDK must not run")):
+            for role in ("worker_0", "worker_1", "text_peer"):
+                request = {"operation": "launch-role", "role": role, "input": {"indexBase64": "invalid"}}
+                variants = (DictSubclass(request=request), {"request": DictSubclass(request)},
+                            {"request": {**request, "role": StrSubclass(role)}})
+                for variant, payload in enumerate(variants):
+                    with self.subTest(role=role, variant=variant), self.assertRaisesRegex(PermissionError, "local-only artifact_root"):
+                        driver.dispatch(payload, host_admission=None)
+        self.assertEqual(self.f.calls, [])
+        self.assertEqual(self.f.gates, [])
+        self.assertEqual(self.f.db.execute("SELECT COUNT(*) FROM modal_operations").fetchone()[0], 0)
+        self.assertEqual(list(self.f.directory.glob("*checkpoint*")), [])
+        self.assertEqual(list(self.f.directory.glob("*dispatch*")), [])
+
+    def test_pure_model_carrier_builds_held_plan_from_exact_bytes_without_lifecycle_work(self):
+        raw = Path(__file__).with_name("fixtures").joinpath("communityai-qwen3-model-index.json").read_bytes()
+        synthetic = formation(now=NOW)
+        synthetic["expires_at_unix"] = self.f.spec["expiresAtUnix"]
+        for role in ("worker_0", "worker_1", "text_peer"):
+            request = {"operation": "launch-role", "role": role, "spec": self.f.spec,
+                       "runDirectory": str(self.f.directory),
+                       "input": {"resourceId": synthetic["endpoints"][role]["resource_id"],
+                                 "formation": synthetic, "indexBase64": base64.b64encode(raw).decode("ascii")}}
+            plan = driver.prepare_model_launch(request)
+            self.assertEqual(plan["status"], "model_runtime_held")
+            self.assertFalse(plan["model_exec_allowed"])
+            self.assertEqual(plan["admission"], "NO_ADMISSION")
+            self.assertEqual(plan["formation_provenance"], "not_authenticated")
+            self.assertEqual(plan["index_content"]["sha256"], driver.INDEX_SHA256)
+            self.assertEqual(plan["artifact_snapshot"]["owner_verification"], "required_not_performed")
+        self.assertEqual(self.f.calls, [])
+        self.assertEqual(self.f.gates, [])
+        self.assertEqual(self.f.db.execute("SELECT COUNT(*) FROM modal_operations").fetchone()[0], 0)
+        self.assertEqual(list(self.f.directory.glob("*dispatch*")), [])
+        self.assertEqual(list(self.f.directory.glob("*checkpoint*")), [])
+
+    def test_pure_model_carrier_rejects_absent_noncanonical_or_changed_bytes_before_claim(self):
+        raw = Path(__file__).with_name("fixtures").joinpath("communityai-qwen3-model-index.json").read_bytes()
+        synthetic = formation(now=NOW)
+        synthetic["expires_at_unix"] = self.f.spec["expiresAtUnix"]
+        encoded = base64.b64encode(raw).decode("ascii")
+        request = {"operation": "launch-role", "role": "worker_0", "spec": self.f.spec,
+                   "runDirectory": str(self.f.directory), "input": {"resourceId": synthetic["endpoints"]["worker_0"]["resource_id"],
+                   "formation": synthetic, "indexBase64": encoded}}
+        changed = bytes([raw[0] ^ 1]) + raw[1:]
+        for invalid in (None, "", raw, encoded + "=", encoded + "\n", "_" * 34140, base64.b64encode(changed).decode("ascii")):
+            value = copy.deepcopy(request)
+            value["input"]["indexBase64"] = invalid
+            with self.subTest(carrier_type=type(invalid)), self.assertRaises(ValueError):
+                driver.prepare_model_launch(value)
+        missing = copy.deepcopy(request)
+        del missing["input"]["indexBase64"]
+        with self.assertRaises(ValueError):
+            driver.prepare_model_launch(missing)
+        foreign = copy.deepcopy(request)
+        foreign["input"]["resourceId"] = "sb-foreign"
+        with self.assertRaises(ValueError):
+            driver.prepare_model_launch(foreign)
+        self.assertEqual(self.f.calls, [])
+        self.assertEqual(self.f.gates, [])
+        self.assertEqual(list(self.f.directory.glob("*dispatch*")), [])
+
+    def test_future_model_preparation_rejects_bad_carrier_before_sdk_handles_or_dispatch_claim(self):
+        synthetic = formation(now=NOW)
+        synthetic["expires_at_unix"] = self.f.spec["expiresAtUnix"]
+        payload = self.f.payload("worker_0", "launch-role", {
+            "resourceId": synthetic["endpoints"]["worker_0"]["resource_id"],
+            "formation": synthetic, "indexBase64": "invalid"})
+        with driver._role_checkpoint_lock(payload["request"]), \
+                patch.object(driver, "_claim_dispatch", side_effect=AssertionError("Claim must not run")), \
+                patch.object(driver, "_sdk_call", side_effect=AssertionError("SDK must not run")):
+            # Exercise only a definite config rejection in the held internal
+            # branch; no valid model launch, public hold override or SDK use.
+            with self.assertRaisesRegex(ValueError, "checkpoint index carrier"):
+                driver._dispatch_locked(payload, payload["request"], host_admission=self.f.gate,
+                                        handles=None, sdk=None, resolve_ipv4=None)
+        self.assertEqual(self.f.calls, [])
+        self.assertEqual(list(self.f.directory.glob("*dispatch*")), [])
 
     def test_lost_exec_ack_marks_no_replay_and_owned_retirement_stays_unsettled(self):
         created = self.f.create("bootstrap")
