@@ -9,6 +9,7 @@ const canonical = v => v === null || typeof v !== 'object' ? JSON.stringify(v) :
 const sha = v => createHash('sha256').update(v).digest('hex');
 const encoded = v => Buffer.from(canonical(v));
 const proof = Buffer.from('owned-synthetic-proof');
+const pr35ReceiverNormalizedBody = '{"max_tokens":8,"messages":[{"content":"offline bridge fixture","role":"user"}],"model":"sha256:1111111111111111111111111111111111111111111111111111111111111111","n":1,"stream":true,"stream_options":{"include_usage":true},"temperature":1.0}';
 const denied = operation => assert.throws(operation, e => e.code === 'ORIGINAL_INFERENCE_DENIED' && e.message === 'Original inference provenance denied.' && !Object.hasOwn(e, 'cause'));
 function fixture({ callId = 'd'.repeat(32), taskId = 'develop', problem = 'Improve FLUJO' } = {}) {
   const nativeMission = { schemaVersion: 1, missionId: 'b'.repeat(32), cellId: 'child', app: 'factory-child', provisionKey: 'provision', worker: { workspace: 'mission', archiveSha256: 'a'.repeat(64), compatibility: { applicationVersion: '3.46.0', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, revision: 'c'.repeat(40) } }, flowId: 'flow', flowSha256: 'f'.repeat(64), paid: { provider: 'modal', ceilingCents: 500 } };
@@ -109,6 +110,29 @@ test('completion projection has a separate closed shape', () => {
 });
 test('closed chat projection accepts typed text content and declared defaults', () => {
   const r = fixture(); rebody(r, '{"enable_thinking":false,"messages":[{"content":[{"text":"hello","type":"text"}],"role":"developer"}],"model":"' + r.model.manifestDigest + '","n":1,"stream":false}'); const h = host([r]); assert.equal(h.run(encoded(r)).body.sha256, r.body.sha256);
+});
+test('synthetic original bootstrap accepts the exact PR35 receiver-normalized usage body while runtime remains held', () => {
+  const r = rebody(fixture(), pr35ReceiverNormalizedBody);
+  assert.equal(r.body.sha256, '21a0d9be9d903deba02504bb66506208338bc4423c8669a71db1904d21aa4890');
+  const h = host([r]), capability = h.bootstrap.authenticate(encoded(r), proof);
+  assert.equal(h.bootstrap.inspect(capability).runtimeAdmission, 'HOLD');
+  h.bootstrap.withVerified(capability, original => assert.equal(original.body.canonicalUtf8, pr35ReceiverNormalizedBody));
+  assert.deepEqual(h.counters, { verifier: 1, credential: 0, database: 0 });
+});
+test('invalid nested stream options and non-stream requests fail before synthetic original verification', () => {
+  const variants = [
+    pr35ReceiverNormalizedBody.replace('"stream":true', '"stream":false'),
+    pr35ReceiverNormalizedBody.replace('"include_usage":true', '"include_usage":"true"'),
+    pr35ReceiverNormalizedBody.replace('"include_usage":true', '"include_usage":1'),
+    pr35ReceiverNormalizedBody.replace('"include_usage":true', '"include_usage":null'),
+    pr35ReceiverNormalizedBody.replace('"stream_options":{"include_usage":true}', '"stream_options":{}'),
+    pr35ReceiverNormalizedBody.replace('"include_usage":true}', '"include_usage":true,"unexpected":true}'),
+  ];
+  for (const source of variants) {
+    const r = rebody(fixture(), source), h = host([r]);
+    denied(() => h.run(encoded(r)));
+    assert.deepEqual(h.counters, { verifier: 0, credential: 0, database: 0 });
+  }
 });
 test('invalid projection structure, duplicate keys, nonfinite values and tool roles fail before verification', () => {
   const valid = fixture().body.canonicalUtf8;

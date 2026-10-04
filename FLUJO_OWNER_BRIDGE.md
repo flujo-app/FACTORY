@@ -26,6 +26,8 @@ A separate R4 probe pins CommunityAI PR35 `f74e444aca25b3f6fa75107cbfd1b190cdb21
 
 R4 executes only four request-schema classes and two digest definitions extracted from pinned source. It does not run ASGI, original admission, authentication, route/model selection, response streaming, peer dispatch or a provider. The new normalized digest would require a new independently authorized original admission commitment; this fixture does not issue one or upgrade receiver qualification.
 
+The candidate v2 original-contract validator now accepts that exact R4 **receiver-normalized** body as a streaming chat binding with a closed boolean `stream_options.include_usage`; malformed or non-stream options refuse before the synthetic original verifier. Its focused contract/journal tests passed 83/83. This changes only the existing `communityai-python-json-v1` body shape. It does not bind FLUJO's distinct SDK-final wire bytes, headers or credential owner to the normalized body, supply a production original issuer, or make an ASGI or physical send attempt. The journal remains at `HOLD`.
+
 An explicit CommunityAI transport profile must preserve or deliberately bind the SDK options and exact receiver-normalized bytes. A source candidate elsewhere is not adoption. The sender, original issuer/registry, complete Flow call plan, receiver runtime and every distributed inference descendant remain open work.
 
 ## Contract and ownership

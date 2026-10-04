@@ -104,8 +104,13 @@ function validateBody(binding, model) {
   unicode(binding.canonicalUtf8); check(hex(binding.sha256) && sha(Buffer.from(binding.canonicalUtf8, 'utf8')) === binding.sha256);
   const { value: body, numbers } = bodyProjection(binding.canonicalUtf8);
   const common = ['max_tokens', 'temperature', 'top_p', 'stop'];
-  bodyClosed(body, ['model', binding.kind === 'chat' ? 'messages' : 'prompt', 'stream', 'n'], [...common, ...(binding.kind === 'chat' ? ['max_completion_tokens', 'enable_thinking'] : [])]);
+  bodyClosed(body, ['model', binding.kind === 'chat' ? 'messages' : 'prompt', 'stream', 'n'], [...common, 'stream_options', ...(binding.kind === 'chat' ? ['max_completion_tokens', 'enable_thinking'] : [])]);
   check(body.model === model.manifestDigest && typeof body.stream === 'boolean' && body.n === 1 && numbers.get('.n') === '1');
+  if (Object.hasOwn(body, 'stream_options')) {
+    check(body.stream === true);
+    bodyClosed(body.stream_options, ['include_usage']);
+    check(typeof body.stream_options.include_usage === 'boolean');
+  }
   for (const k of ['max_tokens', 'max_completion_tokens']) if (Object.hasOwn(body, k)) check(integer(body[k], 1, 1048576) && numbers.get('.' + k) === String(body[k]));
   for (const k of ['temperature', 'top_p']) if (Object.hasOwn(body, k)) check(typeof body[k] === 'number' && Number.isFinite(body[k]) && body[k] >= 0 && body[k] <= (k === 'temperature' ? 2 : 1));
   if (Object.hasOwn(body, 'enable_thinking')) check(typeof body.enable_thinking === 'boolean');
