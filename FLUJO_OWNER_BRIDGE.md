@@ -78,6 +78,18 @@ Source review locates the internal entry seam before the exported runFlow call. 
 
 The current FLUJO child issuer receives model identity without the node ID or ordinal. The first real Flow probe must therefore use one independently fixed model node at ordinal zero. Multiple slots require a typed issuer identity checked against the frozen graph and call plan; model identity and invocation order do not establish slot authority.
 
+## Proposed first real Flow probe
+
+Source review proposes a fixed Start → one Process graph with Process ID model-node and the single call slot {nodeId: model-node, ordinal: 0}. FLUJO represents model work as type process with properties.boundModel. Omitting Finish avoids its advertised handoff tool and produces the explicit no-finish-node validator warning. This is a bounded interruption/HOLD probe, not successful software delivery.
+
+Wrap the exported runFlow invocation itself in withParentStart. Initial extension validation and cancellation registration are already inside runFlow; the later bindRun hook follows preparation. Keep the engine, converter, Start/Process nodes, prompt renderer, ModelHandler, adapter routing and SDK real. An isolated fixture must replace only model/settings/storage/MCP/snapshot/statistics service responses, install transport guards before app imports, and independently freeze the graph and expected request. Ephemeral mode alone does not suppress all preparation effects.
+
+The real ModelHandler derives a prompt-cache key and builds system-message content. OpenAiAdapter conditionally emits prompt_cache_key for supported providers. Those bytes differ from the earlier adapter-only SDK44 fixture. The selected PR35 request schema forbids that undeclared cache field; the existing Original envelope2 grammar also excludes stream_options and prompt_cache_key. Do not reuse the earlier 44→21 evidence as full Flow or Original child-body qualification. The owner-bound singlePhysicalAttempt catch refuses before the adapter's ordinary cache-removal retry.
+
+Typed issuance must carry the actual node ID to the host. The host should derive ordinal zero and the root graph digest from its independently verified parent association, then keep node/ordinal/graph/start-witness bindings in an opaque child registry. Request arguments cannot supply that authority.
+
+The proposed receiver successor uses separate envelope3/authority3, receiver-comparison2 and claim-witness2 in a fresh fixture schema5. Its closed composite body independently commits exact SDK raw bytes, URL/method/non-auth headers and owner credential identity/generation, alongside exact receiver-normalized bytes and an authenticated receiver schema/normalization/runtime profile. Existing whole-call binding hashes can cover this composite body, but all plan/spec/envelope commitments must be new. Existing3/4 journals and old slots must not be reinterpreted. This is a design proposal; no schema5 implementation or actual Flow entry is qualified here. The current normalized-dictionary admission callback still lacks an authenticated raw-wire/original-proof carrier.
+
 ## Physical sender still required
 
 The eventual owner gate must recheck OFF, lease, credential generation and the correct provider budget, durably consume the physical attempt and initiate the pinned send. That gate must serialize ordinary OFF and budget mutations through the same authority. A remote approval followed by a later worker POST does not create a final OFF fence.
