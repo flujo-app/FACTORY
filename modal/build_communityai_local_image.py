@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import time
 
 
@@ -190,7 +191,16 @@ def build(prepared, *, compiler_tag, compiler_iid, runtime_tag):
               "started_at_unix": time.time(), "exit_code": None, "qualification_error": None}
 
     def retain():
-        record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        # Prepare a complete replacement beside the exclusively reserved
+        # receipt. An interrupted write leaves the prior receipt readable.
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=prepared,
+                                         prefix=record_path.name + ".", suffix=".tmp", delete=False) as replacement:
+            replacement.write(json.dumps(record, indent=2) + "\n")
+            replacement.flush()
+            os.fsync(replacement.fileno())
+        # Close the temporary handle before replacement, including on Windows.
+        # A failed preparation leaves its owned temp file for inspection.
+        os.replace(replacement.name, record_path)
 
     # Reserve this preparation before any Docker build starts. A stale exists()
     # observation cannot let another owner replace the intent or replay it.

@@ -100,9 +100,10 @@ the locked source, with 101 compatible packages. Real runtime imports and all
 four role help commands passed in a network-none container. Its retained local
 image ID is
 `sha256:07fe68fbe314f5ff0bcc3ed1dd82c6644af0253bb0ee0ad410489ea1c77df405`.
-The compiler's configuration ID and ordered rootfs chain match the actual
-BuildKit material in separate retained qualification evidence. Registry
-portability remains unqualified.
+Separate retained qualification matches BuildKit's compiler material to the
+inspected rootfs chain and records the compiler tag's configuration ID before
+and after the build. Those local observations do not establish an immutable
+compiler reference. Registry portability remains unqualified.
 
 The [local preparation helper](modal/prepare_communityai_local_image.py) exports
 the recipe and Factory runtime files from exact committed Git blobs, preserving
@@ -111,10 +112,12 @@ context. The
 [local build helper](modal/build_communityai_local_image.py) rejects changed,
 added, removed or linked context inputs, reserves its build intent exclusively,
 and retains the output configuration ID, metadata hash and BuildKit reference
-before compiler qualification. Uncertain builds cannot replay. Legacy
+before compiler qualification. Receipt updates use flushed atomic replacements,
+so interrupted writes leave the previous complete intent or PID record readable.
+Uncertain builds cannot replay. Legacy
 qualification requires a separately retained metadata witness and preserves the
 original receipt; the caller must establish that witness's historical origin.
-Seven fake-Docker provenance and concurrency checks passed. The
+Eight fake-Docker provenance, concurrency and interruption checks passed. The
 [import smoke](modal/smoke_communityai_local_image.py) checks imports and help
 commands without starting roles.
 
@@ -123,7 +126,9 @@ dependency sync, then copies Python source. An actual network-none uv dry-run
 accepted that exact metadata without README or source. This lets subsequent
 source-only edits retain the dependency layer after the first build with this
 ordering; a cache hit or build-speed gain has not been measured. The existing
-image above retains its original recipe and evidence.
+image above retains its original recipe and evidence. New preparations must
+select the exact reviewed recipe commit with `--factory-commit`; the helper's
+historical default remains pinned to the original image inputs.
 
 Two real DHT nodes in that image then exchanged one exact short-lived value
 over loopback with both p2pd processes configured for TLS. Each same DHT instance
@@ -134,6 +139,19 @@ import order from the bootstrap role and proves local transport only.
 Model cache creation, Modal tunnel reachability, distributed model inference
 and provider retirement remain unverified. Recursive provisioning and live
 queue-driven scale-to-zero also remain subsequent integration work.
+
+The [host supervisor](modal/COMMUNITYAI_SUPERVISOR.md) now journals exact Modal
+role resources, retains Sandbox IDs and actual raw TCP sockets, and fences
+uncertain mutations against replay. Per-role OS locks protect observations and
+checkpoint updates; terminal retirement evidence survives later running polls,
+and retired roles cannot launch. Its four-role batch and model-worker/text exec
+are explicitly held before paid creation or driver work until the reviewed
+local-only artifact loader and corresponding image qualify. Standalone
+bootstrap lifecycle still requires explicit owner admission, existing hydrated
+handles and budget authority. Eleven Node and sixteen Python checks pass on
+fresh owned fixtures and SDK/driver doubles. An actual owner bridge, verified
+cache, registry image mapping, remote Original coordinator authority and live
+distributed inference remain required.
 
 The original FACTORY controller remains paused with its $100 fully held,
 $0 unallocated and final spending unknown. The new cloud lane keeps separate

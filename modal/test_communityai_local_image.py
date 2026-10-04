@@ -47,6 +47,55 @@ def raced_exists(filename):
 
 
 class ExclusivityTests(unittest.TestCase):
+    def test_interrupted_receipt_replacement_preserves_prior_intent_or_pid_and_cannot_replay(self):
+        for failing_update in (1, 2):
+            with self.subTest(failing_update=failing_update), \
+                    tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
+                root = Path(folder)
+                preparation(root)
+                record_path = root / "role-build.process.json"
+                arguments = dict(compiler_tag=COMPILER_TAG, compiler_iid=COMPILER_IID, runtime_tag=RUNTIME_TAG)
+                wait_calls, prior_bytes, prepared_replacements = [], [], []
+                real_fsync = local_image.os.fsync
+                update_count = 0
+
+                def fake_popen(*args, **kwargs):
+                    self.assertEqual(json.loads(record_path.read_bytes())["phase"], "intent")
+                    return type("FakeDocker", (), {"pid": "fixture-only",
+                        "wait": lambda self: wait_calls.append("wait") or 7})()
+
+                def interrupt_replacement(descriptor):
+                    nonlocal update_count
+                    update_count += 1
+                    if update_count == failing_update:
+                        prior_bytes.append(record_path.read_bytes())
+                        temporary = list(root.glob("role-build.process.json.*.tmp"))
+                        self.assertEqual(len(temporary), 1)
+                        # Complete JSON is visible before fsync: the write was
+                        # flushed, yet the prior receipt has not been replaced.
+                        prepared_replacements.append(json.loads(temporary[0].read_bytes()))
+                        raise OSError("injected interruption preparing replacement")
+                    real_fsync(descriptor)
+
+                with patch.object(local_image, "image_id", return_value=COMPILER_IID), \
+                        patch.object(local_image.subprocess, "Popen", side_effect=fake_popen) as popen, \
+                        patch.object(local_image.os, "fsync", side_effect=interrupt_replacement), \
+                        redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(OSError, "injected interruption"):
+                        local_image.build(root, **arguments)
+                    self.assertEqual(popen.call_count, 1)
+                    self.assertEqual(record_path.read_bytes(), prior_bytes[0])
+                    retained = json.loads(prior_bytes[0])
+                    self.assertEqual(retained["phase"], "intent" if failing_update == 1 else "running")
+                    self.assertEqual(retained["pid"], None if failing_update == 1 else "fixture-only")
+                    self.assertIsNone(retained["exit_code"])
+                    self.assertEqual(wait_calls, [] if failing_update == 1 else ["wait"])
+                    self.assertEqual(prepared_replacements[0]["phase"], "running" if failing_update == 1 else "closed")
+                    with self.assertRaisesRegex(ValueError, "do not restart"):
+                        local_image.build(root, **arguments)
+                    self.assertEqual(popen.call_count, 1)
+                    self.assertEqual(record_path.read_bytes(), prior_bytes[0])
+
     def test_two_stale_absent_build_observations_start_only_one_fake_docker(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
             root = Path(folder)
