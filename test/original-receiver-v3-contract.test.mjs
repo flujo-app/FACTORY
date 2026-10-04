@@ -9,6 +9,13 @@ import { createOriginalInferenceBootstrap } from '../src/original-inference-cont
 import { createOriginalReceiverV3HeldContract, originalReceiverV3Digest } from '../src/original-receiver-v3-contract.mjs';
 
 const wireFixture = JSON.parse(readFileSync(new URL('./fixtures/real-flow-sdk-wire-299.json', import.meta.url), 'utf8'));
+// Fixed from the PR35 Pydantic/Factory ASGI capture. JSON.stringify would
+// rewrite Python's float 1.0 as 1 and change this authenticated commitment.
+const receiverNormalizedUtf8 =
+  '{"max_tokens":8,"messages":[{"content":"offline bridge fixture","role":"user"},{"content":"","role":"system"}],'
+  + '"model":"sha256:1111111111111111111111111111111111111111111111111111111111111111",'
+  + '"n":1,"prompt_cache_key":"flujo-c1c5k0kx","stream":true,"stream_options":{"include_usage":true},"temperature":1.0}';
+const receiverNormalizedSha256 = 'ab288a143d34de92156f01d0d4c4f5d05bbdc51eda4a335e16c8816205cd08b7';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const encode = value => Buffer.from(canonicalMissionPacket(value), 'utf8');
 const clone = value => structuredClone(value);
@@ -25,16 +32,14 @@ function record() {
     identitySha256: '4'.repeat(64), buildSha256: '5'.repeat(64), generationSha256: '6'.repeat(64), classification };
   const sender = { principalId: 'factory-original-fixture', role: 'physical-owner' };
   const credential = { ownerId: sender.principalId, credentialId: 'communityai-fixture', generationSha256: '7'.repeat(64) };
-  const normalized = { ...JSON.parse(wireFixture.bodyUtf8), n: 1, temperature: 1 };
-  const normalizedUtf8 = canonicalMissionPacket(normalized);
   const receiver = { profile: { format: 'factory-communityai-receiver-profile', schemaVersion: 2,
     recipientId: recipient.id, recipientOrigin: recipient.origin,
     recipientIdentitySha256: recipient.identitySha256, recipientBuildSha256: recipient.buildSha256,
     recipientGenerationSha256: recipient.generationSha256, endpoint: '/v1/chat/completions',
     ingressSchemaSha256: '8'.repeat(64), normalizerSha256: '9'.repeat(64), runtimeSha256: 'a'.repeat(64),
     bodyPolicy: 'strict-stream-usage-cache-key-v1' },
-    normalizedBody: { canonicalUtf8: normalizedUtf8, byteLength: Buffer.byteLength(normalizedUtf8),
-      sha256: sha(Buffer.from(normalizedUtf8)) } };
+    normalizedBody: { canonicalUtf8: receiverNormalizedUtf8, byteLength: Buffer.byteLength(receiverNormalizedUtf8),
+      sha256: receiverNormalizedSha256 } };
   const nativeMission = { schemaVersion: 1, missionId: 'c'.repeat(32), cellId: 'child', app: 'factory-child',
     provisionKey: 'provision', worker: { workspace: 'mission', archiveSha256: 'd'.repeat(64),
       compatibility: { applicationVersion: '3.46.0', snapshotFormatVersion: 2, layoutVersion: 2,
@@ -106,6 +111,9 @@ test('captured real Flow SDK wire is exactly 299 UTF-8 bytes with ten ordered no
   assert.equal(wireFixture.method, 'POST');
   assert.equal(wireFixture.url, 'https://communityai.invalid/v1/chat/completions');
   assert.equal(wireFixture.headers.length, 10);
+  assert.equal(Buffer.byteLength(receiverNormalizedUtf8), 307);
+  assert.equal(sha(Buffer.from(receiverNormalizedUtf8)), receiverNormalizedSha256);
+  assert.notEqual(receiverNormalizedSha256, wireFixture.bodySha256);
 });
 
 test('synthetic trusted pre-POST projection yields only a held comparison and v2 witness candidate', () => {
