@@ -1,5 +1,5 @@
 # Build context:
-# communityai-source/ = owner export of commit a30a95ce53e4a1eeb3242d2326d2fe1632f2f222
+# communityai-source/ = owner export of commit 2d08f31aa58c2c7b49304d0367ab51ae9aaccb11
 # factory/ = reviewed communityai_bootstrap.py, communityai_runtime.py,
 # communityai_runtime_watchdog.py and manifest
 # Owner must provide a coherent uv.lock and a digest-pinned compiler/build-tools

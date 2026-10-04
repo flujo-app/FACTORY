@@ -80,7 +80,7 @@ publication, stdout backpressure and a stopped child process. The
 [image recipe](modal/Dockerfile.communityai-runtime) requires an immutable
 Python/compiler/build-tools image and a coherent locked source context.
 Its source context is [PR38](https://github.com/flujo-app/CommunityAI/pull/38)
-revision a30a95ce53e4a1eeb3242d2326d2fe1632f2f222, containing the updated
+revision 2d08f31aa58c2c7b49304d0367ab51ae9aaccb11, containing the updated
 [PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35) and API lock repair.
 The repair preserves resolved dependency versions; images remain unbuilt.
 Model cache/image creation, actual TLS transport formation, distributed inference
