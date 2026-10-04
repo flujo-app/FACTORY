@@ -11,6 +11,15 @@ original controller and shared paid ledger. Sleeping and unresolved workers fenc
 native dispatch; wake retains a separate spending allowance. Automatic queue
 power scheduling and live Fly qualification remain open. See [WORKER_POWER.md](WORKER_POWER.md).
 
+The local model-step journal retains an immutable witness for each logical claim.
+Unclaimed or missing model steps cannot satisfy parent completion, and retries
+observe the original claim after interruption. The focused five-file capture passed
+**129/129**, including 49 journal cases, and independent review accepted the exact
+local adoption at `13d590f83aa9dc856ef1981b794f6dc1523943ab`. See
+[the journal guide](MODEL_STEP_JOURNAL.md) and
+[the next offline FLUJO bridge plan](FLUJO_OWNER_BRIDGE.md). Original live migration,
+physical sending and provider admission remain held.
+
 The controller records missions, delegated allocations, cells, task ownership,
 candidate reviews, messages and external-effect receipts in SQLite. The gateway
 admits an effect before dispatch and preserves uncertainty across interruption.
