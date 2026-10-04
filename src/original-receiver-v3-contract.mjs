@@ -14,6 +14,7 @@ const HEADER_NAMES = Object.freeze([
   'x-stainless-os', 'x-stainless-package-version', 'x-stainless-retry-count',
   'x-stainless-runtime', 'x-stainless-runtime-version'
 ]);
+const heldResults = new WeakMap();
 const typed = Object.getPrototypeOf(Uint8Array.prototype);
 const byteLength = Object.getOwnPropertyDescriptor(typed, 'byteLength').get;
 const byteOffset = Object.getOwnPropertyDescriptor(typed, 'byteOffset').get;
@@ -52,6 +53,11 @@ function canonical(value, depth = 0, state = { nodes: 0 }) {
   }).join(',') + '}';
 }
 export const originalReceiverV3Digest = value => sha(Buffer.from(canonical(value), 'utf8'));
+/** Read a genuine held result without accepting a serialized/caller-made echo. */
+export function withOriginalReceiverV3HeldResult(result, reader) {
+  check(result && !types.isProxy(result) && heldResults.has(result) && typeof reader === 'function');
+  return reader(heldResults.get(result));
+}
 const equal = (a, b) => canonical(a) === canonical(b);
 function utf8(value, length, hash) {
   unicode(value);
@@ -273,8 +279,10 @@ export function createOriginalReceiverV3HeldContract(configuration) {
         senderPrincipalId: record.sender.principalId,
         credentialGenerationSha256: record.credential.generationSha256,
         runtimeAdmission: 'HOLD', physicalAttempt: 'NONE' });
-      return Object.freeze({ comparison, comparisonSha256, claimWitness,
+      const result = Object.freeze({ comparison, comparisonSha256, claimWitness,
         claimWitnessSha256: originalReceiverV3Digest(claimWitness), runtimeAdmission: 'HOLD' });
+      heldResults.set(result, Object.freeze({ record, result }));
+      return result;
     }
   });
 }

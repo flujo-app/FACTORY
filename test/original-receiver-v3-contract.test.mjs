@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { canonicalMissionPacket, nativeMissionEffectKey, nativeMissionRequest } from '../src/native-mission-contract.mjs';
 import { createOriginalInferenceBootstrap } from '../src/original-inference-contract.mjs';
 import { createOriginalReceiverV3HeldContract, originalReceiverV3Digest } from '../src/original-receiver-v3-contract.mjs';
+import { createOriginalReceiverPostReceiptJoin } from '../src/original-receiver-post-receipt-contract.mjs';
 
 const wireFixture = JSON.parse(readFileSync(new URL('./fixtures/real-flow-sdk-wire-299.json', import.meta.url), 'utf8'));
 // Fixed from the PR35 Pydantic/Factory ASGI capture. JSON.stringify would
@@ -205,4 +206,145 @@ test('version collision, missing observer and caller-made capability cannot ente
   assert.equal(f.contract.compareHeld(cap).runtimeAdmission, 'HOLD');
   const old = createOriginalInferenceBootstrap({ issuerId: 'fixture-issuer', keyId: 'fixture-key', verifyOriginal() { throw new Error('not reached'); } });
   assert.throws(() => old.authenticate(f.bytes, proof), error => error.code === 'ORIGINAL_INFERENCE_DENIED');
+});
+
+const postDenied = (operation, label = '') => assert.throws(operation,
+  error => error.code === 'ORIGINAL_RECEIVER_POST_RECEIPT_DENIED', label);
+const receiverProof = Buffer.from('synthetic-receiver-receipt-proof');
+function postFixture() {
+  const r = record(), f = host(r), capability = f.contract.authenticate(f.bytes, proof);
+  const held = f.contract.compareHeld(capability);
+  const policy = { format: 'factory-original-receiver-proxy-policy', schemaVersion: 1,
+    generationSha256: 'c'.repeat(64), senderUrl: r.wire.url, receiverRoute: '/v1/chat/completions',
+    methodTransform: 'preserve-post', bodyTransform: 'identity-utf8', headerRemovals: [], headerAdditions: [],
+    transportGenerationSha256: 'd'.repeat(64) };
+  const observation = { format: 'communityai-factory-asgi-ingress-observation', schemaVersion: 2,
+    method: 'POST', route: '/v1/chat/completions', headers: clone(r.wire.headers),
+    rawBodyByteLength: r.wire.bodyByteLength, rawBodySha256: r.wire.bodySha256,
+    normalizedBodySha256: r.receiver.normalizedBody.sha256, observationSha256: '' };
+  rehashObservation(observation);
+  const receipt = { format: 'factory-original-receiver-post-receipt', schemaVersion: 1,
+    held: { envelopeSha256: held.claimWitness.envelopeSha256, comparisonSha256: held.comparisonSha256,
+      claimWitnessSha256: held.claimWitnessSha256 },
+    attempt: { id: 'e'.repeat(32), requestId: r.call.requestId, nonce: r.call.nonce,
+      senderPrincipalId: r.sender.principalId, credentialOwnerId: r.credential.ownerId,
+      credentialId: r.credential.credentialId, credentialGenerationSha256: r.credential.generationSha256,
+      channelBindingSha256: 'f'.repeat(64), method: r.wire.method, url: r.wire.url,
+      headersSha256: r.wire.headersSha256, bodySha256: r.wire.bodySha256,
+      bodyByteLength: r.wire.bodyByteLength },
+    proxyPolicySha256: originalReceiverV3Digest(policy),
+    receiver: { recipientId: r.recipient.id, identitySha256: r.recipient.identitySha256,
+      buildSha256: r.recipient.buildSha256, generationSha256: r.recipient.generationSha256,
+      profileSha256: originalReceiverV3Digest(r.receiver.profile),
+      transport: { principalId: r.sender.principalId, channelBindingSha256: 'f'.repeat(64),
+        generationSha256: policy.transportGenerationSha256 }, observation },
+    state: 'ASGI_OBSERVED_BEFORE_DISPATCH' };
+  return { r, held, policy, receipt };
+}
+function rehashObservation(observation) {
+  observation.observationSha256 = originalReceiverV3Digest({ format: observation.format,
+    schemaVersion: observation.schemaVersion, method: observation.method, route: observation.route,
+    headers: observation.headers, rawBodyBytes: observation.rawBodyByteLength,
+    rawBodySha256: observation.rawBodySha256, normalizedBodySha256: observation.normalizedBodySha256 });
+}
+function postJoin(policy, signedReceipt, { senderAuth = true, receiverAuth = true } = {}) {
+  let senderCalls = 0, receiverCalls = 0;
+  const joined = createOriginalReceiverPostReceiptJoin({ proxyPolicy: policy,
+    verifySenderAttempt({ attempt, heldWitnessSha256 }) {
+      senderCalls++;
+      assert.equal(Object.isFrozen(attempt), true);
+      assert.deepEqual(attempt, signedReceipt.attempt);
+      return { format: 'factory-original-sender-attempt-authentication', schemaVersion: 1,
+        attemptId: attempt.id, attemptSha256: senderAuth ? originalReceiverV3Digest(attempt) : '0'.repeat(64),
+        heldWitnessSha256, senderPrincipalId: attempt.senderPrincipalId,
+        credentialGenerationSha256: attempt.credentialGenerationSha256,
+        channelBindingSha256: attempt.channelBindingSha256 };
+    },
+    verifyReceiverReceipt({ receiptBytes, proofBytes, receiptSha256 }) {
+      receiverCalls++;
+      assert.deepEqual(proofBytes, receiverProof);
+      assert.deepEqual(receiptBytes, encode(signedReceipt));
+      const receiver = signedReceipt.receiver, transport = receiver.transport;
+      return { format: 'factory-original-receiver-receipt-authentication', schemaVersion: 1,
+        receiptSha256: receiverAuth ? receiptSha256 : '0'.repeat(64), attemptId: signedReceipt.attempt.id,
+        recipientId: receiver.recipientId, recipientIdentitySha256: receiver.identitySha256,
+        recipientBuildSha256: receiver.buildSha256, recipientGenerationSha256: receiver.generationSha256,
+        receiverProfileSha256: receiver.profileSha256,
+        transportPrincipalId: transport.principalId, channelBindingSha256: transport.channelBindingSha256,
+        transportGenerationSha256: transport.generationSha256,
+        proxyPolicySha256: signedReceipt.proxyPolicySha256 };
+    } });
+  return { joined, get senderCalls() { return senderCalls; }, get receiverCalls() { return receiverCalls; } };
+}
+
+test('separate signed post receipt joins exact ASGI v2 observation under an explicit identity proxy profile', () => {
+  const { held, policy, receipt } = postFixture();
+  assert.equal(Buffer.byteLength(receiverNormalizedUtf8), 307);
+  assert.equal(receipt.receiver.observation.observationSha256,
+    'f74a1280c837ad1511adacc001b5ed8991f6f7b208c030854f2a7e71bf2dd51e');
+  const host = postJoin(policy, receipt);
+  const result = host.joined.join(held, encode(receipt), receiverProof);
+  assert.equal(host.senderCalls, 1);
+  assert.equal(host.receiverCalls, 1);
+  assert.equal(result.senderAttemptId, receipt.attempt.id);
+  assert.equal(result.receiverObservationSha256, receipt.receiver.observation.observationSha256);
+  assert.equal(result.runtimeAdmission, 'HOLD');
+  assert.equal(result.physicalSendAuthority, 'NONE');
+  assert.equal(result.replayDisposition, 'UNRESOLVED');
+  assert.equal(result.receiptSha256, sha(encode(receipt)));
+});
+
+test('four ASGI routing headers require a separately pinned proxy addition profile', () => {
+  const { held, policy, receipt } = postFixture();
+  const additions = [['http-referer', 'https://example.invalid'], ['openai-organization', 'org-fixture'],
+    ['openai-project', 'project-fixture'], ['x-title', 'Factory fixture']];
+  receipt.receiver.observation.headers = [...receipt.receiver.observation.headers, ...additions]
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  rehashObservation(receipt.receiver.observation);
+  postDenied(() => postJoin(policy, receipt).joined.join(held, encode(receipt), receiverProof));
+  policy.headerAdditions = additions;
+  receipt.proxyPolicySha256 = originalReceiverV3Digest(policy);
+  const result = postJoin(policy, receipt).joined.join(held, encode(receipt), receiverProof);
+  assert.equal(receipt.receiver.observation.headers.length, 14);
+  assert.equal(result.runtimeAdmission, 'HOLD');
+});
+
+test('receiver receipt cannot cross a changed body, route, header, Original binding, channel or generation', () => {
+  const base = postFixture();
+  const variants = [
+    x => { x.held.envelopeSha256 = '0'.repeat(64); },
+    x => { x.held.claimWitnessSha256 = '0'.repeat(64); },
+    x => { x.attempt.id = '0'.repeat(31); },
+    x => { x.attempt.credentialGenerationSha256 = '0'.repeat(64); },
+    x => { x.attempt.headersSha256 = '0'.repeat(64); },
+    x => { x.attempt.bodySha256 = '0'.repeat(64); },
+    x => { x.attempt.channelBindingSha256 = '0'.repeat(64); },
+    x => { x.receiver.generationSha256 = '0'.repeat(64); },
+    x => { x.receiver.profileSha256 = '0'.repeat(64); },
+    x => { x.receiver.transport.principalId = 'other'; },
+    x => { x.receiver.transport.channelBindingSha256 = '0'.repeat(64); },
+    x => { x.receiver.observation.rawBodySha256 = '0'.repeat(64); rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.normalizedBodySha256 = '0'.repeat(64); rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.route = '/v1/completions'; rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.headers[0][1] = 'text/plain'; rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.headers.push(['openai-project', 'uncommitted']); rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.headers.push(['accept', 'duplicate']); rehashObservation(x.receiver.observation); },
+  ];
+  for (const [index, mutate] of variants.entries()) {
+    const changed = clone(base.receipt); mutate(changed);
+    postDenied(() => postJoin(base.policy, changed).joined.join(base.held, encode(changed), receiverProof), `variant ${index}`);
+  }
+});
+
+test('post receipt requires both independent attestations and a live held capability', () => {
+  const { held, policy, receipt } = postFixture();
+  postDenied(() => postJoin(policy, receipt, { senderAuth: false }).joined.join(held, encode(receipt), receiverProof));
+  postDenied(() => postJoin(policy, receipt, { receiverAuth: false }).joined.join(held, encode(receipt), receiverProof));
+  postDenied(() => postJoin(policy, receipt).joined.join(clone(held), encode(receipt), receiverProof));
+  const oldFormat = clone(receipt); oldFormat.schemaVersion = 2;
+  postDenied(() => postJoin(policy, oldFormat).joined.join(held, encode(oldFormat), receiverProof));
+  const rewrittenBody = { ...policy, bodyTransform: 'json-reserialize' };
+  postDenied(() => postJoin(rewrittenBody, receipt));
+  const wrongGeneration = { ...policy, generationSha256: '0'.repeat(64) };
+  postDenied(() => postJoin(wrongGeneration, receipt).joined.join(held, encode(receipt), receiverProof));
 });
