@@ -41,6 +41,14 @@ those fields and cannot substitute for the raw receipt. Passing evidence yields
 checked with unauthenticated runtime/suite provenance, NO_ADMISSION,
 not_applied and no_evidence. The existing Node contract remains separate.
 
+The adapter also accepted a retained original cloud request and response for a
+CSV job: ten project cases plus three fixed arithmetic cases, minimum three,
+with cleanup confirmed. This was a local projection of saved bytes with no job
+replay. Task and executor labels were supplied retrospectively; the actual
+executor build remains unknown. Its checked result retains NO_ADMISSION and
+not_applied. The earlier invoice fallback's original wire bytes were not retained
+and were not reconstructed for this check.
+
 The cloud owner's [code acceptance record](C:/Users/Moe/Documents/GitHub/iambrokeplshlp/artifacts/cloud-native-code-acceptance-20261004.json)
 reports a real three-test arithmetic run and a deterministic invoice fallback
 that passed 13 CPU checks with cleanup confirmed. The generated invoice V5
@@ -76,14 +84,19 @@ success record. A hard kill, nonzero exit or missing final record is
 provider supervisor must still verify and retire owned resources and descendants;
 Python cannot cancel a blocked observer thread or infer that they exited from
 the DHT's local return. Focused offline tests cover blocked startup/final
-publication, stdout backpressure and a stopped child process. The
+publication, stdout backpressure and a stopped child process. All 21 focused
+cases passed in a local network-none Linux Python 3.12.13 container, including
+the real full-pipe and process-group kill cases. DHT lifecycle cases use component
+doubles. The
 [image recipe](modal/Dockerfile.communityai-runtime) requires an immutable
 Python/compiler/build-tools image and a coherent locked source context.
 Its source context is [PR38](https://github.com/flujo-app/CommunityAI/pull/38)
 revision 2d08f31aa58c2c7b49304d0367ab51ae9aaccb11, containing the updated
 [PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35) and API lock repair.
-The repair preserves resolved dependency versions; images remain unbuilt.
-Model cache/image creation, actual TLS transport formation, distributed inference
+The repair preserves resolved dependency versions. A local compiler image has
+been built with Python 3.12.13 and a retained tool/package inventory; its first
+Debian package resolution was floating. The full role image build and qualification
+are in progress. Model cache creation, actual TLS transport formation, distributed inference
 and owned retirement remain unverified. Recursive provisioning and live
 queue-driven scale-to-zero also remain subsequent integration work.
 
