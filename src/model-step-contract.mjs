@@ -10,15 +10,28 @@ const proofs = new WeakMap();
 const mutationGuards = new WeakMap();
 export const MODEL_STEP_DATABASE_VERSION = 3;
 export const MODEL_PARENT_START_DATABASE_VERSION = 4;
+/** Versioned comparison commitment. It does not itself observe a receiver. */
+export function originalModelStepReceiverComparison(record) {
+  if (record.schemaVersion === 2) return {format:'factory-original-model-step-receiver-comparison',schemaVersion:1,
+    renderer:record.body.renderer,bodySha256:record.body.sha256,
+    modelManifestDigest:record.model.manifestDigest,recipientId:record.call.recipientId};
+  check(record.schemaVersion === 3 && record.plan.schemaVersion === 2,'MODEL_STEP_RECEIVER_REQUIRED');
+  return {format:'factory-original-model-step-receiver-comparison',schemaVersion:2,
+    taskId:record.task.id,specDigest:record.task.specDigest,
+    requestId:record.call.requestId,nonce:record.call.nonce,slot:record.call.slot,
+    recipientId:record.call.recipientId,modelManifestDigest:record.model.manifestDigest,
+    renderer:record.body.renderer,normalizedBodySha256:record.body.sha256,
+    receiverProfileSha256:modelStepDigest(record.receiverProfile)};
+}
 /** Pure admission-snapshot construction; this cannot open the journal's private insertion window. */
 export function modelStepClaimWitness(record, receiverSha256, { chargedCents, overCommittedCents, admittedAt }) {
-  check(receiverSha256===modelStepDigest({format:'factory-original-model-step-receiver-comparison',schemaVersion:1,
-    renderer:record.body.renderer,bodySha256:record.body.sha256,modelManifestDigest:record.model.manifestDigest,recipientId:record.call.recipientId}),'MODEL_STEP_CLAIM_REQUIRED');
+  check(receiverSha256===modelStepDigest(originalModelStepReceiverComparison(record)),'MODEL_STEP_CLAIM_REQUIRED');
   check(Number.isSafeInteger(admittedAt) && admittedAt>0 && admittedAt<record.lease.expires
     && overCommittedCents===0 && (chargedCents===null || Number.isSafeInteger(chargedCents) && chargedCents>=0 && chargedCents<record.reservation.ceilingCents), 'MODEL_STEP_CLAIM_REQUIRED');
-  const witness={format:'factory-original-model-step-claim',schemaVersion:1,effectKey:'model.'+record.call.requestId,
+  const witness={format:'factory-original-model-step-claim',schemaVersion:record.schemaVersion===3?2:1,effectKey:'model.'+record.call.requestId,
     parent:{effectKey:record.parent.effectKey,requestSha256:record.parent.requestSha256},task:{id:record.task.id,specDigest:record.task.specDigest},
     call:record.call,lease:record.lease,reservation:{...record.reservation,chargedCents},receiverSha256,
+    ...(record.schemaVersion===3?{receiverProfileSha256:modelStepDigest(record.receiverProfile),normalizedBodySha256:record.body.sha256}:{}),
     envelopeSha256:modelStepDigest(record),overCommittedCents,admittedAt};
   const witnessJson=canonical(witness);
   return {effect_key:witness.effectKey,parent_key:record.parent.effectKey,envelope_sha256:witness.envelopeSha256,
@@ -66,7 +79,7 @@ function check(value, code) { if (!value) modelStepFail(code); }
 /** Host-owned, authenticated provenance only. This proof cannot authorize a sender. */
 export function originalModelStepManifestProof(bootstrap, capability) {
   const record = withOriginalInferenceCapability(bootstrap, capability, r => r);
-  check(record.schemaVersion === 2);
+  check([2,3].includes(record.schemaVersion));
   const proof = Object.freeze(Object.create(null));
   proofs.set(proof, { record, envelopeSha256: modelStepDigest(record) });
   return proof;

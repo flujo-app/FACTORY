@@ -8,12 +8,14 @@ import { canonicalMissionPacket } from './native-mission-contract.mjs';
 import { MODEL_STEP_SCHEMA_SQL, modelStepDigest, modelStepFail, requireModelStepSchema, refuseMixedModelStepSchema,
   originalModelStepManifestProof, verifyModelStepManifestProof, installModelStepMutationGuard, guardedModelStepMutation, assertModelStepParentTerminal,
   MODEL_STEP_DATABASE_VERSION,modelStepClaimWitness,assertModelStepClaim,MODEL_PARENT_START_DATABASE_VERSION,
-  MODEL_PARENT_START_SCHEMA_SQL,modelParentStartWitness,assertModelParentStart } from './model-step-contract.mjs';
+  MODEL_PARENT_START_SCHEMA_SQL,modelParentStartWitness,assertModelParentStart,originalModelStepReceiverComparison } from './model-step-contract.mjs';
 
 const canonical = canonicalMissionPacket;
 const check = (ok, code) => { if (!ok) modelStepFail(code); };
 const keyFor = record => 'model.' + record.call.requestId;
-const callBinding = r => modelStepDigest({ call: r.call, model: r.model, recipients: r.recipients, body: r.body });
+const callBinding = r => modelStepDigest(r.schemaVersion===3
+  ? { call: r.call, model: r.model, recipients: r.recipients, body: r.body, receiverProfile: r.receiverProfile }
+  : { call: r.call, model: r.model, recipients: r.recipients, body: r.body });
 // Shared across journal instances, inaccessible to the exported generic mutation helper.
 const privateClaimWindows=new WeakMap();
 const privateParentStartWindows=new WeakMap();
@@ -82,13 +84,15 @@ export function initializeOriginalModelParentStartSchema4(control, configuration
 
 /** Ledger transitions only. Host-owned bootstrap/handles are not request arguments. No sender exists. */
 export class OriginalModelStepJournal {
-  #control; #paid; #bootstrap; #compareReceiver; #claimWindow; #parentStartWindow; #parentEntry; #parentLifetimes=new WeakMap();
-  constructor({ control, paidAdmission, bootstrap, compareReceiver = null, parentEntry = null }) {
+  #control; #paid; #bootstrap; #compareReceiver; #observeReceiver; #claimWindow; #parentStartWindow; #parentEntry; #parentLifetimes=new WeakMap();
+  constructor({ control, paidAdmission, bootstrap, compareReceiver = null, observeReceiver = null, parentEntry = null }) {
     check(control instanceof FactoryControl && paidAdmission instanceof SpendingLedger, 'MODEL_STEP_HOST_REQUIRED');
     requireModelStepSchema(control); installModelStepMutationGuard(control);
     check(bootstrap && typeof bootstrap.authenticate === 'function' && typeof bootstrap.withVerified === 'function', 'MODEL_STEP_HOST_REQUIRED');
     check(compareReceiver === null || typeof compareReceiver === 'function', 'MODEL_STEP_RECEIVER_REQUIRED');
+    check(observeReceiver === null || typeof observeReceiver === 'function', 'MODEL_STEP_RECEIVER_REQUIRED');
     this.#control = control; this.#paid = paidAdmission; this.#bootstrap = bootstrap; this.#compareReceiver = compareReceiver;
+    this.#observeReceiver = observeReceiver;
     this.#claimWindow=installPrivateClaimGuard(control);
     this.#parentStartWindow=installPrivateParentStartGuard(control);
     if (parentEntry!==null) {
@@ -103,6 +107,33 @@ export class OriginalModelStepJournal {
   }
   #record(capability) { return withOriginalInferenceCapability(this.#bootstrap, capability, r => r); }
   #receiver(record) {
+    if (record.schemaVersion===3) {
+      check(typeof this.#observeReceiver === 'function','MODEL_STEP_RECEIVER_REQUIRED');
+      let actual;
+      try {
+        // The observer receives only a selector, never the expected profile or body.
+        // A production observer must obtain these values from its independently
+        // authenticated receiver; no such adapter is configured here.
+        actual=this.#observeReceiver(Object.freeze({taskId:record.task.id,specDigest:record.task.specDigest,
+          recipientId:record.call.recipientId,requestId:record.call.requestId,nonce:record.call.nonce}));
+        if (types.isPromise(actual)) { Promise.prototype.then.call(actual,()=>{},()=>{}); modelStepFail(); }
+        check(actual && !types.isProxy(actual) && Object.getPrototypeOf(actual)===Object.prototype);
+        const expectedKeys=['format','schemaVersion','taskId','specDigest','recipientId','requestId','nonce','profile','normalizedBodyUtf8','normalizedBodySha256'];
+        const fields=Object.getOwnPropertyDescriptors(actual);
+        check(Reflect.ownKeys(fields).length===expectedKeys.length && expectedKeys.every(k=>Object.hasOwn(fields,k) && Object.hasOwn(fields[k],'value')));
+        check(actual.format==='factory-communityai-receiver-observation' && actual.schemaVersion===1
+          && actual.taskId===record.task.id && actual.specDigest===record.task.specDigest
+          && actual.recipientId===record.call.recipientId && actual.requestId===record.call.requestId
+          && actual.nonce===record.call.nonce && actual.normalizedBodyUtf8===record.body.canonicalUtf8
+          && actual.normalizedBodySha256===record.body.sha256);
+        const profile=actual.profile, expected=record.receiverProfile;
+        check(profile && !types.isProxy(profile) && Object.getPrototypeOf(profile)===Object.prototype);
+        const profileFields=Object.getOwnPropertyDescriptors(profile), keys=Object.keys(expected);
+        check(Reflect.ownKeys(profileFields).length===keys.length && keys.every(k=>Object.hasOwn(profileFields,k)
+          && Object.hasOwn(profileFields[k],'value') && profileFields[k].value===expected[k]));
+      } catch { modelStepFail('MODEL_STEP_RECEIVER_REQUIRED'); }
+      return modelStepDigest(originalModelStepReceiverComparison(record));
+    }
     check(typeof this.#compareReceiver === 'function', 'MODEL_STEP_RECEIVER_REQUIRED');
     let result;
     const expected = { format: 'factory-original-model-step-receiver-comparison', schemaVersion: 1,
