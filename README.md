@@ -95,9 +95,23 @@ revision 2d08f31aa58c2c7b49304d0367ab51ae9aaccb11, containing the updated
 [PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35) and API lock repair.
 The repair preserves resolved dependency versions. A local compiler image has
 been built with Python 3.12.13 and a retained tool/package inventory; its first
-Debian package resolution was floating. The full role image build and qualification
-are in progress. Model cache creation, actual TLS transport formation, distributed inference
-and owned retirement remain unverified. Recursive provisioning and live
+Debian package resolution was floating. The full local role image was built from
+the locked source, with 101 compatible packages. Real runtime imports and all
+four role help commands passed in a network-none container. Its retained local
+image ID is
+`sha256:07fe68fbe314f5ff0bcc3ed1dd82c6644af0253bb0ee0ad410489ea1c77df405`.
+The compiler's configuration ID and ordered rootfs chain match the actual
+BuildKit material in separate retained qualification evidence. Registry
+portability remains unqualified.
+
+Two real DHT nodes in that image then exchanged one exact short-lived value
+over loopback with both p2pd processes configured for TLS. Each same DHT instance
+shut down once with exit zero; the owned container exited zero and was removed.
+A Torch shared-memory manager remained in the snapshot before parent exit,
+explicitly recorded as unverified descendant cleanup. The smoke used a different
+import order from the bootstrap role and proves local transport only.
+Model cache creation, Modal tunnel reachability, distributed model inference
+and provider retirement remain unverified. Recursive provisioning and live
 queue-driven scale-to-zero also remain subsequent integration work.
 
 The original FACTORY controller remains paused with its $100 fully held,
