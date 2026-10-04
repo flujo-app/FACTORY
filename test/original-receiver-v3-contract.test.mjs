@@ -10,6 +10,7 @@ import { createOriginalReceiverV3HeldContract, originalReceiverV3Digest } from '
 import { createOriginalReceiverPostReceiptJoin } from '../src/original-receiver-post-receipt-contract.mjs';
 
 const wireFixture = JSON.parse(readFileSync(new URL('./fixtures/real-flow-sdk-wire-299.json', import.meta.url), 'utf8'));
+const receiverCapture = JSON.parse(readFileSync(new URL('./fixtures/communityai-v2-asgi-observation-299.json', import.meta.url), 'utf8'));
 // Fixed from the PR35 Pydantic/Factory ASGI capture. JSON.stringify would
 // rewrite Python's float 1.0 as 1 and change this authenticated commitment.
 const receiverNormalizedUtf8 =
@@ -222,11 +223,9 @@ const receiverProof = Buffer.from('synthetic-receiver-receipt-proof');
 function postFixture(policy = proxyPolicyFixture()) {
   const r = record(policy), f = host(r), capability = f.contract.authenticate(f.bytes, proof);
   const held = f.contract.compareHeld(capability);
-  const observation = { format: 'communityai-factory-asgi-ingress-observation', schemaVersion: 2,
-    method: 'POST', route: '/v1/chat/completions', headers: clone(r.wire.headers),
-    rawBodyByteLength: r.wire.bodyByteLength, rawBodySha256: r.wire.bodySha256,
-    normalizedBodySha256: r.receiver.normalizedBody.sha256, observationSha256: '' };
-  rehashObservation(observation);
+  // Captured by the pinned parent-mounted CommunityAI v2 ASGI path, not built
+  // from the expected Original record or from this receipt's attestations.
+  const observation = clone(receiverCapture.observation);
   const receipt = { format: 'factory-original-receiver-post-receipt', schemaVersion: 1,
     held: { envelopeSha256: held.claimWitness.envelopeSha256, comparisonSha256: held.comparisonSha256,
       claimWitnessSha256: held.claimWitnessSha256 },
@@ -281,8 +280,28 @@ function postJoin(policy, signedReceipt, { senderAuth = true, receiverAuth = tru
   return { joined, get senderCalls() { return senderCalls; }, get receiverCalls() { return receiverCalls; } };
 }
 
-test('separate signed post receipt joins exact ASGI v2 observation under an explicit identity proxy profile', () => {
+test('pinned mounted CommunityAI v2 ASGI observation joins only a synthetic HOLD receipt', () => {
   const { held, policy, receipt } = postFixture();
+  assert.equal(receiverCapture.format, 'factory-communityai-v2-asgi-observation-fixture');
+  assert.equal(receiverCapture.sourceCommit, 'e8f85285a974c64d5276054817dadbb0dd31c6f9');
+  assert.deepEqual(receiverCapture.sourceSha256, {
+    'src/drift/api/server.py': 'e65002729f6399baaaebf0deeed48f42edf1bee47337e5b3a1cd677bc7f12c49',
+    'src/drift/factory_admission.py': 'c38fe244152332b2c24ec07128948cc77f28aedae321e3cdd58e1d0b8430f888',
+    'src/drift/factory_receiver.py': 'c3ccb805a650ba1461c85a23bf6ee428a25acd793ca8599113394d3d1c4bd35f',
+    'tests/test_factory_receiver_v2.py': '419d66f3b22f6aa875c3f9008cce87e19f46ff621dd77b53db54c5876eeeb71a',
+    'tests/test_factory_sdk_asgi_hold.py': 'c36b50d19b74cdb9d9cb9d62a9d87fb4f3471faba271732ddb165eff6e62f598',
+  });
+  assert.equal(receiverCapture.entry, 'parent-mounted-create_factory_receiver_app_v2');
+  assert.equal(receiverCapture.requestPath, '/factory/v1/chat/completions');
+  assert.equal(receiverCapture.responseStatus, 200);
+  assert.deepEqual(receiverCapture.hostCallbacks, ['transport', 'original', 'bearer']);
+  assert.equal(receiverCapture.dispatchClaimAttempts, 1);
+  assert.equal(receiverCapture.peerAfterClaim, 0);
+  assert.equal(receiverCapture.runtimeAdmission, 'HOLD');
+  assert.deepEqual(receipt.receiver.observation.headers, wireFixture.headers);
+  assert.equal(receipt.receiver.observation.rawBodyByteLength, Buffer.byteLength(wireFixture.bodyUtf8));
+  assert.equal(receipt.receiver.observation.rawBodySha256, sha(Buffer.from(wireFixture.bodyUtf8)));
+  assert.equal(receipt.receiver.observation.normalizedBodySha256, receiverNormalizedSha256);
   assert.equal(Buffer.byteLength(receiverNormalizedUtf8), 307);
   assert.equal(receipt.receiver.observation.observationSha256,
     'f74a1280c837ad1511adacc001b5ed8991f6f7b208c030854f2a7e71bf2dd51e');
@@ -342,7 +361,9 @@ test('receiver receipt cannot cross a changed body, route, header, Original bind
     x => { x.receiver.transport.principalId = 'other'; },
     x => { x.receiver.transport.channelBindingSha256 = '0'.repeat(64); },
     x => { x.receiver.observation.rawBodySha256 = '0'.repeat(64); rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.rawBodyByteLength++; rehashObservation(x.receiver.observation); },
     x => { x.receiver.observation.normalizedBodySha256 = '0'.repeat(64); rehashObservation(x.receiver.observation); },
+    x => { x.receiver.observation.observationSha256 = '0'.repeat(64); },
     x => { x.receiver.observation.route = '/v1/completions'; rehashObservation(x.receiver.observation); },
     x => { x.receiver.observation.headers[0][1] = 'text/plain'; rehashObservation(x.receiver.observation); },
     x => { x.receiver.observation.headers.push(['openai-project', 'uncommitted']); rehashObservation(x.receiver.observation); },
