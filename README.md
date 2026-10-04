@@ -105,7 +105,9 @@ BuildKit material in separate retained qualification evidence. Registry
 portability remains unqualified.
 
 The [local preparation helper](modal/prepare_communityai_local_image.py) exports
-the exact committed recipe and records the complete context. The
+the recipe and Factory runtime files from exact committed Git blobs, preserving
+the manifest's raw hash across dirty or CRLF checkouts, and records the complete
+context. The
 [local build helper](modal/build_communityai_local_image.py) rejects changed,
 added, removed or linked context inputs, reserves its build intent exclusively,
 and retains the output configuration ID, metadata hash and BuildKit reference
@@ -115,6 +117,13 @@ original receipt; the caller must establish that witness's historical origin.
 Seven fake-Docker provenance and concurrency checks passed. The
 [import smoke](modal/smoke_communityai_local_image.py) checks imports and help
 commands without starting roles.
+
+The current recipe copies only the pinned project metadata and lock before
+dependency sync, then copies Python source. An actual network-none uv dry-run
+accepted that exact metadata without README or source. This lets subsequent
+source-only edits retain the dependency layer after the first build with this
+ordering; a cache hit or build-speed gain has not been measured. The existing
+image above retains its original recipe and evidence.
 
 Two real DHT nodes in that image then exchanged one exact short-lived value
 over loopback with both p2pd processes configured for TLS. Each same DHT instance

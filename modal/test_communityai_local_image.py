@@ -141,7 +141,7 @@ class ExclusivityTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
-    def test_dirty_working_recipe_cannot_replace_the_exact_committed_recipe(self):
+    def test_dirty_or_crlf_working_files_cannot_replace_exact_committed_blobs(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
             root = Path(folder)
             source, factory = root / "owner", root / "factory"
@@ -149,9 +149,19 @@ class ProvenanceTests(unittest.TestCase):
             (factory / "modal").mkdir(parents=True)
             lock = b'[[package]]\nname = "setuptools"\nversion = "81.0.0"\nwheels = [{ url = "https://example.invalid/setuptools-py3-none-any.whl", hash = "sha256:' + b"1" * 64 + b'" }]\n'
             (source / "uv.lock").write_bytes(lock)
-            for name in ("communityai_bootstrap.py", "communityai_runtime.py", "communityai_runtime_watchdog.py",
-                         "communityai-model-manifest.json"):
-                (factory / "modal" / name).write_text(f'SOURCE_COMMIT = "{prepare_image.SOURCE_COMMIT}"\n')
+            committed_files = {
+                "communityai_bootstrap.py": b"# reviewed bootstrap\n",
+                "communityai_runtime.py": f'SOURCE_COMMIT = "{prepare_image.SOURCE_COMMIT}"\n'.encode(),
+                "communityai_runtime_watchdog.py": b"# reviewed watchdog\n",
+                "communityai-model-manifest.json": b'{"reviewed": true}\n',
+            }
+            working_files = {}
+            for index, (name, blob) in enumerate(committed_files.items()):
+                # A normalized Git diff can hide CRLF conversion; dirty bytes
+                # also must never enter a committed-source preparation.
+                working = blob.replace(b"\n", b"\r\n") if index % 2 == 0 else b"dirty unreviewed file\n"
+                (factory / "modal" / name).write_bytes(working)
+                working_files[name] = working
             recipe_path = "modal/Dockerfile.communityai-runtime"
             (factory / recipe_path).write_bytes(b"dirty unreviewed working recipe\n")
             committed = b"FROM committed-reviewed-input\n"
@@ -166,6 +176,9 @@ class ProvenanceTests(unittest.TestCase):
                     return lock
                 if args == ("show", f"{prepare_image.FACTORY_COMMIT}:{recipe_path}"):
                     return committed
+                for name, blob in committed_files.items():
+                    if args == ("show", f"{prepare_image.FACTORY_COMMIT}:modal/{name}"):
+                        return blob
                 raise AssertionError(f"Unexpected fake Git read: {args}")
 
             def fake_archive(argv, **kwargs):
@@ -181,6 +194,10 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual((root / "prepared/context/Dockerfile.runtime").read_bytes(), committed)
             self.assertEqual(record["factory_recipe_git_blob_sha256"], hashlib.sha256(committed).hexdigest())
             self.assertEqual((factory / recipe_path).read_bytes(), b"dirty unreviewed working recipe\n")
+            for name, blob in committed_files.items():
+                self.assertEqual((root / "prepared/context/factory" / name).read_bytes(), blob)
+                self.assertEqual(record["context_files"][f"factory/{name}"], hashlib.sha256(blob).hexdigest())
+                self.assertEqual((factory / "modal" / name).read_bytes(), working_files[name])
 
     def test_added_removed_and_symbolic_context_inputs_fail_before_fake_docker(self):
         for change in ("added", "removed", "symbolic"):

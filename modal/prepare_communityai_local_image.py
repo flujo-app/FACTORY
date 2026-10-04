@@ -12,7 +12,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import tarfile
 import tomllib
@@ -60,11 +59,9 @@ def prepare(source, factory, destination, *, factory_commit=FACTORY_COMMIT):
     factory_context.mkdir()
     for name in ("communityai_bootstrap.py", "communityai_runtime.py", "communityai_runtime_watchdog.py",
                  "communityai-model-manifest.json"):
-        path = factory / "modal" / name
-        # Preserve the reviewed bytes, including the manifest's raw-file pin.
-        if git(factory, "diff", "HEAD", "--", f"modal/{name}"):
-            raise ValueError(f"Reviewed Factory file changed: {name}")
-        shutil.copyfile(path, factory_context / name)
+        # Git blobs preserve exact reviewed bytes, including the manifest's
+        # raw-file pin, independently of dirty files or checkout line endings.
+        (factory_context / name).write_bytes(git(factory, "show", f"{factory_commit}:modal/{name}"))
     lock = tomllib.loads((source_context / "uv.lock").read_text(encoding="utf-8"))
     setuptools = next(item for item in lock["package"] if item["name"] == "setuptools")
     artifact = next(item for item in setuptools["wheels"] if "py3-none-any" in item["url"])
