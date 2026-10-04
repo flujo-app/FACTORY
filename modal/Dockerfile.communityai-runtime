@@ -1,0 +1,32 @@
+# Build context:
+# communityai-source/ = owner export of commit ac790bae452be9ad2fcb9ffd7d7a4f85bd7de931
+# factory/ = reviewed communityai_bootstrap.py, communityai_runtime.py and manifest
+# Owner must provide a coherent uv.lock and a digest-pinned compiler/build-tools
+# image using Python 3.12.13, compatible with slim-bookworm. No floating apt step.
+# Current retained lock omits httpx in drift[api]. cpufeature 0.2.1 requires a
+# CPython 3.12 source build; exact setuptools/wheel/compiler inputs remain open.
+ARG BUILD_RUNTIME_IMAGE
+FROM ghcr.io/astral-sh/uv:0.11.21@sha256:6f1fa8fc4040ad7197d7e652057219871e5f6640abfe2b790f1419fdb2319e6b AS uv
+FROM ${BUILD_RUNTIME_IMAGE} AS build
+COPY --from=uv /uv /uvx /bin/
+WORKDIR /opt/communityai
+COPY communityai-source/ ./
+RUN python -c 'import platform; assert platform.python_version() == "3.12.13"' \
+    && uv venv --system-site-packages --python /usr/local/bin/python /opt/communityai/.venv \
+    && uv sync --locked --no-dev --no-install-project --no-build-isolation --reinstall --extra api --python /usr/local/bin/python \
+    && python -c 'from pathlib import Path; p=Path("/opt/communityai/.venv/pyvenv.cfg"); s=p.read_text(); assert "include-system-site-packages = true" in s; p.write_text(s.replace("include-system-site-packages = true", "include-system-site-packages = false"))' \
+    && uv pip check --python /opt/communityai/.venv/bin/python
+
+FROM python:3.12.13-slim-bookworm@sha256:6e13e65c55e33adf203d77ee371cf8bf5d81bd4902ef07565721f46bf44917af
+COPY --from=build /opt/communityai/.venv /opt/communityai/.venv
+COPY --from=build /opt/communityai/src /opt/communityai/src
+COPY factory/ /opt/factory/
+ENV PATH=/opt/communityai/.venv/bin:${PATH} \
+    PYTHONPATH=/opt/communityai/src:/opt/factory \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_IMPLICIT_TOKEN=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 PYTHONDONTWRITEBYTECODE=1 HOME=/tmp/communityai
+RUN install -d -m 0700 -o 65532 -g 65532 /run/communityai /tmp/communityai \
+    && install -d -m 0755 -o 65532 -g 65532 /models
+USER 65532:65532
+ENTRYPOINT []
+CMD ["python", "-u", "/opt/factory/communityai_runtime.py", "--help"]

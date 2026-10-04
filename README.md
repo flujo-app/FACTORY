@@ -29,6 +29,7 @@ checks an independently pinned supplied receipt against that binding. A passing
 receipt marks the proposal checked with explicitly unauthenticated provenance.
 Applied code remains not_applied, income remains no_evidence and admission is
 NO_ADMISSION; external sends require the named owner bridge.
+
 The working Python cloud executor has its own supplied-result contract in
 [src/python-cloud-job-contract.mjs](src/python-cloud-job-contract.mjs).
 bindPythonCloudJob() freezes the selected task and Python source hashes;
@@ -52,10 +53,21 @@ pinned Qwen3 1.7B manifest, two complementary block workers, a text peer and
 the actual CommunityAI coordinator APIs. A supplied four-role formation retains
 actual public TCP ports and application TLS; host admission and receiver
 authentication must be supplied by its owner. Eleven offline configuration and
-component-double lifecycle tests pass. Image/cache preparation, a real TLS DHT
-bootstrap, provider formation, distributed inference and retirement remain
-unverified. Recursive provisioning and live queue-driven scale-to-zero also
-remain subsequent integration work.
+component-double lifecycle tests pass.
+
+[modal/communityai_runtime.py](modal/communityai_runtime.py) adds the real TLS
+DHT bootstrap entry point, actual public/listen port handling, one bounded
+startup deadline, expiry/stop handling and cleanup without retry. Fourteen
+offline component-double lifecycle/recipe tests pass. The
+[image recipe](modal/Dockerfile.communityai-runtime) requires an immutable
+Python/compiler/build-tools image and a coherent locked source context.
+Its recorded receiver base is ac790bae; the updated [PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35)
+and [PR38 lock/recipe repair](https://github.com/flujo-app/CommunityAI/pull/38)
+must be integrated and source labels updated before the next image build.
+The owner repair preserves resolved dependency versions; its image is unbuilt.
+Model cache/image creation, actual TLS transport formation, distributed inference
+and owned retirement remain unverified. Recursive provisioning and live
+queue-driven scale-to-zero also remain subsequent integration work.
 
 The original FACTORY controller remains paused with its $100 fully held,
 $0 unallocated and final spending unknown. The new cloud lane keeps separate
@@ -65,8 +77,11 @@ An opt-in existing-worker power slice records owned Fly sleep/wake effects on th
 original controller and shared paid ledger. Sleeping and unresolved workers fence
 native dispatch; wake retains a separate spending allowance. Explicit native-cell
 queue power scheduling now selects idle sleep or demand wake through that same
-authority, with 87 focused local checks passing. Live Fly qualification remains
-open. See [WORKER_POWER.md](WORKER_POWER.md).
+authority, with 87 focused local checks passing. The deployed native CLI now
+accepts an explicit private powerScheduling profile; eight fake-transport CLI
+checks pass, including restart, UNKNOWN and paid-zero cases. Live Fly and new
+image qualification remain open. See [WORKER_POWER.md](WORKER_POWER.md) and
+[NATIVE_CELLS.md](NATIVE_CELLS.md).
 
 The local model-step journal retains an immutable witness for each logical claim.
 Unclaimed or missing model steps cannot satisfy parent completion, and retries
