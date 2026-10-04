@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { digest } from '../src/control.mjs';
 import { SpendingLedger } from '../src/spending.mjs';
 import { minimalFlow as astraFlow } from './cloud-pilot.mjs';
+import { createManagedCloudSourceBinding, nativeManagedCloudSourceIdentity } from '../src/adapters/managed-cloud-source.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const CONFIG_PATH = path.join(ROOT, 'modal', 'config.json');
@@ -76,10 +77,11 @@ export class ModalJournal {
 function optionsFor(input = {}) {
   const runId = input.runId ?? 'modal-20261002';
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) fail('STABLE_RUN_ID_REQUIRED');
-  const source = new URL(input.source ?? 'http://127.0.0.1:4200');
-  if (source.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(source.hostname)
-      || source.username || source.password || source.pathname !== '/' || source.search || source.hash) fail('LOOPBACK_SOURCE_REQUIRED');
-  const result = { runId, source: source.origin, environment: 'main', workspace: WORKSPACE,
+  const source = input.sourceWorkerProfilePath !== undefined && input.source === undefined
+    ? null : new URL(input.source ?? 'http://127.0.0.1:4200');
+  if (source && (source.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(source.hostname)
+      || source.username || source.password || source.pathname !== '/' || source.search || source.hash)) fail('LOOPBACK_SOURCE_REQUIRED');
+  const result = { runId, source: source?.origin ?? null, environment: 'main', workspace: WORKSPACE,
     runDirectory: input.runDirectory ?? path.join(ROOT, '.factory', runId),
     modulePath: input.modulePath ?? 'C:/Users/Moe/Documents/GitHub/flujo-cloud/lib/managed.mjs',
     sourceEvidencePath: input.sourceEvidencePath ?? path.join(ROOT, '.factory', 'federation-20261002', 'source-evidence.json'),
@@ -87,6 +89,11 @@ function optionsFor(input = {}) {
     pythonPath: input.pythonPath ?? path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
     through: input.through ?? 'flow', cleanupOnly: input.cleanupOnly === true,
     reservationId: input.reservationId ?? runId, ceilingCents: 3000 };
+  // An absent native option adds no fields to retained legacy desktop options.
+  if (input.sourceWorkerProfilePath !== undefined) {
+    if (typeof input.sourceWorkerProfilePath !== 'string' || !path.isAbsolute(input.sourceWorkerProfilePath)) fail('NATIVE_SOURCE_PROFILE_REQUIRED');
+    result.sourceWorkerProfilePath = input.sourceWorkerProfilePath;
+  }
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(result.reservationId)) fail('STABLE_RESERVATION_ID_REQUIRED');
   for (const key of ['runDirectory', 'modulePath', 'sourceEvidencePath', 'spendingPath', 'pythonPath']) if (!path.isAbsolute(result[key])) fail('ABSOLUTE_PATHS_REQUIRED');
   if (!['infra', 'direct', 'connect', 'flow'].includes(result.through)) fail('INVALID_STAGE');
@@ -139,13 +146,26 @@ async function contextFor(options, dependencies) {
     httpResumeValidation = Object.freeze({ schemaVersion: 1, protocol: 'http-range-v1', guardSha256: sha(guard) });
   }
   let managed = dependencies.managed, privateFiles = dependencies.privateFiles;
+  let nativeBinding;
+  if (options.sourceWorkerProfilePath && managed) fail('NATIVE_RAW_MANAGED_CONSTRUCTION_REQUIRED');
   if (!managed || !privateFiles) {
     const directory = path.dirname(options.modulePath);
     const loaded = await import(pathToFileURL(options.modulePath).href);
     privateFiles ??= await import(pathToFileURL(path.join(directory, 'private-files.mjs')).href);
-    managed ??= new loaded.ManagedCloud({ progress: () => {} });
+    if (!managed && options.sourceWorkerProfilePath) {
+      if (typeof privateFiles.readPrivateJson !== 'function') fail('NATIVE_PRIVATE_PROFILE_READER_REQUIRED');
+      const profile = await privateFiles.readPrivateJson(options.sourceWorkerProfilePath, { maxBytes: 4096 });
+      // Native callers may select only a private profile. Its strict origin,
+      // never the desktop4200 fallback, becomes the explicit retained option.
+      if (options.source === null) options.source = profile.origin;
+      if (profile.worker?.workspace !== WORKSPACE || profile.origin !== options.source) fail('NATIVE_FACTORY_PILOT_PROFILE_REQUIRED');
+      nativeBinding = createManagedCloudSourceBinding({ sourceWorkerProfile: profile, privateFiles,
+        nativeProfilePath: options.sourceWorkerProfilePath, fetchImpl: dependencies.fetchImpl ?? fetch });
+      managed = new loaded.ManagedCloud({ discover: nativeBinding.discover,
+        fetchImpl: dependencies.fetchImpl ?? fetch, progress: () => {} });
+    } else managed ??= new loaded.ManagedCloud({ progress: () => {} });
   }
-  return { config, modelArtifactValidation, httpResumeValidation, managed, privateFiles, fetchImpl: dependencies.fetchImpl ?? fetch,
+  return { config, modelArtifactValidation, httpResumeValidation, managed, privateFiles, nativeBinding, fetchImpl: dependencies.fetchImpl ?? fetch,
     clock: dependencies.clock ?? Date.now, driver: dependencies.driver ?? pythonDriver(options, config) };
 }
 
@@ -194,17 +214,67 @@ function pythonDriver(options, config) {
   };
 }
 
-function identityOf(source) { return { origin: source.source, instanceId: source.instanceId, appRoot: source.appRoot, dataRoot: source.dataRoot }; }
+export function modalSourceIdentity(source) {
+  const native = nativeManagedCloudSourceIdentity(source);
+  return native ?? { origin: source.source, instanceId: source.instanceId, appRoot: source.appRoot, dataRoot: source.dataRoot };
+}
+const identityOf = modalSourceIdentity;
+function nativeOwnershipEvidence(evidence, identity, options) {
+  const require = (value, fields) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+        || Object.keys(value).length !== fields.length || fields.some(key => !Object.hasOwn(value, key))) fail('NATIVE_WORKSPACE_OWNERSHIP_REQUIRED');
+  };
+  const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  require(evidence, ['format', 'schemaVersion', 'source', 'initializer', 'bootstrap', 'capture', 'baseline']);
+  require(evidence.source, ['kind', 'schemaVersion', 'origin', 'dataRoot', 'worker', 'profile', 'credential']);
+  if (evidence.format !== 'factory-modal-native-source-ownership' || evidence.schemaVersion !== 1
+      || identity.kind !== 'native-worker' || digest(identity) !== digest(evidence.source)) fail('NATIVE_SOURCE_IDENTITY_CHANGED');
+  const sourceIdentitySha256 = digest(identity), worker = identity.worker;
+  require(evidence.initializer, ['kind', 'runId', 'workspace', 'sourceRevision', 'sourceSha256', 'receiptSha256',
+    'sourceIdentitySha256', 'bootstrapArchiveSha256', 'bootstrapSourceIdentitySha256']);
+  const initializer = evidence.initializer;
+  if (initializer.kind !== 'factory-pilot-native-initializer' || initializer.runId !== options.runId
+      || initializer.workspace !== WORKSPACE || initializer.sourceRevision !== worker.compatibility.revision
+      || !hash(initializer.sourceSha256) || !hash(initializer.receiptSha256)
+      || initializer.sourceIdentitySha256 !== sourceIdentitySha256
+      || !hash(initializer.bootstrapArchiveSha256) || !hash(initializer.bootstrapSourceIdentitySha256)) fail('NATIVE_WORKSPACE_OWNERSHIP_REQUIRED');
+  for (const proof of [evidence.bootstrap, evidence.capture]) {
+    require(proof, ['workspace', 'archiveSha256', 'compatibility', 'receiptSha256', 'sourceIdentitySha256']);
+    if (proof.workspace !== WORKSPACE || !hash(proof.archiveSha256) || !hash(proof.sourceIdentitySha256)
+        || digest(proof.compatibility) !== digest(worker.compatibility) || !hash(proof.receiptSha256)) fail('NATIVE_WORKSPACE_OWNERSHIP_REQUIRED');
+  }
+  // Bootstrap and the subsequent native capture have separate archive/source
+  // identities. The initializer links the former; the served restored worker
+  // binds the latter. None of these claimed digests verify receipt bytes.
+  if (evidence.bootstrap.archiveSha256 !== initializer.bootstrapArchiveSha256
+      || evidence.bootstrap.sourceIdentitySha256 !== initializer.bootstrapSourceIdentitySha256
+      || evidence.capture.archiveSha256 !== worker.archiveSha256
+      || evidence.capture.sourceIdentitySha256 !== sourceIdentitySha256) fail('NATIVE_WORKSPACE_OWNERSHIP_REQUIRED');
+  require(evidence.baseline, ['workspace', 'models', 'flows', 'catalogSha256']);
+  if (evidence.baseline.workspace !== WORKSPACE || !Array.isArray(evidence.baseline.models) || evidence.baseline.models.length
+      || !Array.isArray(evidence.baseline.flows) || evidence.baseline.flows.length
+      || evidence.baseline.catalogSha256 !== digest({ models: [], flows: [] })) fail('NATIVE_EMPTY_BASELINE_REQUIRED');
+  // This validates closed bindings only. A qualified initializer and authentic
+  // receipt/capture verifier do not exist yet; JSON cannot admit native work.
+  return { state: 'bindings-validated-read-only', evidenceSha256: digest(evidence), initializerVerified: false,
+    receiptBytesVerified: false, executionAdmission: 'HOLD', required: 'qualified-owned-factory-pilot-initializer' };
+}
 async function sourceContext(options, context, { allowOwn = false, resources = {}, ownedFlow } = {}) {
-  const evidence = JSON.parse(await privateRead(options.sourceEvidencePath));
-  if (evidence.fixtureAlreadyExists !== false) fail('ORIGINAL_WORKSPACE_OWNERSHIP_REQUIRED');
+  const native = options.sourceWorkerProfilePath !== undefined;
+  const evidence = native ? await context.privateFiles.readPrivateJson(options.sourceEvidencePath, { maxBytes: 65536 })
+    : JSON.parse(await privateRead(options.sourceEvidencePath));
+  if (!native && evidence.fixtureAlreadyExists !== false) fail('ORIGINAL_WORKSPACE_OWNERSHIP_REQUIRED');
   const source = await context.managed.source({ source: options.source });
-  if (digest(identityOf(source)) !== digest(evidence.source)) fail('SOURCE_IDENTITY_CHANGED');
+  const identity = identityOf(source);
+  const ownership = native ? nativeOwnershipEvidence(evidence, identity, options) : null;
+  if (!native && digest(identity) !== digest(evidence.source)) fail('SOURCE_IDENTITY_CHANGED');
   const inventory = await context.managed.workspaces({ source: options.source });
   if (!inventory.workspaces.some(item => item.name === WORKSPACE)) fail('OWNED_WORKSPACE_REQUIRED');
   const read = endpoint => context.managed.json(new URL(endpoint, source.source), { token: source.token, workspace: WORKSPACE, label: 'Factory Modal fixture' });
   const [models, flows] = await Promise.all([read('/api/model'), read('/api/flow')]);
   if (!Array.isArray(models) || !Array.isArray(flows)) fail('INVALID_FIXTURE_INVENTORY');
+  if (native && (models.length || flows.length)) fail('NATIVE_EMPTY_BASELINE_REQUIRED');
   for (const model of models) {
     if (model.id === 'factory-pilot-model') {
       if (model.name !== 'gpt-6-astra' || model.provider !== 'codex' || model.adapter !== 'codex-cli' || model.ApiKey !== '' || !noAttachments(model)) fail('ORIGINAL_ASTRA_MODEL_CHANGED');
@@ -218,7 +288,7 @@ async function sourceContext(options, context, { allowOwn = false, resources = {
     const expected = flow.id === 'factory-pilot-flow' ? astraFlow() : allowOwn && flow.id === options.flowId ? ownedFlow : null;
     if (!expected || digest(select(flow, ['id', 'name', 'nodes', 'edges'])) !== digest(expected) || !noAttachments(flow)) fail('FIXTURE_FLOW_CHANGED');
   }
-  return { source, models, flows, identity: identityOf(source), originalModelCount: models.filter(item => item.id === 'factory-pilot-model').length,
+  return { source, models, flows, identity, ownership, originalModelCount: models.filter(item => item.id === 'factory-pilot-model').length,
     originalFlowCount: flows.filter(item => item.id === 'factory-pilot-flow').length };
 }
 
@@ -228,6 +298,10 @@ export async function prepareModalPilot(input = {}, dependencies = {}) {
   if (!context.config.prefetchDownload || digest(context.config.prefetchDownload) !== digest({ transport: 'http', maxWorkers: 1, hubVersion: '0.36.0' })) fail('INVALID_DOWNLOAD_PROFILE');
   modalBridgeTimeoutMs('prefetch', context.config);
   const local = await sourceContext(options, context);
+  if (context.nativeBinding) {
+    const current = await context.managed.source({ source: options.source });
+    if (digest(identityOf(current)) !== digest(local.identity)) fail('NATIVE_SOURCE_IDENTITY_CHANGED');
+  }
   const modal = await context.driver({ operation: 'prepare', ...select(options, ['runId', 'appName', 'volumeName', 'environment']),
     volumeFsVersion: context.config.volumeFsVersion, modelArtifactValidation: context.modelArtifactValidation,
     httpResumeValidation: context.httpResumeValidation });
@@ -237,10 +311,19 @@ export async function prepareModalPilot(input = {}, dependencies = {}) {
   return { mode: 'prepare-read-only', options, config: context.config, modelArtifactValidation: context.modelArtifactValidation,
     httpResumeValidation: context.httpResumeValidation,
     profile: modal.profile, workspaceName: modal.workspaceName, source: local.identity,
+    ...(local.ownership ? { nativeOwnership: local.ownership } : {}),
     originalModelCount: local.originalModelCount, originalFlowCount: local.originalFlowCount,
     appAbsent: modal.appAbsent, volumeAbsent: modal.volumeAbsent, ceilingCents: 3000,
     plannedConnection: 'Transient direct and actual FLUJO Flow smoke, then owned retirement and fixture removal.',
     enforcement: 'Shared durable reservation/admission; no App-specific provider spending cap or final meter claim.' };
+}
+
+export function modalPreparationSummary(prepared) {
+  return { state: 'prepared-read-only', runId: prepared.options.runId, environment: 'main', workspace: WORKSPACE,
+    appName: prepared.options.appName, volumeName: prepared.options.volumeName, model: prepared.config.model, revision: prepared.config.revision,
+    appAbsent: prepared.appAbsent, volumeAbsent: prepared.volumeAbsent, originalModelCount: prepared.originalModelCount,
+    originalFlowCount: prepared.originalFlowCount, ceilingCents: 3000, executionRequiresFlag: '--execute',
+    ...(prepared.nativeOwnership ? { nativeOwnership: prepared.nativeOwnership } : {}) };
 }
 
 function readWithSignal(reader, signal) {
@@ -292,7 +375,11 @@ export function completionEvidence(body, { flujo = false, expectedModel } = {}) 
 }
 
 export async function runModalPilot(input = {}, dependencies = {}) {
-  const options = optionsFor(input), context = await contextFor(options, dependencies);
+  const options = optionsFor(input);
+  // Read-only binding support grants no ownership. Hold before run storage,
+  // journal, reservation, provider, local fixture or inference mutations.
+  if (options.sourceWorkerProfilePath) fail('NATIVE_WORKSPACE_INITIALIZER_REQUIRED');
+  const context = await contextFor(options, dependencies);
   await context.privateFiles.ensurePrivateDirectory(path.dirname(options.runDirectory));
   await context.privateFiles.ensurePrivateDirectory(options.runDirectory);
   const lockPath = path.join(options.runDirectory, 'modal-pilot.lock');
@@ -644,6 +731,7 @@ export async function runModalPilot(input = {}, dependencies = {}) {
 
 function cliOptions(argv) {
   const input = {}, names = { '--run-id': 'runId', '--out': 'runDirectory', '--module-path': 'modulePath', '--source-evidence': 'sourceEvidencePath',
+    '--source-worker-profile': 'sourceWorkerProfilePath',
     '--source': 'source', '--python': 'pythonPath', '--spending': 'spendingPath', '--through': 'through', '--reservation-id': 'reservationId' };
   let execute = false;
   for (let index = 0; index < argv.length; index++) {
@@ -665,10 +753,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       if (report.state !== 'smoke-complete') process.exitCode = 1;
     } else {
       const prepared = await prepareModalPilot(input);
-      process.stdout.write(`${JSON.stringify({ state: 'prepared-read-only', runId: prepared.options.runId, environment: 'main', workspace: WORKSPACE,
-        appName: prepared.options.appName, volumeName: prepared.options.volumeName, model: prepared.config.model, revision: prepared.config.revision,
-        appAbsent: prepared.appAbsent, volumeAbsent: prepared.volumeAbsent, originalModelCount: prepared.originalModelCount,
-        originalFlowCount: prepared.originalFlowCount, ceilingCents: 3000, executionRequiresFlag: '--execute' })}\n`);
+      process.stdout.write(`${JSON.stringify(modalPreparationSummary(prepared))}\n`);
     }
   } catch { process.stdout.write(`${JSON.stringify({ state: 'requires-reconciliation', code: 'MODAL_PILOT_STOPPED' })}\n`); process.exitCode = 1; }
 }
