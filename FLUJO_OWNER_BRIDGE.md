@@ -34,6 +34,14 @@ Parent-running state is explicitly synthetic in this exercise: native execution 
 
 Useful regressions are mismatched stream/cache/body/URL/account/model projections; unavailable or ambiguous slots; credential-generation mismatch without secret access; duplicate/restarted claims; and OFF after claim without a physical send. Passing this exercise establishes request comparison and logical CAS only.
 
+## Parent start before Flow entry
+
+Preserve the production flow_call invariant: commit running before the admitted native POST, then apply the original lease/OFF/paid dispatch fence. A first model-step claim occurs inside an already-entered Flow and may follow resource, MCP, state or other preparation. Moving parent accepted-to-running into that child claim can leave an interrupted, already-executed parent recorded as accepted and incorrectly abortable. A private SQL start gate does not correct the timing.
+
+For the offline exercise, a trusted startFixtureFlow() harness seam should record an immutable fixture-start witness before internal runFlow entry. Its distinct parent kind or execution mode must be incapable of authorizing production native POST; this needs an explicit fixture contract/harness and is not an existing journal API. Retain the fresh-child requirement for an already-running authenticated parent. A combined parent/child start is appropriate only for a reduced model-only fixture with independently demonstrated absence of earlier work.
+
+Regressions must cover interruption before the first model, a pre-model synthetic effect with a started witness, duplicate/restart without Flow re-entry, unauthorized parent starts, first-child failure preserving parent start, abort refusal after entry even with zero claimed children, final admission failure preserving the start record and fixture mode retaining production HOLD. Interrupted parents remain running/unknown and observation-only; explicit qualified resume semantics remain open. The reported newer FLUJO Process guard does not establish all pre-model work as pure and remains foreign source evidence.
+
 ## Physical sender still required
 
 The eventual owner gate must recheck OFF, lease, credential generation and the correct provider budget, durably consume the physical attempt and initiate the pinned send. That gate must serialize ordinary OFF and budget mutations through the same authority. A remote approval followed by a later worker POST does not create a final OFF fence.
