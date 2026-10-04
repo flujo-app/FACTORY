@@ -104,6 +104,18 @@ The compiler's configuration ID and ordered rootfs chain match the actual
 BuildKit material in separate retained qualification evidence. Registry
 portability remains unqualified.
 
+The [local preparation helper](modal/prepare_communityai_local_image.py) exports
+the exact committed recipe and records the complete context. The
+[local build helper](modal/build_communityai_local_image.py) rejects changed,
+added, removed or linked context inputs, reserves its build intent exclusively,
+and retains the output configuration ID, metadata hash and BuildKit reference
+before compiler qualification. Uncertain builds cannot replay. Legacy
+qualification requires a separately retained metadata witness and preserves the
+original receipt; the caller must establish that witness's historical origin.
+Seven fake-Docker provenance and concurrency checks passed. The
+[import smoke](modal/smoke_communityai_local_image.py) checks imports and help
+commands without starting roles.
+
 Two real DHT nodes in that image then exchanged one exact short-lived value
 over loopback with both p2pd processes configured for TLS. Each same DHT instance
 shut down once with exit zero; the owned container exited zero and was removed.
