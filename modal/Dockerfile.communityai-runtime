@@ -1,6 +1,7 @@
 # Build context:
 # communityai-source/ = owner export of commit a30a95ce53e4a1eeb3242d2326d2fe1632f2f222
-# factory/ = reviewed communityai_bootstrap.py, communityai_runtime.py and manifest
+# factory/ = reviewed communityai_bootstrap.py, communityai_runtime.py,
+# communityai_runtime_watchdog.py and manifest
 # Owner must provide a coherent uv.lock and a digest-pinned compiler/build-tools
 # image using Python 3.12.13, compatible with slim-bookworm. No floating apt step.
 # The pinned source includes the API httpx lock repair. cpufeature 0.2.1 needs a
@@ -29,4 +30,4 @@ RUN install -d -m 0700 -o 65532 -g 65532 /run/communityai /tmp/communityai \
     && install -d -m 0755 -o 65532 -g 65532 /models
 USER 65532:65532
 ENTRYPOINT []
-CMD ["python", "-u", "/opt/factory/communityai_runtime.py", "--help"]
+CMD ["python", "-u", "/opt/factory/communityai_runtime_watchdog.py", "--help"]

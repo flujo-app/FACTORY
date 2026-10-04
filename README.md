@@ -57,8 +57,26 @@ component-double lifecycle tests pass.
 
 [modal/communityai_runtime.py](modal/communityai_runtime.py) adds the real TLS
 DHT bootstrap entry point, actual public/listen port handling, one bounded
-startup deadline, expiry/stop handling and cleanup without retry. Fourteen
-offline component-double lifecycle/recipe tests pass. The
+startup observation deadline, expiry/stop handling and cleanup without retry.
+Lifecycle observer calls have a one-second return bound. A stalled startup
+observer causes same-DHT shutdown and suppresses a concurrent final callback;
+a stalled final observer is an error after shutdown. The retained record labels
+both publication states, possible late daemon-thread side effects and unverified
+descendant retirement. On Linux the CLI writes each small JSON record directly
+to nonblocking stdout, so a full log pipe fails the publication instead of
+holding the cleanup path. Callback return means only that publication code
+returned; it does not prove external delivery.
+
+The [bootstrap watchdog](modal/communityai_runtime_watchdog.py) runs that CLI in
+an isolated Linux process group, anchors the supplied expiry to a monotonic
+deadline, requests stop and sends a hard kill if the child misses a seven-second
+cleanup grace. It inherits the child's lifecycle stream rather than inventing a
+success record. A hard kill, nonzero exit or missing final record is
+**unverified cleanup**, even if an earlier startup record was emitted. The
+provider supervisor must still verify and retire owned resources and descendants;
+Python cannot cancel a blocked observer thread or infer that they exited from
+the DHT's local return. Focused offline tests cover blocked startup/final
+publication, stdout backpressure and a stopped child process. The
 [image recipe](modal/Dockerfile.communityai-runtime) requires an immutable
 Python/compiler/build-tools image and a coherent locked source context.
 Its source context is [PR38](https://github.com/flujo-app/CommunityAI/pull/38)

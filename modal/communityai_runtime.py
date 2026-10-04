@@ -4,6 +4,9 @@ No deployment/build/resource/admission operation occurs at import. The trusted
 provider supervisor owns every start, identity file, model cache and retirement.
 The bootstrap observes only its own DHT startup; it cannot prove peer reachability,
 distributed inference, Original admission or provider retirement.
+Observer publication is bounded, but a timed-out daemon callback may act later.
+Run this CLI under communityai_runtime_watchdog.py for the outer process deadline;
+even that process exit is not descendant or provider retirement evidence.
 
 Image inputs use CommunityAI source commit a30a95ce53e4a1eeb3242d2326d2fe1632f2f222,
 its repaired API lock, and digest-pinned Python/uv images. cpufeature has no
@@ -21,9 +24,11 @@ import inspect
 import ipaddress
 import json
 import math
+import os
 from pathlib import Path
 import re
 import signal
+import sys
 import threading
 import time
 import tomllib
@@ -35,6 +40,7 @@ UV_IMAGE = "ghcr.io/astral-sh/uv:0.11.21@sha256:6f1fa8fc4040ad7197d7e65205721987
 IDENTITY_PATH = "/run/communityai/bootstrap.key"
 DOCKERFILE_PATH = Path(__file__).with_name("Dockerfile.communityai-runtime")
 ENDPOINT_FIELDS = {"resource_id", "ipv4", "public_port", "listen_port", "transport", "application_tls"}
+OBSERVER_TIMEOUT_SECONDS = 1
 
 
 class BootstrapError(RuntimeError):
@@ -115,6 +121,43 @@ async def _observe_bootstrap(_dht, node):
     return str(node.peer_id), [str(address) for address in await node.get_visible_maddrs(latest=True)]
 
 
+def _publish_bounded(observer, record, timeout):
+    """Bound a trusted callback, not its possible later side effects.
+
+    Python cannot interrupt a blocked callback. The daemon thread is deliberately
+    abandoned on timeout so the caller can close its DHT; a process supervisor
+    must still enforce a hard lifetime for this dedicated runtime process.
+    """
+    outcome, finished = {}, threading.Event()
+    snapshot = json.loads(json.dumps(record))
+
+    def invoke():
+        try:
+            if observer(snapshot) is not None:
+                raise TypeError("Lifecycle observer must return None synchronously")
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            finished.set()
+
+    threading.Thread(target=invoke, name="communityai-lifecycle-observer", daemon=True).start()
+    if not finished.wait(timeout):
+        return "stalled", TimeoutError("Lifecycle observer did not return within its publication bound")
+    if "error" in outcome:
+        return "failed", outcome["error"]
+    return "completed", None
+
+
+def _emit_cli_record(record, *, fd=None):
+    """One small raw write; the CLI makes its Linux stdout nonblocking first."""
+    payload = (json.dumps(record, allow_nan=False, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(payload) > 4096:
+        raise ValueError("Lifecycle observation is oversized")
+    target = sys.stdout.fileno() if fd is None else fd
+    if os.write(target, payload) != len(payload):
+        raise OSError("Incomplete lifecycle observation")
+
+
 def run_tls_bootstrap(config, *, stop_event=None, observer=None):
     """Run one real TLS bootstrap after the supervisor's resource admission.
 
@@ -133,7 +176,9 @@ def run_tls_bootstrap(config, *, stop_event=None, observer=None):
     record = {"run_id": config["run_id"], "resource_id": endpoint["resource_id"],
               "scope": "tls_bootstrap_only", "configuration_provenance": "not_authenticated",
               "phase": "not_started", "failure_type": None, "peer_id": None, "bootstrap_peers": [],
-              "cleanup": "not_requested", "cleanup_errors": [], "provider_retirement": "unverified"}
+              "cleanup": "not_requested", "cleanup_errors": [], "provider_retirement": "unverified",
+              "descendant_retirement": "unverified", "startup_publication": "not_attempted",
+              "final_publication": "not_attempted", "observer_late_side_effects": "none"}
     dht = None
     failure = None
     try:
@@ -175,10 +220,22 @@ def run_tls_bootstrap(config, *, stop_event=None, observer=None):
             expected = f'/ip4/{endpoint["ipv4"]}/tcp/{endpoint["public_port"]}/p2p/{peer_id}'
             if expected not in visible:
                 raise RuntimeError("Visible bootstrap address differs from the actual tunnel")
+            if stop_event.is_set() or time.time() >= config["expires_at_unix"]:
+                record["phase"] = "supervisor_stop" if stop_event.is_set() else "expiry_stop"
+                return record
             record.update(phase="started_reachability_unverified", peer_id=peer_id, bootstrap_peers=[expected])
             if observer is not None:
-                if observer(json.loads(json.dumps(record))) is not None:
-                    raise TypeError("Lifecycle observer must return None synchronously")
+                record["startup_publication"] = "in_progress"
+                try:
+                    outcome, error = _publish_bounded(observer, record, min(
+                        OBSERVER_TIMEOUT_SECONDS, max(0, config["expires_at_unix"] - time.time())))
+                except BaseException as exc:
+                    outcome, error = "failed", exc
+                record["startup_publication"] = outcome
+                if outcome == "stalled":
+                    record["observer_late_side_effects"] = "possible_stalled_daemon"
+                if error is not None:
+                    raise error
             while not stop_event.is_set():
                 if time.time() >= config["expires_at_unix"]:
                     record["phase"] = "expiry_stop"
@@ -203,11 +260,20 @@ def run_tls_bootstrap(config, *, stop_event=None, observer=None):
         else:
             record["cleanup"] = "no_dht_created"
         if observer is not None:
-            try:
-                if observer(json.loads(json.dumps(record))) is not None:
-                    raise TypeError("Lifecycle observer must return None synchronously")
-            except BaseException as exc:
-                record["cleanup_errors"].append(f"observer:{type(exc).__name__}")
+            if record["startup_publication"] == "stalled":
+                # The first callback may still run. Never start a concurrent final callback.
+                record["final_publication"] = "skipped_startup_stalled"
+            else:
+                record["final_publication"] = "in_progress"
+                try:
+                    outcome, error = _publish_bounded(observer, record, OBSERVER_TIMEOUT_SECONDS)
+                except BaseException as exc:
+                    outcome, error = "failed", exc
+                record["final_publication"] = outcome
+                if outcome == "stalled":
+                    record["observer_late_side_effects"] = "possible_stalled_daemon"
+                if error is not None:
+                    record["cleanup_errors"].append(f"observer:{type(error).__name__}")
         if failure is not None or record["cleanup_errors"] or record["cleanup"] == "dht_process_still_alive":
             raise BootstrapError(record) from failure
     return record
@@ -222,10 +288,14 @@ def main():
     if len(raw) > 16384:
         raise ValueError("Bootstrap configuration is oversized")
     config = json.loads(raw)
+    # This entry point runs as its own process. A full log pipe must not hold a
+    # buffered TextIO lock while cleanup tries to complete in another thread.
+    if sys.platform.startswith("linux"):
+        os.set_blocking(sys.stdout.fileno(), False)
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
-    run_tls_bootstrap(config, stop_event=stopped, observer=lambda record: print(json.dumps(record), flush=True))
+    run_tls_bootstrap(config, stop_event=stopped, observer=_emit_cli_record)
 
 
 if __name__ == "__main__":
