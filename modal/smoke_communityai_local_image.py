@@ -13,9 +13,10 @@ import hivemind
 import torch
 
 from drift.api.server import create_factory_app
-from drift.model_manifest import ModelManifest
+from drift.artifact_snapshot import validate_artifact_snapshot
+from drift.model_manifest import ManifestArtifactVerifier, ModelManifest
 from drift.node.discovery import ModelCoverageDiscovery
-from drift.node.loading import make_text_peer_loader
+from drift.node.loading import make_manifest_loader, make_text_peer_loader
 from drift.protocol_identity import NodeIdentity
 from drift.server.text_peer import TextPeerService
 import communityai_bootstrap
@@ -28,6 +29,10 @@ manifest = ModelManifest.load(manifest_path)
 manifest_raw_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 assert manifest.digest_id == communityai_bootstrap.MANIFEST_DIGEST
 assert manifest_raw_sha256 == communityai_bootstrap.MANIFEST_RAW_SHA256
+assert communityai_runtime.SOURCE_COMMIT == "681deb528a2d83a354a991a032c6ffa8d14a4242"
+assert "cache_only" in inspect.signature(ManifestArtifactVerifier).parameters
+assert "artifact_root" in inspect.signature(make_manifest_loader).parameters
+assert callable(validate_artifact_snapshot)
 
 
 commands = [
@@ -44,6 +49,8 @@ for command in commands:
     if result.returncode != 0:
         print(json.dumps({"phase": "help_failed", "results": results}), flush=True)
         raise SystemExit(result.returncode)
+    if command[1:3] == ["-m", "drift.cli"]:
+        assert "--artifact_root" in result.stdout, "Reviewed direct role CLI snapshot flag is missing"
 source = Path(inspect.getsourcefile(hivemind.DHT))
 print(json.dumps({"scope": "imports_and_help_only", "results": results,
                   "versions": {name: importlib.metadata.version(name)
@@ -55,6 +62,8 @@ print(json.dumps({"scope": "imports_and_help_only", "results": results,
                   "manifest_raw_sha256": manifest_raw_sha256,
                   "factory_api_callable": callable(create_factory_app),
                   "text_peer_class": TextPeerService.__name__,
+                  "direct_role_snapshot_interface_verified": True,
+                  "complete_model_snapshot_verified": False,
                   "hivemind_dht_source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                   "hivemind_constructor": str(inspect.signature(hivemind.DHT)),
                   "hivemind_run_coroutine": str(inspect.signature(hivemind.DHT.run_coroutine)),

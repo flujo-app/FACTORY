@@ -14,6 +14,11 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location("communityai_bootstrap", Path(__file__).with_name("communityai_bootstrap.py"))
 bootstrap = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bootstrap)
+INDEX_BYTES = Path(__file__).with_name("fixtures").joinpath("communityai-qwen3-model-index.json").read_bytes()
+
+
+def launch_plan(value, *, now=1000):
+    return bootstrap.build_launch_plan(value, index_bytes=INDEX_BYTES, now=now)
 
 
 def formation(now=1000):
@@ -30,10 +35,11 @@ def formation(now=1000):
 class ConfigurationTests(unittest.TestCase):
     def test_exact_manifest_and_complete_two_worker_topology(self):
         manifest = bootstrap.load_pinned_manifest()
-        plan = bootstrap.build_launch_plan(formation(), now=1000)
+        plan = launch_plan(formation(), now=1000)
         self.assertEqual(manifest["model"]["num_blocks"], 28)
         self.assertEqual([w["block_indices"] for w in plan["workers"]], ["0:14", "14:28"])
-        self.assertEqual(plan["status"], "not_started")
+        self.assertEqual(plan["status"], "model_runtime_held")
+        self.assertFalse(plan["model_exec_allowed"])
         self.assertEqual(plan["admission"], "NO_ADMISSION")
         self.assertEqual(plan["formation_provenance"], "not_authenticated")
         self.assertNotEqual(plan["manifest_raw_sha256"], plan["manifest_digest"].removeprefix("sha256:"))
@@ -61,7 +67,7 @@ class ConfigurationTests(unittest.TestCase):
             value = formation()
             mutation(value)
             with self.subTest(value=value), self.assertRaises(ValueError):
-                bootstrap.build_launch_plan(value, now=1000)
+                launch_plan(value, now=1000)
 
     def test_raw_pin_is_checked_before_using_model_identity(self):
         original = bootstrap.MANIFEST_PATH.read_bytes()
@@ -73,20 +79,20 @@ class ConfigurationTests(unittest.TestCase):
         value = formation()
         value["endpoints"]["worker_1"]["resource_id"] = value["endpoints"]["worker_0"]["resource_id"]
         with self.assertRaisesRegex(ValueError, "local sockets"):
-            bootstrap.build_launch_plan(value, now=1000)
+            launch_plan(value, now=1000)
         value["endpoints"]["worker_1"]["listen_port"] += 1
         with self.assertRaisesRegex(ValueError, "separate Modal"):
-            bootstrap.build_launch_plan(value, now=1000)
+            launch_plan(value, now=1000)
         value = formation()
         value["endpoints"]["text_peer"]["resource_id"] = value["endpoints"]["bootstrap"]["resource_id"]
         with self.assertRaisesRegex(ValueError, "local sockets"):
-            bootstrap.build_launch_plan(value, now=1000)
+            launch_plan(value, now=1000)
         value["endpoints"]["text_peer"]["listen_port"] = 31337
-        self.assertEqual(bootstrap.build_launch_plan(value, now=1000)["text_peer"]["resource_id"], "sb-test-0")
+        self.assertEqual(launch_plan(value, now=1000)["text_peer"]["resource_id"], "sb-test-0")
 
     def test_caller_mutation_cannot_retarget_the_built_plan(self):
         value = formation()
-        plan = bootstrap.build_launch_plan(value, now=1000)
+        plan = launch_plan(value, now=1000)
         value["bootstrap_peers"][0] = "changed"
         value["endpoints"]["worker_0"]["public_port"] = 31330
         self.assertIn("41000", plan["coordinator"]["initial_peers"][0])

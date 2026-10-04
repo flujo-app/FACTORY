@@ -60,8 +60,12 @@ FACTORY consumed that public record without replaying the job or inference.
 pinned Qwen3 1.7B manifest, two complementary block workers, a text peer and
 the actual CommunityAI coordinator APIs. A supplied four-role formation retains
 actual public TCP ports and application TLS; host admission and receiver
-authentication must be supplied by its owner. Eleven offline configuration and
-component-double lifecycle tests pass.
+authentication must be supplied by its owner. The launch contract requires the
+exact retained model index, derives both block selections and carries all five
+worker consistency claims. Model files use a read-only declared snapshot;
+locks and cache state use distinct writable directories for each role.
+Forty-one focused checks passed in the combined main checkout, covering
+planning, held lifecycle behavior and image export/build receipts.
 
 [modal/communityai_runtime.py](modal/communityai_runtime.py) adds the real TLS
 DHT bootstrap entry point, actual public/listen port handling, one bounded
@@ -90,16 +94,23 @@ the real full-pipe and process-group kill cases. DHT lifecycle cases use compone
 doubles. The
 [image recipe](modal/Dockerfile.communityai-runtime) requires an immutable
 Python/compiler/build-tools image and a coherent locked source context.
-Its source context is [PR38](https://github.com/flujo-app/CommunityAI/pull/38)
-revision 2d08f31aa58c2c7b49304d0367ab51ae9aaccb11, containing the updated
-[PR35 receiver](https://github.com/flujo-app/CommunityAI/pull/35) and API lock repair.
-The repair preserves resolved dependency versions. A local compiler image has
+Its current source context is [PR40](https://github.com/flujo-app/CommunityAI/pull/40)
+revision 681deb528a2d83a354a991a032c6ffa8d14a4242, stacked on PR38's
+receiver and API lock repair. Direct server/text-peer roles accept a strict
+`artifact_root` and separate writable `cache_dir`; missing, corrupt, linked or
+undeclared inputs reject before model construction. The owner reports 110
+selected offline tests passed, and an independent reviewer reports 42 snapshot
+tests passed. Hosted model CI was deliberately skipped. This direct interface
+does not propagate through `drift node`. Dependency metadata and the lock are
+byte-identical to PR38. A local compiler image has
 been built with Python 3.12.13 and a retained tool/package inventory; its first
 Debian package resolution was floating. The full local role image was built from
 the locked source, with 101 compatible packages. Real runtime imports and all
 four role help commands passed in a network-none container. Its retained local
 image ID is
 `sha256:07fe68fbe314f5ff0bcc3ed1dd82c6644af0253bb0ee0ad410489ea1c77df405`.
+That retained image uses PR38 and lacks PR40's artifact-root interface. A fresh
+image of the current source must qualify before it can replace that evidence.
 Separate retained qualification matches BuildKit's compiler material to the
 inspected rootfs chain and records the compiler tag's configuration ID before
 and after the build. Those local observations do not establish an immutable
@@ -127,8 +138,17 @@ accepted that exact metadata without README or source. This lets subsequent
 source-only edits retain the dependency layer after the first build with this
 ordering; a cache hit or build-speed gain has not been measured. The existing
 image above retains its original recipe and evidence. New preparations must
-select the exact reviewed recipe commit with `--factory-commit`; the helper's
-historical default remains pinned to the original image inputs.
+select the exact reviewed recipe commit with required `--factory-commit`.
+The export includes the launch-contract module imported by the bootstrap.
+
+All eight declared artifacts already present in the local Hub cache passed full
+size/SHA verification and were copied into a separate plain-file snapshot.
+The 4,079,422,995 copied bytes passed an independent rehash; the source cache
+was unchanged and no download or model execution occurred. The
+[snapshot smoke](modal/smoke_communityai_snapshot.py) is prepared to check an
+actual read-only mount, writable runtime lock and rejected loader constructors
+in the new image. That container check and remote Volume qualification remain
+pending.
 
 Two real DHT nodes in that image then exchanged one exact short-lived value
 over loopback with both p2pd processes configured for TLS. Each same DHT instance
@@ -136,7 +156,7 @@ shut down once with exit zero; the owned container exited zero and was removed.
 A Torch shared-memory manager remained in the snapshot before parent exit,
 explicitly recorded as unverified descendant cleanup. The smoke used a different
 import order from the bootstrap role and proves local transport only.
-Model cache creation, Modal tunnel reachability, distributed model inference
+Remote model cache qualification, Modal tunnel reachability, distributed model inference
 and provider retirement remain unverified. Recursive provisioning and live
 queue-driven scale-to-zero also remain subsequent integration work.
 

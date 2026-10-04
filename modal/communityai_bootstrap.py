@@ -1,7 +1,7 @@
 """Host integration for a fixed two-worker CommunityAI swarm; never deploys.
 
-Requires the CommunityAI runtime containing create_factory_app, reviewed at
-petals-revival commit 0cd07931fe32676c10d06d964ae7162005d25580 (PR 35).
+Requires the reviewed CommunityAI local-only artifact runtime at
+681deb528a2d83a354a991a032c6ffa8d14a4242 and an owner-qualified image.
 The provider supervisor must first admit and own the Modal resources, pre-cache
 the manifest's verified artifacts, and supply actual tunnel/seed observations.
 Use Modal raw TCP tunnels (unencrypted_ports/tcp_socket), carrying Hivemind's own
@@ -33,6 +33,8 @@ import math
 from pathlib import Path
 import re
 import time
+
+from communityai_launch_contract import apply_snapshot_contract
 
 
 MANIFEST_PATH = Path(__file__).with_name("communityai-model-manifest.json")
@@ -135,8 +137,12 @@ def _addresses(endpoint):
             "--announce_maddrs", f'/ip4/{endpoint["ipv4"]}/tcp/{endpoint["public_port"]}']
 
 
-def build_launch_plan(formation, *, now=None):
-    """Return launch configuration only. No process, cloud call, or success claim."""
+def build_launch_plan(formation, *, index_bytes, now=None):
+    """Require the exact checkpoint index and return held launch configuration.
+
+    No process, cloud call, cache verification or runtime qualification occurs.
+    Raw formation and index metadata do not grant inference/resource admission.
+    """
     formation = validate_formation(formation, now=now)
     peers = formation["bootstrap_peers"]
     workers = []
@@ -144,7 +150,7 @@ def build_launch_plan(formation, *, now=None):
         endpoint = formation["endpoints"][role]
         argv = ["python", "-m", "drift.cli", "server", MODEL, "--model_manifest", RUNTIME_MANIFEST,
                 "--block_indices", span, "--device", "cuda", "--torch_dtype", "bfloat16",
-                "--attn_implementation", "eager", "--cache_dir", f"/models/{REVISION}",
+                "--attn_implementation", "eager", "--cache_dir", f"/run/communityai/{formation['run_id']}/cache/{role}",
                 "--identity_path", f"/run/communityai/{role}.key", "--health_state_path", f"/run/communityai/{role}.json",
                 "--throughput", "0.01", "--num_handlers", "1", "--inference_max_length", "2048",
                 "--attn_cache_tokens", "2048", "--max_batch_size", "2048", "--update_period", "10",
@@ -154,10 +160,10 @@ def build_launch_plan(formation, *, now=None):
         workers.append({"role": role, "resource_id": endpoint["resource_id"], "block_indices": span, "argv": argv})
     text = formation["endpoints"]["text_peer"]
     text_argv = ["python", "-m", "drift.cli", "text-peer", RUNTIME_MANIFEST,
-                 "--identity_path", "/run/communityai/text-peer.key", "--cache_dir", f"/models/{REVISION}",
+                 "--identity_path", "/run/communityai/text-peer.key", "--cache_dir", f"/run/communityai/{formation['run_id']}/cache/text_peer",
                  "--max_context_tokens", "2048", "--max_output_tokens", "64",
                  *_addresses(text), "--initial_peers", *peers]
-    return {"schema_version": 1, "run_id": formation["run_id"], "manifest_digest": MANIFEST_DIGEST,
+    plan = {"schema_version": 1, "run_id": formation["run_id"], "manifest_digest": MANIFEST_DIGEST,
             "manifest_raw_sha256": MANIFEST_RAW_SHA256, "model_revision": REVISION,
             "status": "not_started", "admission": "NO_ADMISSION", "formation_provenance": "not_authenticated",
             "workers": workers, "text_peer": {"resource_id": text["resource_id"], "argv": text_argv},
@@ -169,6 +175,7 @@ def build_launch_plan(formation, *, now=None):
                           "announce_maddrs": [f'/ip4/{formation["endpoints"]["bootstrap"]["ipv4"]}/tcp/{formation["endpoints"]["bootstrap"]["public_port"]}'],
                           "transport": "modal-raw-tcp", "tls": True},
             "environment": {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"}}
+    return apply_snapshot_contract(plan, index_bytes, manifest=load_pinned_manifest())
 
 
 def create_coordinator_app(formation, *, factory_admission, api_key_identifier):
