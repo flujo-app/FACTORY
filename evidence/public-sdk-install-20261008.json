@@ -1,0 +1,20 @@
+{
+  "format": "factory-public-sdk-install-check",
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "repository": "https://github.com/flujo-app/FACTORY",
+  "repositoryVisibility": "PUBLIC",
+  "installSpec": "github:flujo-app/FACTORY#main",
+  "resolvedCommit": "e3925c73931dc92d6d6aa3086d0aa115d919167d",
+  "runtime": "Node.js 24.19.0",
+  "results": {
+    "freshInstall": "passed",
+    "initialCells": 3,
+    "replayCells": 3,
+    "factorySwarmEngineExport": "present",
+    "factoryLocalFleetExport": "present",
+    "presentationServerExport": "present"
+  },
+  "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. This machine's Git configuration was used; this is not an anonymous-install or live worker dispatch test.",
+  "npmRegistry": "flujo-factory returned 404 on 2026-10-08; no npm package was published."
+}
