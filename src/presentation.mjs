@@ -158,7 +158,7 @@ function readSnapshot(db) {
         attempt: integer(review.attempt) } : null };
   });
   const effects = effectRows.map(effect => ({ key: identifier(effect.key), kind: member(effect.kind, ['provision', 'flow_call', 'message', 'flow_cancel', 'retire', 'delivery', 'worker_wake', 'worker_sleep']),
-    state: member(effect.state, ['accepted', 'running', 'unknown', 'succeeded', 'not_applied']),
+    state: member(effect.state, ['accepted', 'running', 'unknown', 'succeeded', 'cancelled', 'not_applied']),
     scope: member(effect.scope, ['task', 'project', 'cleanup', 'worker']), scopeId: identifier(effect.scope_id),
     taskId: effect.task_id === null ? null : identifier(effect.task_id), owner: identifier(effect.owner),
     ownerEpoch: integer(effect.owner_epoch), controlEpoch: integer(effect.control_epoch),

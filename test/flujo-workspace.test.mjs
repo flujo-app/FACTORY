@@ -65,6 +65,18 @@ test('workspace cancellation requires a matching active FLUJO conversation', asy
   assert.equal(submissions, 1);
 });
 
+test('workspace cancellation observation exposes only terminal status metadata', async () => {
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: () => ({
+    async conversation(id) { return { status: 200, body: { id, status: 'error',
+      messages: [{ content: 'private' }], recovery: { classification: 'cancelled',
+        failure: { category: 'user_cancelled', message: 'private' } } } }; },
+  }) });
+  assert.deepEqual(await adapter.observeCancelled('worker-one', { conversationId: 'conversation-one' }), {
+    conversationId: 'conversation-one', status: 'error', classification: 'cancelled',
+    failureCategory: 'user_cancelled',
+  });
+});
+
 test('workspace adapter installs a paired agent and team flow before readiness', async () => {
   const installed = [];
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({

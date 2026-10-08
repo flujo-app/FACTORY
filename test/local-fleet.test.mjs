@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { FactoryControl, FactoryLocalFleet, conversationMessageKey, conversationCancelKey } from '../src/public-sdk.mjs';
+import { FactoryControl, FactoryLocalFleet, conversationEffectKey, conversationMessageKey, conversationCancelKey } from '../src/public-sdk.mjs';
 
 test('local fleet retains one cancellation request while original FLUJO call resolves', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-cancel-'));
   try {
-    let started, finish, requests = 0;
+    let started, finish, requests = 0, observations = 0, observedStatus = 'running';
     const entered = new Promise(resolve => { started = resolve; });
     const released = new Promise(resolve => { finish = resolve; });
     const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
@@ -16,6 +16,9 @@ test('local fleet retains one cancellation request while original FLUJO call res
       async provision(input) { return { worker: input.app, state: 'ready' }; },
       async call() { started(); await released; throw new Error('FLUJO stopped'); },
       async cancel() { requests++; return { state: 'requested' }; },
+      async observeCancelled(_worker, { conversationId }) { observations++; return { conversationId,
+        status: observedStatus, classification: observedStatus === 'error' ? 'cancelled' : 'running',
+        failureCategory: observedStatus === 'error' ? 'user_cancelled' : undefined }; },
       async retire() { throw new Error('unused'); },
     });
     const plan = { mission: 'Stop FLUJO conversation', budgetCents: 0, projectId: 'swarm', baseline: 'source',
@@ -37,6 +40,15 @@ test('local fleet retains one cancellation request while original FLUJO call res
     assert.equal(control.effect(first.effect.key).state, 'succeeded');
     assert.equal(control.task('run-job-one').status, 'running');
     control.close();
+    await assert.rejects(fleet.reconcileCancelled(plan, { jobId: 'job-one' }), { code: 'CONVERSATION_EVIDENCE' });
+    observedStatus = 'error';
+    assert.equal((await fleet.reconcileCancelled(plan, { jobId: 'job-one' })).status, 'cancelled');
+    assert.equal((await fleet.reconcileCancelled(plan, { jobId: 'job-one' })).status, 'cancelled');
+    assert.equal(observations, 2);
+    const closed = new FactoryControl(fleet.database);
+    assert.equal(closed.task('run-job-one').status, 'cancelled');
+    assert.equal(closed.effect(conversationEffectKey('worker-lead', 'conversation-one')).state, 'cancelled');
+    closed.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -87,9 +99,11 @@ test('uncertain steering remains a held effect and prevents conversation closure
     const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
       capabilities: { adapter: 'flujo-workspace' },
       async provision(input) { return { worker: input.app, state: 'ready' }; },
-      async call() { started(); await released; return { body: 'answer', contentType: 'text/plain' }; },
+      async call() { started(); await released; throw new Error('FLUJO stopped'); },
       async message() { submissions++; throw new Error('connection lost after submission'); },
       async cancel() { return { state: 'requested' }; },
+      async observeCancelled(_worker, { conversationId }) { return { conversationId,
+        status: 'error', classification: 'cancelled', failureCategory: 'user_cancelled' }; },
       async retire() { throw new Error('unused'); },
     });
     const plan = { mission: 'Retain uncertain steering', budgetCents: 0, projectId: 'swarm', baseline: 'source',
@@ -112,6 +126,10 @@ test('uncertain steering remains a held effect and prevents conversation closure
     assert.equal(control.task('run-job-one').status, 'running');
     assert.equal(control.effect(conversationMessageKey('worker-lead', 'conversation-one', intent.messageId)).state, 'unknown');
     control.close();
+    await assert.rejects(fleet.reconcileCancelled(plan, { jobId: 'job-one' }), { code: 'UNRECONCILED' });
+    const retained = new FactoryControl(fleet.database);
+    assert.equal(retained.effect(conversationEffectKey('worker-lead','conversation-one')).state, 'unknown');
+    retained.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

@@ -199,6 +199,32 @@ export class FactorySwarmEngine {
     } finally { control.close(); }
   }
 
+  /** Observe FLUJO after a stop request and atomically close only its terminal cancelled task. */
+  async reconcileCancelledConversation({ taskId, worker, conversationId,
+    closureId = `cancel-${taskId}` }) {
+    const control = new FactoryControl(this.database);
+    try {
+      const task = control.task(taskId);
+      const prior = task.status === 'cancelled'
+        ? control.db.prepare("SELECT details FROM events WHERE type='task_cancelled' AND subject=? ORDER BY seq DESC LIMIT 1").get(taskId)
+        : null;
+      const recorded = prior ? JSON.parse(prior.details) : null;
+      if (task.status !== 'cancelled' && typeof this.adapter.observeCancelled !== 'function')
+        throw new TypeError('Worker adapter cannot observe cancelled conversations');
+      const observation = task.status === 'cancelled' ? null
+        : await this.adapter.observeCancelled(worker, { conversationId });
+      return control.cancelConfirmedConversationTask(taskId, {
+        closureId, expectedAttempt: recorded?.result?.attempt ?? task.epoch,
+        expectedOwner: recorded?.result?.previousOwner ?? task.owner,
+        expectedStatus: recorded ? 'running' : task.status,
+        expectedTaskControlEpoch: recorded?.result?.previousTaskControlEpoch ?? task.control_epoch,
+        expectedFactoryEpoch: recorded?.expectedFactoryEpoch ?? control.control().epoch,
+        flowEffectKey: conversationEffectKey(worker, conversationId),
+        cancellationEffectKey: conversationCancelKey(worker, conversationId),
+      }, observation);
+    } finally { control.close(); }
+  }
+
   /** Provider retirement is recorded; cell closure still requires provider evidence. */
   async retireWorker({ app, key = `retire-${app}` }) {
     return this.#control(async control => {

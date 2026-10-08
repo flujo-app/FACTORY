@@ -198,6 +198,7 @@ export class FactoryLocalFleet {
       return await this.#withLeaseRenewal(lease, async checkRenewal => {
         const result = await this.engine.callWorker({ lease, worker: worker.app, input: job.input,
           outputPath: job.outputPath });
+        if (result.effect.state === 'cancelled') return { conversationId: job.input.conversationId, status: 'cancelled' };
         if (result.effect.state !== 'succeeded') return { conversationId: job.input.conversationId, status: 'held' };
         checkRenewal();
         const closed = this.engine.completeConversation({ taskId, worker: worker.app,
@@ -206,6 +207,10 @@ export class FactoryLocalFleet {
           effectKey: conversationEffectKey(worker.app, job.input.conversationId) };
       });
     } catch (error) {
+      try {
+        if (this.#control(control => control.task(taskId).status) === 'cancelled')
+          return { conversationId: job.input.conversationId, status: 'cancelled' };
+      } catch {}
       return { conversationId: job.input.conversationId, status: 'held', code: error.code ?? 'UNCONFIRMED' };
     } finally {
       this.activeConversations.delete(job.id);
@@ -224,6 +229,16 @@ export class FactoryLocalFleet {
     const active = this.activeConversations.get(jobId);
     if (!active) throw new FactoryError('NOT_RUNNING', 'Conversation is not active in this fleet instance');
     return this.engine.cancelWorkerConversation(active);
+  }
+
+  /** Reopen retained state and close only a FLUJO run with terminal cancellation evidence. */
+  async reconcileCancelled(plan, { jobId }) {
+    validatePlan(plan);
+    const binding = plan.workers.flatMap(worker => worker.conversations.map(job => ({worker,job})))
+      .find(item => item.job.id === jobId);
+    if (!binding) throw new TypeError('The job is absent from this fleet plan');
+    return this.engine.reconcileCancelledConversation({ taskId: `run-${jobId}`,
+      worker: binding.worker.app, conversationId: binding.job.input.conversationId });
   }
 
   async run(plan, { workerConcurrency = 4, conversationConcurrency = 30 } = {}) {

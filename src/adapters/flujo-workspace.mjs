@@ -99,6 +99,16 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
         throw new Error('FLUJO did not acknowledge cancellation request.');
       return { state: 'requested' };
     },
+    async observeCancelled(app, { conversationId } = {}) {
+      if (typeof conversationId !== 'string' || !CONVERSATION.test(conversationId))
+        throw new TypeError('A conversation ID is required');
+      const response = await clientFor(app).conversation(conversationId);
+      if (response?.status !== 200 || response?.body?.id !== conversationId)
+        throw new Error('FLUJO conversation identity is unavailable.');
+      return { conversationId, status: response.body.status,
+        classification: response.body.recovery?.classification,
+        failureCategory: response.body.recovery?.failure?.category };
+    },
     async retire(app) {
       const client = clientFor(app);
       await client.deleteWorkspace(client.workspace);

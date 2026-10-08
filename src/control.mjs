@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { safeReceipt } from './receipts.mjs';
 import { consumeGitRefusalProof } from './git-effect.mjs';
@@ -850,6 +850,55 @@ export class FactoryControl {
       this.event('task_completed',taskId,{closureId:request.closureId,requestDigest,
         expectedFactoryEpoch:request.expectedFactoryEpoch,retainedTask:retainedTaskIdentity(task),
         retainedEffects:[effect],result});
+      return result;
+    });
+  }
+  /** Close a stopped FLUJO conversation only after its terminal cancellation is observed. */
+  cancelConfirmedConversationTask(taskId, input, observation) {
+    id(taskId);
+    const request = closureInput(input,[...TASK_CLOSURE_KEYS,'flowEffectKey','cancellationEffectKey']);
+    taskClosureIdentity(request,['running']); id(request.flowEffectKey); id(request.cancellationEffectKey);
+    const requestDigest = digest({taskId,...request});
+    return this.transaction(() => {
+      const task = this.task(taskId);
+      if (task.status === 'cancelled') {
+        const replay = taskClosureRecord(this,taskId,request,'task_cancelled',requestDigest,'cancelled');
+        if (replay.previous) return replay.previous.result;
+      }
+      if (!observation || Object.keys(observation).sort().join(',') !== 'classification,conversationId,failureCategory,status'
+        || observation.status !== 'error' || observation.classification !== 'cancelled'
+        || observation.failureCategory !== 'user_cancelled')
+        fail('CONVERSATION_EVIDENCE','Terminal user cancellation is not confirmed.');
+      const operation = conversationContract(task.specification);
+      if (observation.conversationId !== operation.conversationId
+        || request.flowEffectKey !== `conversation-${digest({worker:operation.app,conversationId:operation.conversationId})}`
+        || request.cancellationEffectKey !== `cancel-${digest({worker:operation.app,conversationId:operation.conversationId})}`
+        || task.owner !== operation.cellId || provisionIdentity(this,operation) !== operation.provisionKey
+        || existsSync(operation.outputPath)) fail('CONVERSATION_EVIDENCE','Cancelled conversation binding or output is inconsistent.');
+      const stopped = operationReceipt(this,request.cancellationEffectKey,'flow_cancel',task);
+      if (stopped.receipt?.state !== 'requested' || stopped.request_digest !== digest({worker:operation.app,
+          cellId:operation.cellId,conversationId:operation.conversationId,provisionKey:operation.provisionKey,
+          reason:'operator-request'})) fail('CONVERSATION_EVIDENCE','Exact cancellation request is required.');
+      const flow = this.effect(request.flowEffectKey);
+      if (flow.kind !== 'flow_call' || !['running','unknown'].includes(flow.state)
+        || flow.scope !== 'task' || flow.scope_id !== taskId || flow.task_id !== taskId
+        || flow.owner !== task.owner || flow.owner_epoch !== task.epoch || flow.control_epoch !== task.control_epoch
+        || flow.request_digest !== digest({worker:operation.app,cellId:operation.cellId,
+          conversationId:operation.conversationId,provisionKey:operation.provisionKey,inputDigest:operation.inputDigest}))
+        fail('CONVERSATION_EVIDENCE','Exact unsettled Flow call is required.');
+      const receipt = safeReceipt({state:'cancelled',observationSha256:digest(observation)});
+      this.db.prepare('UPDATE effects SET state=?,receipt=?,updated=? WHERE key=?').run('cancelled',canonical(receipt),this.clock(),flow.key);
+      this.event('effect_settled',flow.key,{state:'cancelled',receipt});
+      const {task:current} = taskClosureRecord(this,taskId,request,'task_cancelled',requestDigest,'cancelled');
+      const retainedEffects = [this.effect(flow.key),stopped];
+      const result = {taskId,status:'cancelled',attempt:current.epoch,previousOwner:current.owner,
+        previousTaskControlEpoch:current.control_epoch,reason:'operator-cancelled',
+        completionScope:'observed-terminal-flujo-cancellation',flowEffectKey:flow.key,
+        cancellationEffectKey:stopped.key,observationSha256:receipt.observationSha256,
+        specificationAcceptance:'not-established-by-cancellation',reviewedSoftwareDelivered:false};
+      this.db.prepare("UPDATE tasks SET status='cancelled',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
+      this.event('task_cancelled',taskId,{closureId:request.closureId,requestDigest,expectedFactoryEpoch:request.expectedFactoryEpoch,
+        retainedTask:retainedTaskIdentity(current),retainedEffects,result});
       return result;
     });
   }

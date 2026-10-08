@@ -135,6 +135,12 @@ active conversation. A `requested` receipt confirms the request was processed,
 not that the run reached a terminal cancelled state. If the original call then
 ends without a confirmed output, FACTORY retains the task as `held` for
 reconciliation; replay never sends a second stop request.
+After FLUJO has reached a terminal state, call
+`fleet.reconcileCancelled(plan,{jobId})`. It checks the exact original call and
+stop effects against FLUJO's `error`/`cancelled`/`user_cancelled` recovery
+metadata, then closes the task as cancelled. Still-running or ambiguous states
+remain held. A completed reconciliation replays from FACTORY's ledger without
+another FLUJO read. Unknown steering effects continue to block closure.
 
 The FLUJO HTTP client and specialist profile in `src/flujo-swarm` are source
 extractions from the
@@ -155,7 +161,8 @@ Observatory consumes this read-only feed as a separate host. FACTORY does not
 provide Observatory's UI or its private provider-detail projection.
 The checked-in Brain Online `factorySnapshotSchema` currently recognizes four
 effect kinds (`provision`, `flow_call`, `retire`, `delivery`), while FACTORY can
-also present `worker_wake`, `worker_sleep`, `message`, and `flow_cancel`. That consumer contract
+also present `worker_wake`, `worker_sleep`, `message`, and `flow_cancel`, with a
+terminal `cancelled` effect state. That consumer contract
 needs a matching update before it can parse snapshots containing those effects.
 
 ## MCP
