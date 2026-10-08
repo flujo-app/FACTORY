@@ -216,6 +216,12 @@ all ten leads and exactly nine direct children per lead are persisted as
 completed, with no truncated descendant page. This is a point-in-time topology
 check. It does not prove that the nine children used distinct specialist roles,
 that their work met case quality criteria, or that provider billing is final.
+Pass `verifyRoleBriefs: true` to additionally read the 90 child conversation
+messages and require one distinct `CASE_SPECIALISTS_V1` role brief, case ID,
+team ID and agent ID per child. The result reports `roleBriefsObserved`
+separately from `topologyObserved`. This reads private conversation content;
+the SDK does not return message bodies, and a matching brief establishes
+assignment rather than quality or actual role performance.
 An [unpaid local live check](evidence/savia-local-topology-20261008.json) used
 this SDK with an isolated FLUJO scratch server and a scripted loopback model.
 It persisted ten completed leads and ninety completed direct children, then

@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { buildSaviaCasePlan, observeSaviaCaseTopology } from '../src/public-sdk.mjs';
+import { buildSaviaCasePlan, observeSaviaCaseTopology, CASE_SPECIALISTS_V1 } from '../src/public-sdk.mjs';
 
 const plan = buildSaviaCasePlan({ caseId: 'audit', mission: 'Observe the case',
   projectId: 'savia-audit', baseline: 'reviewed-source', model: 'installed-model',
@@ -27,6 +27,16 @@ async function fixture(t, change = {}) {
         parentConversationId: change.foreignParentLeadId === leadId && index === 0 ? 'foreign-lead' : leadId,
         status: change.incompleteLeadId === leadId && index === 0 ? 'running' : 'completed' }));
       response.end(JSON.stringify({ items, total: count, hasMore: change.hasMoreLeadId === leadId }));
+    } else if (url.pathname.startsWith(`/v1/chat/conversations/${leadId}-child-`)) {
+      const id = url.pathname.split('/').at(-1), index = Number(id.split('-').at(-1)) - 1;
+      const roleId = change.duplicateRoleLeadId === leadId && index === 0
+        ? CASE_SPECIALISTS_V1.roles[1].id : CASE_SPECIALISTS_V1.roles[index]?.id;
+      const brief = `CASE_ID: ${plan.caseId}; TEAM_ID: ${worker.id}; `
+        + `AGENT_ID: ${worker.id}-agent-${index + 1}; ROLE_ID: ${roleId}; TASK: Synthetic check.`;
+      const lateRole = change.lateRoleLeadId === leadId && index === 0;
+      response.end(JSON.stringify({ id, parentConversationId: leadId, status: 'completed',
+        messages: [{ role: 'user', content: lateRole ? 'Synthetic task without a role.' : brief },
+          ...(lateRole ? [{ role: 'user', content: brief }] : [])] }));
     } else { response.writeHead(404); response.end(); }
   });
   server.listen(0, '127.0.0.1');
@@ -41,6 +51,31 @@ test('SAVIA observation verifies ten completed leads and ninety direct completed
   assert.equal(result.topologyObserved, true);
   assert.equal(result.teams.length, 10);
   assert.equal(result.teams.reduce((sum, team) => sum + team.completedChildren, 0), 90);
+});
+
+test('SAVIA role observation verifies nine distinct assigned briefs per team', async t => {
+  const origin = await fixture(t);
+  const result = await observeSaviaCaseTopology(plan, { origin, verifyRoleBriefs: true });
+  assert.equal(result.topologyObserved, true);
+  assert.equal(result.roleBriefsObserved, true);
+  assert.equal(result.teams.every(team => team.roleBriefsObserved), true);
+});
+
+test('SAVIA role observation rejects a duplicated specialist role', async t => {
+  const origin = await fixture(t, {
+    duplicateRoleLeadId: plan.workers[0].conversations[0].input.conversationId,
+  });
+  const result = await observeSaviaCaseTopology(plan, { origin, verifyRoleBriefs: true });
+  assert.equal(result.topologyObserved, true);
+  assert.equal(result.roleBriefsObserved, false);
+});
+
+test('SAVIA role observation requires the first child brief to carry the role', async t => {
+  const origin = await fixture(t, {
+    lateRoleLeadId: plan.workers[0].conversations[0].input.conversationId,
+  });
+  const result = await observeSaviaCaseTopology(plan, { origin, verifyRoleBriefs: true });
+  assert.equal(result.roleBriefsObserved, false);
 });
 
 test('SAVIA observation refuses missing, running and truncated child evidence', async t => {

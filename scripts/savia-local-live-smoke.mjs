@@ -90,8 +90,10 @@ try {
   assert.equal(result.launches.every(item => item.status === 'completed'), true);
   assert.equal(result.conversations.length, 10);
   assert.equal(result.conversations.every(item => item.status === 'completed'), true);
-  const topology = await observeSaviaCaseTopology(plan, { origin });
+  const topology = await observeSaviaCaseTopology(plan, { origin,
+    verifyRoleBriefs: spawnSpecialists });
   if (spawnSpecialists) assert.equal(topology.topologyObserved, true);
+  if (spawnSpecialists) assert.equal(topology.roleBriefsObserved, true);
   const expectedRoles = new Set(CASE_SPECIALISTS_V1.roles.map(role => role.id));
   const roleBriefCoverageObserved = plan.workers.every(worker => {
     const roles = observedRoles.get(worker.id);
@@ -109,7 +111,8 @@ try {
   assert.equal(closures.every(item => item.cell.status === 'retired'), true);
   process.stdout.write(`${JSON.stringify({ accepted: true, origin, root, leadsCompleted: 10,
     childConversationsObserved: topology.teams.reduce((sum, team) => sum + team.observedChildren, 0),
-    topologyObserved: topology.topologyObserved, roleBriefCoverageObserved,
+    topologyObserved: topology.topologyObserved,
+    persistedRoleBriefsObserved: topology.roleBriefsObserved ?? false, roleBriefCoverageObserved,
     spawnSpecialists, modelCalls, replayed: true,
     retiredWorkers: retirement.workers.length, closedCells: closures.length })}\n`);
 } catch (error) {

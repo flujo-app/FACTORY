@@ -37,7 +37,7 @@ export function buildSaviaCasePlan({ caseId, mission, projectId, baseline, model
   }
   const outputRoot = path.resolve(outputDirectory);
   return {
-    mission: mission.trim(), budgetCents, projectId, baseline: baseline.trim(),
+    caseId, mission: mission.trim(), budgetCents, projectId, baseline: baseline.trim(),
     workers: angles.map((angle, index) => {
       const number = String(index + 1).padStart(2, '0');
       const id = `savia-${caseId}-team-${number}`;
