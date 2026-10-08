@@ -155,8 +155,10 @@ adapter cannot provide the corresponding FLUJO or provider evidence.
 The [real-module integration check](evidence/managed-fleet-real-module-20261008.json)
 ran this paid fleet through the vendored `ManagedCloud` application service and
 its private journal, with synthetic local source, image and cloud bridge
-fixtures. It covered provision, flow call, replay and retirement; it did not
-create a provider resource or establish final billing.
+fixtures. It covered provision, flow call, replay, retirement and logical cell
+closure from that service's own retired journal plus a synthetic read-only Fly
+absence response. It did not create a provider resource or establish final
+billing.
 
 ```js
 import { FactoryManagedFleet, SpendingLedger, createManagedCloudAdapter } from 'flujo-factory';

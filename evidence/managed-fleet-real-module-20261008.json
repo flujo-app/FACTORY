@@ -15,8 +15,10 @@
     "managedFlowCalls": 1,
     "managedRetirementCalls": 1,
     "completedFactoryConversations": 1,
+    "trustedManagedCellClosures": 1,
+    "providerInventory": "synthetic read-only Fly app absence through the configured CLI path",
     "paidReservationAfterRetirement": "retired-meter-pending",
     "replayWithoutNewManagedCalls": true
   },
-  "scope": "FACTORY paid fleet through the actual vendored ManagedCloud application service, private deployment journal and worker credential lifecycle. Source discovery, FLUJO HTTP responses, worker image resolution, Fly account and cloud bridge were synthetic local fixtures. No provider resource, paid inference, live health inspection or final bill was verified."
+  "scope": "FACTORY paid fleet through the actual vendored ManagedCloud application service, private deployment journal and worker credential lifecycle. Source discovery, FLUJO HTTP responses, worker image resolution, Fly account, cloud bridge and final read-only Fly inventory were synthetic local fixtures. The logical cell closed from the service's own retired journal and bound provision/retirement effects while the paid hold remained pending. No provider resource, paid inference, live health inspection or final bill was verified."
 }

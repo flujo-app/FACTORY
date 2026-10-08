@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { Journal } from '../deploy/managed-cloud/lib/journal.mjs';
 import { createManagedCloudAdapter, FactoryControl, FactoryManagedFleet, SpendingLedger } from '../src/public-sdk.mjs';
 
@@ -25,11 +25,15 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
     async up(options, env) {
       calls.push(['up', options.app]);
       assert.equal(env.FLUJO_SNAPSHOT_CONTROL_TOKEN, sourceToken);
+      const owner = randomUUID(), createdAt = new Date().toISOString();
       await new Journal(options.journal).create({ format: 'flujo-cloud-journal', version: 1,
-        owner: randomUUID(), app: options.app, org: options.org, region: options.region,
+        owner, createdAt, updatedAt: createdAt, app: options.app, org: options.org, region: options.region,
         workspace: options.workspace, image: options.image, flowIds: options.flowIds,
         state: 'ready', stage: 'ready', appCreated: true, appId: options.app,
-        machineId: 'synthetic-machine' });
+        ownershipConfirmed: true, authState: 'copied-workspace',
+        volumeName: `worker_${owner.replaceAll('-', '').slice(0, 12)}`, volumeId: 'synthetic-volume',
+        machineName: `worker-${owner.replaceAll('-', '').slice(0, 12)}`,
+        machineId: 'synthetic-machine', archiveSha256: 'c'.repeat(64) });
       return { app: options.app, workspace: options.workspace, state: 'ready',
         machineId: 'synthetic-machine' };
     },
@@ -97,4 +101,25 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
   assert.equal(paid.status().reservations[0].state, 'retired-meter-pending');
   assert.equal((await fleet.retire(plan)).workers[0].replayed, true);
   assert.deepEqual(calls.map(([kind]) => kind), ['up', 'call', 'down']);
+  const preload = path.join(directory, 'fake-fly.mjs');
+  await writeFile(preload, `import path from 'node:path';
+const args=process.argv.slice(1);args[0]=path.basename(args[0]);
+if(args.join(' ')!=='apps list --org personal --json')process.exit(71);
+process.stdout.write('[]');process.exit(0);
+`);
+  const previousOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `${previousOptions ? `${previousOptions} ` : ''}--import=${pathToFileURL(preload).href}`;
+  try {
+    const closure = await fleet.closeRetired(plan, { workerId: 'managed-fixture',
+      flyPath: process.execPath, managedDirectory: path.join(directory, 'cloud'),
+      org: 'personal', workspace: 'test-cloud' });
+    assert.equal(closure.status, 'retired');
+    assert.equal(closure.cell.resourceEvidence.resourceScope,
+      'owned-fly-teardown-recorded-and-app-not-returned-by-configured-inventory');
+    assert.equal((await fleet.closeRetired(plan, { workerId: 'managed-fixture' })).replayed, true);
+  } finally {
+    if (previousOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousOptions;
+  }
+  assert.equal(paid.status().reservations[0].state, 'retired-meter-pending');
 });
