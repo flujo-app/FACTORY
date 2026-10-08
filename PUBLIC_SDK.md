@@ -76,6 +76,22 @@ background writer will never recreate the workspace later.
 Worker retirement alone does not close the Factory cell; that requires the
 controller's separate provider-evidence closure path.
 
+For managed FLUJO-CLOUD workers, construct the same engine with
+`createManagedCloudAdapter({ modulePath, options })`, where `modulePath` is the
+absolute path to the installed `flujo-cloud` `lib/managed.mjs` and `options`
+contains that service's private configuration. Claim a FACTORY task through
+`FactoryControl`, then pass its lease to `engine.provisionWorker` with a unique
+`cellId`, exact `app`, and the `ManagedCloud.up` input. Use `engine.callWorker`
+with the same lease, exact worker app, a unique `conversationId`, a FLUJO flow
+`request`, and an absolute private `outputPath`; use `engine.retireWorker` for
+recorded cleanup. Each operation uses the FACTORY ledger and retains its
+original outcome on replay. The managed adapter does not implement live
+health inspection or automatic reconciliation of uncertain cloud retirement:
+retain the attempt files and use the provider's recovery procedure before
+claiming closure. The local `FactoryLocalFleet` scheduler accepts only local
+FLUJO workspaces; managed cloud callers schedule independent task leases with
+`FactorySwarmEngine.runConversations`.
+
 Recursive delegation uses the same database: a ready child cell claims its own
 FACTORY task, then passes that lease to `provisionWorker` to reserve and launch
 its child. Budget-only growth retains each parent's allocation as the limit.
