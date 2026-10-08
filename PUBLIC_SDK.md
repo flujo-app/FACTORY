@@ -395,7 +395,9 @@ Server-side hosts such as FLUJO-WORLD can use `createObservatoryClient` to read
 the local feed without placing the bearer in browser code. The client pins the
 expected factory ID, accepts only an explicit `127.0.0.1` snapshot endpoint,
 rejects redirects and invalid topology, and returns the versioned snapshot
-envelope. This is the bridge for showing FACTORY cells and tasks alongside
+envelope. `reader.events({ after: envelope.cursor, limit: 100 })` reads a bounded,
+validated event page for reconnects; its returned `cursor` is the next `after`.
+This is the bridge for showing FACTORY cells and tasks alongside
 FLUJO-WORLD's separate automation map. [FLUJO PR #973](https://github.com/mario-andreschak/FLUJO/pull/973)
 implements a server-side reader of this same HTTP contract for its Wave
 Observatory FACTORY view. It currently implements that narrow reader directly;
