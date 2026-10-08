@@ -9,12 +9,17 @@
   "runtime": "Node.js 24.19.0",
   "results": {
     "freshInstall": "passed",
+    "credentialFreeSourceArchive": "HTTP 200 from codeload.github.com with an empty Authorization header",
+    "sourceArchiveBytes": 772050,
+    "freshArchiveInstall": "passed",
+    "archiveInstallInitialCells": 3,
+    "archiveInstallReplayCells": 3,
     "initialCells": 3,
     "replayCells": 3,
     "factorySwarmEngineExport": "present",
     "factoryLocalFleetExport": "present",
     "presentationServerExport": "present"
   },
-  "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. This machine's Git configuration was used; this is not an anonymous-install or live worker dispatch test.",
+  "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. The Git install used this machine's Git configuration. The separate HTTPS source archive download sent an empty Authorization header, then a fresh local tarball install repeated the SDK check. npm dependency retrieval may still have used this machine's npm configuration. No live worker dispatch was tested here.",
   "npmRegistry": "flujo-factory returned 404 on 2026-10-08; no npm package was published."
 }

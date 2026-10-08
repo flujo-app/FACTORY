@@ -14,7 +14,9 @@ installed with `npm install .`. The older `v0.2.0` tag contains only the local
 coordination SDK. Run the project-local CLI with `npx factory`.
 The [fresh-install check](evidence/public-sdk-install-20261008.json) resolved
 main at `e3925c7` and created/replayed a three-cell swarm through the installed
-package. `flujo-factory` is not yet published to the npm registry.
+package. A separate credential-free HTTPS source download and tarball install
+passed the same local SDK check. `flujo-factory` is not yet published to the npm
+registry.
 
 ## CLI
 
