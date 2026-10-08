@@ -3,7 +3,78 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { FactoryControl, FactoryLocalFleet } from '../src/public-sdk.mjs';
+import { FactoryControl, FactoryLocalFleet, conversationMessageKey } from '../src/public-sdk.mjs';
+
+test('local fleet records mid-run FLUJO steering once and closes after acknowledgement', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-steer-'));
+  try {
+    let started, finish;
+    const entered = new Promise(resolve => { started = resolve; });
+    const released = new Promise(resolve => { finish = resolve; });
+    const messages = [];
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { return { worker: input.app, state: 'ready' }; },
+      async call() { started(); await released; return { body: 'answer', contentType: 'text/plain' }; },
+      async message(worker, input) { messages.push([worker, input]); return { messageId: input.messageId, state: 'queued' }; },
+      async retire() { throw new Error('unused'); },
+    });
+    const plan = { mission: 'Steer one FLUJO conversation', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [{ id: 'lead', app: 'worker-lead', budgetCents: 0, purpose: 'Lead',
+        provisionInput: { app: 'worker-lead' }, conversations: [{ id: 'job-one',
+          input: { conversationId: 'conversation-one', request: { flowName: 'Work', prompt: 'Start' } },
+          outputPath: path.join(directory, 'output.txt') }] }] };
+    const running = fleet.run(plan);
+    await entered;
+    const messageId = 'b37a3330-3e88-44e5-8888-a9f5e782ade6';
+    const first = await fleet.message({ jobId: 'job-one', messageId, content: 'Change direction' });
+    const second = await fleet.message({ jobId: 'job-one', messageId, content: 'Change direction' });
+    assert.equal(first.dispatched, true);
+    assert.equal(second.dispatched, false);
+    assert.equal(messages.length, 1);
+    assert.equal(first.effect.receipt.state, 'queued');
+    assert.equal(first.effect.key, conversationMessageKey('worker-lead', 'conversation-one', messageId));
+    finish();
+    assert.equal((await running).conversations[0].status, 'completed');
+    const control = new FactoryControl(fleet.database);
+    assert.equal(control.effect(first.effect.key).state, 'succeeded');
+    control.close();
+    await assert.rejects(fleet.message({ jobId: 'job-one', messageId, content: 'Late' }), { code: 'NOT_RUNNING' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('uncertain steering remains a held effect and prevents conversation closure', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-steer-unknown-'));
+  try {
+    let started, finish, submissions = 0;
+    const entered = new Promise(resolve => { started = resolve; });
+    const released = new Promise(resolve => { finish = resolve; });
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { return { worker: input.app, state: 'ready' }; },
+      async call() { started(); await released; return { body: 'answer', contentType: 'text/plain' }; },
+      async message() { submissions++; throw new Error('connection lost after submission'); },
+      async retire() { throw new Error('unused'); },
+    });
+    const plan = { mission: 'Retain uncertain steering', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [{ id: 'lead', app: 'worker-lead', budgetCents: 0, purpose: 'Lead',
+        provisionInput: { app: 'worker-lead' }, conversations: [{ id: 'job-one',
+          input: { conversationId: 'conversation-one', request: { flowName: 'Work', prompt: 'Start' } },
+          outputPath: path.join(directory, 'output.txt') }] }] };
+    const running = fleet.run(plan);
+    await entered;
+    const intent = { jobId: 'job-one', messageId: '19d5e734-5dfd-48aa-a78f-fc655610b363', content: 'Steer' };
+    assert.equal((await fleet.message(intent)).effect.state, 'unknown');
+    assert.equal((await fleet.message(intent)).dispatched, false);
+    assert.equal(submissions, 1);
+    finish();
+    assert.equal((await running).conversations[0].status, 'held');
+    const control = new FactoryControl(fleet.database);
+    assert.equal(control.task('run-job-one').status, 'running');
+    assert.equal(control.effect(conversationMessageKey('worker-lead', 'conversation-one', intent.messageId)).state, 'unknown');
+    control.close();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test('local fleet provisions recursively, closes exact conversations and replays from one ledger', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-fleet-'));

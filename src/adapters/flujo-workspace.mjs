@@ -77,6 +77,15 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
         || typeof result.output !== 'string') throw new Error('FLUJO conversation outcome is unconfirmed.');
       return { body: result.output, contentType: 'text/plain' };
     },
+    async message(app, { conversationId, messageId, content } = {}) {
+      if (typeof conversationId !== 'string' || !CONVERSATION.test(conversationId)
+        || typeof messageId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(messageId)
+        || typeof content !== 'string' || !content.trim()) throw new TypeError('Conversation, message ID and content are required');
+      const response = await clientFor(app).inject(conversationId, content, messageId);
+      if (response?.message_id !== messageId || response?.conversation_id !== conversationId
+        || response?.status !== 'queued') throw new Error('FLUJO did not confirm queued steering.');
+      return { messageId, state: 'queued' };
+    },
     async retire(app) {
       const client = clientFor(app);
       await client.deleteWorkspace(client.workspace);

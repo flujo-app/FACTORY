@@ -39,6 +39,20 @@ test('occupied workspace and uncertain conversation do not claim success', async
     request: { flowName: 'Work', prompt: 'Do the work' } }), /unconfirmed/);
 });
 
+test('workspace steering keeps the exact caller message identity', async () => {
+  const messageId = '946bc0d7-2f70-4bd8-9ab7-a91bb14d86c7';
+  const observed = [];
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: () => ({
+    async inject(conversationId, content, id) {
+      observed.push({ conversationId, content, id });
+      return { status: 'queued', conversation_id: conversationId, message_id: id };
+    },
+  }) });
+  assert.deepEqual(await adapter.message('worker-one', { conversationId: 'conversation-one', messageId,
+    content: 'Use the revised plan' }), { messageId, state: 'queued' });
+  assert.deepEqual(observed, [{ conversationId: 'conversation-one', content: 'Use the revised plan', id: messageId }]);
+});
+
 test('workspace adapter installs a paired agent and team flow before readiness', async () => {
   const installed = [];
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({

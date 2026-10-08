@@ -158,8 +158,8 @@ export class FlujoClient {
     return this.api('GET', `/v1/chat/conversations?paged=1&limit=200&descendantsOf=${encodeURIComponent(id)}`);
   }
 
-  async inject(id, content) {
-    return this.expect('POST', `/v1/chat/conversations/${encodeURIComponent(id)}/inject`, { content, id: randomUUID() });
+  async inject(id, content, messageId = randomUUID()) {
+    return this.expect('POST', `/v1/chat/conversations/${encodeURIComponent(id)}/inject`, { content, id: messageId });
   }
 
   async cancel(id, timeoutMs = 5000) {

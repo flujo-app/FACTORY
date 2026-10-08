@@ -19,6 +19,10 @@ export function conversationEffectKey(worker, conversationId) {
   return `conversation-${digest({ worker, conversationId })}`;
 }
 
+export function conversationMessageKey(worker, conversationId, messageId) {
+  return `message-${digest({ worker, conversationId, messageId })}`;
+}
+
 /** FACTORY-owned dispatch surface for an explicitly configured FLUJO worker adapter. */
 export class FactorySwarmEngine {
   constructor(database, adapter) {
@@ -99,6 +103,32 @@ export class FactorySwarmEngine {
       return executeEffect(control, lease,
         { key, kind: 'flow_call', request },
         () => this.adapter.call(worker, input), { outputPath });
+    });
+  }
+
+  /** Admit one steering message during a running Flow call; queued means accepted, not consumed. */
+  async messageWorker({ lease, worker, conversationId, messageId, content }) {
+    if (typeof this.adapter.message !== 'function') throw new TypeError('Worker adapter cannot steer conversations');
+    if (typeof messageId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(messageId)
+      || typeof content !== 'string' || !content.trim()) throw new TypeError('A UUID messageId and content are required');
+    const key = conversationMessageKey(worker, conversationId, messageId);
+    return this.#control(control => {
+      control.authority(lease);
+      const owned = control.ownedWorker(worker);
+      const request = { worker, cellId: lease.cellId, conversationId,
+        provisionKey: owned.provisionKey, messageId, contentDigest: digest(content) };
+      const previous = completedEffect(control, lease, key, 'message', request);
+      if (previous) {
+        if (previous.receipt?.messageId !== messageId || previous.receipt?.state !== 'queued')
+          throw new FactoryError('MESSAGE', 'Recorded steering acknowledgement is inconsistent.');
+        return { dispatched: false, effect: previous };
+      }
+      return executeEffect(control, lease, { key, kind: 'message', request }, async () => {
+        const receipt = await this.adapter.message(worker, { conversationId, messageId, content });
+        if (receipt?.messageId !== messageId || receipt?.state !== 'queued')
+          throw new Error('Steering acknowledgement is unconfirmed.');
+        return receipt;
+      });
     });
   }
 

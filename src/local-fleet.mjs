@@ -84,6 +84,7 @@ export class FactoryLocalFleet {
     }
     this.database = resolve(database);
     this.engine = new FactorySwarmEngine(this.database, adapter);
+    this.activeConversations = new Map();
   }
 
   #control(operation) {
@@ -169,6 +170,8 @@ export class FactoryLocalFleet {
         return control.claimTask(taskId, worker.id, 600000);
       });
       if (lease === null) return { conversationId: job.input.conversationId, status: 'completed', replayed: true };
+      if (this.activeConversations.has(job.id)) throw new FactoryError('BUSY', 'Conversation is already active in this fleet');
+      this.activeConversations.set(job.id, { lease, worker: worker.app, conversationId: job.input.conversationId });
       const result = await this.engine.callWorker({ lease, worker: worker.app, input: job.input,
         outputPath: job.outputPath });
       if (result.effect.state !== 'succeeded') return { conversationId: job.input.conversationId, status: 'held' };
@@ -178,7 +181,16 @@ export class FactoryLocalFleet {
         effectKey: conversationEffectKey(worker.app, job.input.conversationId) };
     } catch (error) {
       return { conversationId: job.input.conversationId, status: 'held', code: error.code ?? 'UNCONFIRMED' };
+    } finally {
+      this.activeConversations.delete(job.id);
     }
+  }
+
+  /** Send to a conversation currently running in this local fleet instance. */
+  async message({ jobId, messageId, content }) {
+    const active = this.activeConversations.get(jobId);
+    if (!active) throw new FactoryError('NOT_RUNNING', 'Conversation is not active in this fleet instance');
+    return this.engine.messageWorker({ ...active, messageId, content });
   }
 
   async run(plan, { workerConcurrency = 4, conversationConcurrency = 30 } = {}) {

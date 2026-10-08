@@ -120,6 +120,14 @@ Calls take
 machine with other workspaces, so it is not a separate sandbox. The adapter
 does not grant agents recursive delegation tools.
 
+While `fleet.run(plan)` is active, `fleet.message({jobId,messageId,content})`
+steers a running conversation. `messageId` is a caller-generated UUID and is
+reused for exact replay. A `queued` receipt confirms FLUJO accepted the message
+for its next safe boundary; the receipt alone does not prove the model consumed
+it. FACTORY stores the content digest and acknowledgement, not the message body.
+The fleet instance must still hold the active task lease. Uncertain submission
+stays in the ledger for reconciliation and is never blindly sent again.
+
 The FLUJO HTTP client and specialist profile in `src/flujo-swarm` are source
 extractions from the
 MIT-licensed Seagulled package, revision `70f1a7f115203e723fdc18e5a2cd5b9d391db363`,
@@ -134,8 +142,13 @@ viewer token belongs on the server; it must not be passed to the browser.
 See [BRAIN_ONLINE_INTEGRATION.md](BRAIN_ONLINE_INTEGRATION.md) for the exact
 identity, event, freshness and read-only contract.
 
-This is the first public cloud dispatch surface. It does not yet include the
-recursive worker scheduler, conversation templates, or the Observatory host.
+The SDK also exports the local fleet scheduler and conversation templates above.
+Observatory consumes this read-only feed as a separate host. FACTORY does not
+provide Observatory's UI or its private provider-detail projection.
+The checked-in Brain Online `factorySnapshotSchema` currently recognizes four
+effect kinds (`provision`, `flow_call`, `retire`, `delivery`), while FACTORY can
+also present `worker_wake`, `worker_sleep`, and `message`. That consumer contract
+needs a matching update before it can parse snapshots containing those effects.
 
 ## MCP
 

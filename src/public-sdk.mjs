@@ -76,7 +76,7 @@ export class Factory {
 }
 
 export { FactoryControl } from './control.mjs';
-export { FactorySwarmEngine, conversationEffectKey } from './swarm-engine.mjs';
+export { FactorySwarmEngine, conversationEffectKey, conversationMessageKey } from './swarm-engine.mjs';
 export { FactoryLocalFleet } from './local-fleet.mjs';
 export { createManagedCloudAdapter } from './adapters/managed-cloud.mjs';
 export { createFlujoWorkspaceAdapter } from './adapters/flujo-workspace.mjs';

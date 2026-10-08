@@ -470,9 +470,9 @@ export class FactoryControl {
     });
   }
   task(taskId) { const task = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(id(taskId)); if (!task) fail('TASK','Task not found.'); delete task.token_hash; return { ...task, specification:JSON.parse(task.specification), candidate:task.candidate?JSON.parse(task.candidate):null, review:task.review?JSON.parse(task.review):null }; }
-  openEffects(scope, scopeId) { return this.db.prepare(`SELECT key,state FROM effects WHERE scope=? AND scope_id=? AND state IN ${OPEN_EFFECTS}`).all(scope,scopeId); }
+  openEffects(scope, scopeId) { return this.db.prepare(`SELECT key,kind,state FROM effects WHERE scope=? AND scope_id=? AND state IN ${OPEN_EFFECTS}`).all(scope,scopeId); }
   openTaskEffects(taskId) {
-    return this.db.prepare(`SELECT key,state FROM effects WHERE ((scope='task' AND scope_id=?) OR (scope='worker' AND task_id=?)) AND state IN ${OPEN_EFFECTS}`).all(taskId,taskId);
+    return this.db.prepare(`SELECT key,kind,state FROM effects WHERE ((scope='task' AND scope_id=?) OR (scope='worker' AND task_id=?)) AND state IN ${OPEN_EFFECTS}`).all(taskId,taskId);
   }
   claimTask(taskId, cellId, ttlMs = 60000) {
     id(taskId); id(cellId); integer(ttlMs,'ttlMs',1);
@@ -970,7 +970,7 @@ export class FactoryControl {
   }
   admitEffect(lease, input) { return this.transaction(() => this.#admitEffect(lease, input)); }
   #admitEffect(lease, { key, kind, request, taskId=null }, modelStepManifestAuthorized=false) {
-    id(key); if (!['provision','flow_call','retire','delivery'].includes(kind)) fail('INVALID','Unknown effect kind.');
+    id(key); if (!['provision','flow_call','message','retire','delivery'].includes(kind)) fail('INVALID','Unknown effect kind.');
     const hash=digest(request);
       const owner=this.authority(lease);
       const previous=this.db.prepare('SELECT * FROM effects WHERE key=?').get(key);
@@ -989,6 +989,8 @@ export class FactoryControl {
       if(kind==='retire' && this.openEffects('worker',request?.app).length)fail('UNRECONCILED','Worker power must be reconciled before retirement.');
       if (lease.scope === 'task') {
         const task = this.task(lease.scopeId);
+        if (kind === 'message' && task.specification.taskType !== 'conversation')
+          fail('CONVERSATION_BINDING', 'Steering requires a typed conversation task.');
         if (task.specification.originalInference && !modelStepManifestAuthorized) fail('MODEL_STEP_MANIFEST_REQUIRED','Original model-step parents require authenticated manifest admission.');
         if(kind==='flow_call' && task.specification.nativeMission) {
           this.#nativeMissionTarget(task);
@@ -1005,16 +1007,27 @@ export class FactoryControl {
         }
         if (task.specification.taskType === 'conversation') {
           const operation = conversationContract(task.specification);
-          if (kind !== 'flow_call' || lease.cellId !== operation.cellId
+          if (!['flow_call','message'].includes(kind) || lease.cellId !== operation.cellId
             || request?.worker !== operation.app || request?.cellId !== operation.cellId
             || request?.conversationId !== operation.conversationId
             || request?.provisionKey !== operation.provisionKey
-            || request?.inputDigest !== operation.inputDigest) {
+            || (kind === 'flow_call' && request?.inputDigest !== operation.inputDigest)
+            || (kind === 'message' && (typeof request?.messageId !== 'string'
+              || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.messageId)
+              || typeof request?.contentDigest !== 'string' || !/^[a-f0-9]{64}$/.test(request.contentDigest)
+              || key !== `message-${digest({worker:request.worker,conversationId:request.conversationId,messageId:request.messageId})}`))) {
             fail('CONVERSATION_BINDING', 'Effect must match the immutable conversation operation.');
           }
         }
       }
-      if ((lease.scope==='task'?this.openTaskEffects(lease.scopeId):this.openEffects(lease.scope,lease.scopeId)).length) fail('UNRECONCILED','Previous external effect must settle before a conflicting effect.');
+      const open = lease.scope==='task'?this.openTaskEffects(lease.scopeId):this.openEffects(lease.scope,lease.scopeId);
+      if (kind === 'message') {
+        if (open.some(effect => effect.kind !== 'flow_call')
+          || open.length !== 1 || open[0].state !== 'running'
+          || !this.db.prepare("SELECT key FROM effects WHERE task_id=? AND kind='flow_call' AND state='running'").get(lease.scopeId)) {
+          fail('UNRECONCILED','Conversation message requires one running Flow call and no other open message.');
+        }
+      } else if (open.length) fail('UNRECONCILED','Previous external effect must settle before a conflicting effect.');
       if(kind==='provision') {
         const cell=this.db.prepare("SELECT * FROM cells WHERE id=? AND status='reserved'").get(id(request?.cellId));
         if(!cell || cell.parent_id!==lease.cellId || typeof request.app!=='string' || !/^[a-z][a-z0-9-]{2,62}$/.test(request.app)) fail('RESERVATION','Provisioning requires the owner\'s reserved child and an explicit app identity.');
