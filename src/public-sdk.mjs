@@ -13,7 +13,7 @@ export class Factory {
     try { return operation(control); } finally { control.close(); }
   }
 
-  createSwarm({ mission, budgetCents = 0, agents = [], maxCells = agents.length + 1, maxDepth = 2 } = {}) {
+  createSwarm({ mission, budgetCents = 0, agents = [], maxCells = Math.max(16, agents.length + 1), maxDepth = 2 } = {}) {
     if (!Array.isArray(agents)) throw new TypeError('agents must be an array');
     if (typeof mission !== 'string' || !mission.trim()) throw new TypeError('mission is required');
     if (!Number.isSafeInteger(budgetCents) || budgetCents < 0) throw new TypeError('budgetCents must be a nonnegative integer');

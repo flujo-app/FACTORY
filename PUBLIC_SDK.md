@@ -22,6 +22,8 @@ factory pause /tmp/my-factory.sqlite
 
 The `claim` response contains a private lease token. Keep it inside the agent
 runtime. `factory agent` adds one cell; `factory resume` reopens admission.
+An empty swarm reserves room for 15 later agents by default. Set `maxCells`
+when creating the swarm to choose another ceiling.
 
 ## JavaScript SDK
 

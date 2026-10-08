@@ -55,3 +55,12 @@ test('invalid swarm allocation fails before creating a database', async t => {
     agents: [{ id: 'builder', budgetCents: 2 }] }), /allocations exceed/);
   await assert.rejects(stat(database), { code: 'ENOENT' });
 });
+
+test('empty swarm can enroll agents after creation', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-public-empty-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const factory = new Factory(join(dir, 'swarm.sqlite'));
+  assert.equal(factory.createSwarm({ mission: 'Build' }).cells.length, 1);
+  assert.equal(factory.addAgent({ id: 'builder' }).status, 'ready');
+  assert.equal(factory.status().cells.length, 2);
+});
