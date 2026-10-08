@@ -5,6 +5,54 @@ import path from 'node:path';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { FactoryControl, FactoryLocalFleet, conversationEffectKey, conversationMessageKey, conversationCancelKey } from '../src/public-sdk.mjs';
 
+test('expanded plan adds a child and conversations while old work runs under one fleet limit', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-scale-'));
+  try {
+    let entered, finish, active = 0, peak = 0;
+    const firstStarted = new Promise(resolve => { entered = resolve; });
+    const releaseFirst = new Promise(resolve => { finish = resolve; });
+    const calls = [], provisions = [];
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { provisions.push(input.app); return { worker: input.app, state: 'ready' }; },
+      async call(worker, input) {
+        calls.push([worker,input.conversationId]); peak = Math.max(peak, ++active);
+        if (input.conversationId === 'old-conversation') { entered(); await releaseFirst; }
+        else await new Promise(resolve => setTimeout(resolve, 20));
+        active--;
+        return { body: input.conversationId, contentType: 'text/plain' };
+      },
+      async retire() { throw new Error('unused'); },
+    });
+    const parent = { id: 'parent', app: 'worker-parent', budgetCents: 0, purpose: 'Parent',
+      provisionInput: { app: 'worker-parent' }, conversations: [{ id: 'old',
+        input: { conversationId: 'old-conversation', request: { flowName: 'Work', prompt: 'Start' } },
+        outputPath: path.join(directory, 'old.txt') }] };
+    const base = { mission: 'Expand a live swarm', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [parent] };
+    const options = { workerConcurrency: 2, conversationConcurrency: 2 };
+    const first = fleet.run(base, options);
+    await firstStarted;
+    const child = { id: 'child', parentId: 'parent', app: 'worker-child', budgetCents: 0, purpose: 'Child',
+      provisionInput: { app: 'worker-child' }, conversations: [0,1].map(index => ({ id: `new-${index}`,
+        input: { conversationId: `new-conversation-${index}`, request: { flowName: 'Work', prompt: 'New' } },
+        outputPath: path.join(directory, `new-${index}.txt`) })) };
+    const expanded = { ...base, workers: [parent,child] };
+    await assert.rejects(fleet.scale(expanded, { ...options, conversationConcurrency: 3 }), TypeError);
+    const scaled = await fleet.scale(expanded, options);
+    assert.deepEqual(scaled.conversations.map(item => item.status), ['running','completed','completed']);
+    assert.equal(peak, 2);
+    assert.deepEqual(provisions, ['worker-parent','worker-child']);
+    finish();
+    assert.deepEqual((await first).conversations.map(item => item.status), ['completed']);
+    assert.deepEqual(calls, [['worker-parent','old-conversation'],
+      ['worker-child','new-conversation-0'],['worker-child','new-conversation-1']]);
+    const replay = await fleet.run(expanded, options);
+    assert.equal(replay.conversations.every(item => item.replayed), true);
+    assert.equal(calls.length, 3);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('local fleet retains one cancellation request while original FLUJO call resolves', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-cancel-'));
   try {

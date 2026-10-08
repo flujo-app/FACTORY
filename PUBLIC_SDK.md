@@ -70,6 +70,14 @@ immutable provision and conversation tasks, launches parents before children,
 dispatches bounded conversations, and closes only from exact retained receipts.
 Replaying a completed plan checks the original worker binding and saved output
 bytes. Busy or uncertain work returns `held` and is not sent again.
+To grow a running local swarm, call `fleet.scale(expandedPlan, options)` with
+the original workers and jobs plus new workers or conversations. The plan is
+append-only: existing task identities and inputs must match their recorded
+specifications. A job still running in this fleet instance is reported as
+`running` in the scale result; its original `run` promise remains its completion
+handle. Concurrent runs on one fleet instance share worker and conversation
+slots, so use the same concurrency options until they finish. Child workers
+wait for their parent launch. The controller remains the one worker registry.
 
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
 Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new

@@ -89,6 +89,11 @@ export class FactoryLocalFleet {
     this.database = resolve(database);
     this.engine = new FactorySwarmEngine(this.database, adapter);
     this.activeConversations = new Map();
+    this.activeLaunches = new Map();
+    this.scheduledConversations = new Set();
+    this.activeRuns = 0;
+    this.workerSlots = { limit: 0, active: 0, waiters: [] };
+    this.conversationSlots = { limit: 0, active: 0, waiters: [] };
     this.leaseTtlMs = leaseTtlMs;
     this.renewEveryMs = renewEveryMs;
   }
@@ -96,6 +101,43 @@ export class FactoryLocalFleet {
   #control(operation) {
     const control = new FactoryControl(this.database);
     try { return operation(control); } finally { control.close(); }
+  }
+
+  #acquire(slot) {
+    const release = () => {
+      const next = slot.waiters.shift();
+      if (next) next(release);
+      else slot.active--;
+    };
+    if (slot.active < slot.limit) {
+      slot.active++;
+      return Promise.resolve(release);
+    }
+    return new Promise(resolve => slot.waiters.push(resolve));
+  }
+
+  #launchShared(worker) {
+    const existing = this.activeLaunches.get(worker.id);
+    if (existing) return existing;
+    const promise = (async () => {
+      const release = await this.#acquire(this.workerSlots);
+      try { return await this.#launch(worker); } finally { release(); }
+    })();
+    this.activeLaunches.set(worker.id, promise);
+    void promise.finally(() => {
+      if (this.activeLaunches.get(worker.id) === promise) this.activeLaunches.delete(worker.id);
+    });
+    return promise;
+  }
+
+  async #runConversationShared(worker, job) {
+    if (this.scheduledConversations.has(job.id))
+      return { conversationId: job.input.conversationId, status: 'running', shared: true };
+    this.scheduledConversations.add(job.id);
+    try {
+      const release = await this.#acquire(this.conversationSlots);
+      try { return await this.#runConversation(worker, job); } finally { release(); }
+    } finally { this.scheduledConversations.delete(job.id); }
   }
 
   async #withLeaseRenewal(lease, operation) {
@@ -246,18 +288,37 @@ export class FactoryLocalFleet {
     if (![workerConcurrency,conversationConcurrency].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 100)) {
       throw new TypeError('Fleet concurrency must be from 1 to 100');
     }
-    this.prepare(plan);
-    const launches = [];
-    for (const level of [...new Set(depth.values())].sort((a,b) => a-b)) {
-      const group = plan.workers.filter(worker => depth.get(worker.id) === level);
-      launches.push(...await boundedMap(group,workerConcurrency,worker => this.#launch(worker)));
+    if (this.activeRuns && (workerConcurrency !== this.workerSlots.limit
+      || conversationConcurrency !== this.conversationSlots.limit)) {
+      throw new TypeError('Overlapping fleet runs must use the same concurrency limits');
     }
-    const ready = new Set(launches.filter(result => ['ready','completed'].includes(result.status)).map(result => result.workerId));
-    const work = plan.workers.flatMap(worker => worker.conversations.map(job => ({ worker, job })))
-      .filter(item => ready.has(item.worker.id));
-    const conversations = await boundedMap(work,conversationConcurrency,
-      item => this.#runConversation(item.worker,item.job));
-    return { launches, conversations,
-      skippedConversations: plan.workers.reduce((sum, worker) => sum + (ready.has(worker.id) ? 0 : worker.conversations.length), 0) };
+    if (!this.activeRuns) {
+      this.workerSlots.limit = workerConcurrency;
+      this.conversationSlots.limit = conversationConcurrency;
+    }
+    this.activeRuns++;
+    try {
+      this.prepare(plan);
+      const launches = [];
+      for (const level of [...new Set(depth.values())].sort((a,b) => a-b)) {
+        const group = plan.workers.filter(worker => depth.get(worker.id) === level);
+        launches.push(...await boundedMap(group,workerConcurrency,worker => this.#launchShared(worker)));
+      }
+      const ready = new Set(launches.filter(result => ['ready','completed'].includes(result.status)).map(result => result.workerId));
+      const work = plan.workers.flatMap(worker => worker.conversations.map(job => ({ worker, job })))
+        .filter(item => ready.has(item.worker.id));
+      const conversations = await boundedMap(work,conversationConcurrency,
+        item => this.#runConversationShared(item.worker,item.job));
+      return { launches, conversations,
+        skippedConversations: plan.workers.reduce((sum, worker) => sum + (ready.has(worker.id) ? 0 : worker.conversations.length), 0) };
+    } finally {
+      this.activeRuns--;
+      if (!this.activeRuns && (this.workerSlots.active || this.conversationSlots.active
+        || this.workerSlots.waiters.length || this.conversationSlots.waiters.length))
+        throw new FactoryError('SCHEDULER', 'Fleet slots remained active after all runs finished');
+    }
   }
+
+  /** Admit an expanded append-only plan while earlier jobs continue in this instance. */
+  async scale(plan, options) { return this.run(plan, options); }
 }
