@@ -1,0 +1,75 @@
+{
+  "dispatchClaimAttempts": 1,
+  "entry": "parent-mounted-create_factory_receiver_app_v2",
+  "format": "factory-communityai-v2-asgi-observation-fixture",
+  "hostCallbacks": [
+    "transport",
+    "original",
+    "bearer"
+  ],
+  "observation": {
+    "format": "communityai-factory-asgi-ingress-observation",
+    "headers": [
+      [
+        "accept",
+        "application/json"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "user-agent",
+        "OpenAI/JS 7.3.0"
+      ],
+      [
+        "x-stainless-arch",
+        "x64"
+      ],
+      [
+        "x-stainless-lang",
+        "js"
+      ],
+      [
+        "x-stainless-os",
+        "Windows"
+      ],
+      [
+        "x-stainless-package-version",
+        "7.3.0"
+      ],
+      [
+        "x-stainless-retry-count",
+        "0"
+      ],
+      [
+        "x-stainless-runtime",
+        "node"
+      ],
+      [
+        "x-stainless-runtime-version",
+        "v24.19.0"
+      ]
+    ],
+    "method": "POST",
+    "normalizedBodySha256": "ab288a143d34de92156f01d0d4c4f5d05bbdc51eda4a335e16c8816205cd08b7",
+    "observationSha256": "f74a1280c837ad1511adacc001b5ed8991f6f7b208c030854f2a7e71bf2dd51e",
+    "rawBodyByteLength": 299,
+    "rawBodySha256": "b86e125b6a031a226acc03147b5d865402ad149a621626fcdbf7629f5541fd03",
+    "route": "/v1/chat/completions",
+    "schemaVersion": 2
+  },
+  "peerAfterClaim": 0,
+  "requestPath": "/factory/v1/chat/completions",
+  "responseStatus": 200,
+  "runtimeAdmission": "HOLD",
+  "schemaVersion": 1,
+  "sourceCommit": "e8f85285a974c64d5276054817dadbb0dd31c6f9",
+  "sourceSha256": {
+    "src/drift/api/server.py": "e65002729f6399baaaebf0deeed48f42edf1bee47337e5b3a1cd677bc7f12c49",
+    "src/drift/factory_admission.py": "c38fe244152332b2c24ec07128948cc77f28aedae321e3cdd58e1d0b8430f888",
+    "src/drift/factory_receiver.py": "c3ccb805a650ba1461c85a23bf6ee428a25acd793ca8599113394d3d1c4bd35f",
+    "tests/test_factory_receiver_v2.py": "419d66f3b22f6aa875c3f9008cce87e19f46ff621dd77b53db54c5876eeeb71a",
+    "tests/test_factory_sdk_asgi_hold.py": "c36b50d19b74cdb9d9cb9d62a9d87fb4f3471faba271732ddb165eff6e62f598"
+  }
+}

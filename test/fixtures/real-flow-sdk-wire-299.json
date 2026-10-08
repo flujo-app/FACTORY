@@ -1,0 +1,20 @@
+{
+  "method": "POST",
+  "url": "https://communityai.invalid/v1/chat/completions",
+  "headers": [
+    ["accept", "application/json"],
+    ["content-type", "application/json"],
+    ["user-agent", "OpenAI/JS 7.3.0"],
+    ["x-stainless-arch", "x64"],
+    ["x-stainless-lang", "js"],
+    ["x-stainless-os", "Windows"],
+    ["x-stainless-package-version", "7.3.0"],
+    ["x-stainless-retry-count", "0"],
+    ["x-stainless-runtime", "node"],
+    ["x-stainless-runtime-version", "v24.19.0"]
+  ],
+  "headersSha256": "5c668061cec85492e188b639ee64c642ebbe255a2de197b738d4d05d69188389",
+  "bodyUtf8": "{\"model\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"messages\":[{\"role\":\"user\",\"content\":\"offline bridge fixture\"},{\"role\":\"system\",\"content\":\"\"}],\"temperature\":1,\"stream\":true,\"max_tokens\":8,\"stream_options\":{\"include_usage\":true},\"prompt_cache_key\":\"flujo-c1c5k0kx\"}",
+  "bodyByteLength": 299,
+  "bodySha256": "b86e125b6a031a226acc03147b5d865402ad149a621626fcdbf7629f5541fd03"
+}
