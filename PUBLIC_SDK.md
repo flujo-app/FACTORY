@@ -23,6 +23,10 @@ Node 24; see the same evidence record. This check did not call FLUJO or a model.
 A fresh pinned Git install at `3579051` also exported and constructed
 `FactoryManagedFleet` under Node 24 with an inert synthetic adapter. It did not
 deploy a cloud worker.
+At `bf8d350`, the fresh public Git install exported `SpendingLedger` and
+refused `FactoryManagedFleet` construction without it. Construction with an
+initialized ledger passed under Node 24 with zero provider calls; see the
+same evidence record.
 `flujo-factory` is not yet published to the npm registry.
 
 ## CLI

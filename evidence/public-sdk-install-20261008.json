@@ -48,6 +48,16 @@
     "fleetMethods": ["run", "scale", "retire"],
     "scope": "Installed public Git package import and inert managed fleet construction with an injected synthetic service; no provider call. npm launcher itself used Node 22 and warned about the Node 24 engine requirement."
   },
+  "managedPaidAdmissionRefresh": {
+    "resolvedCommit": "bf8d3506c2b4ac959ea85b85fd3d7ed2b595bf82",
+    "freshPinnedGitInstall": "passed",
+    "executionRuntime": "Node.js 24.19.0",
+    "exports": ["FactoryManagedFleet", "SpendingLedger", "createManagedCloudAdapter"],
+    "constructionWithoutPaidLedger": "refused",
+    "constructionWithInitializedPaidLedger": "passed",
+    "providerCalls": 0,
+    "scope": "Installed public Git package constructor check only. The npm launcher used Node 22 and warned about the Node 24 engine requirement; the SDK ran under Node 24. No cloud worker or model call."
+  },
   "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. The Git install used this machine's Git configuration. The separate HTTPS source archive download sent an empty Authorization header, then a fresh local tarball install repeated the SDK check. npm dependency retrieval may still have used this machine's npm configuration. No live worker dispatch was tested here.",
   "npmRegistry": "flujo-factory returned 404 on 2026-10-08; no npm package was published."
 }
