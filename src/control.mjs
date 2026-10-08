@@ -345,8 +345,15 @@ export class FactoryControl {
       integer(parent.spent,'parent spent'); integer(parent.allocation,'parent allocation');
       if (control.policy.schemaVersion === 2) {
         let allocated = 0n;
-        for (const child of this.db.prepare("SELECT allocation FROM cells WHERE parent_id=? AND status!='retired'").iterate(parentId)) {
-          allocated += BigInt(integer(child.allocation,'child allocation'));
+        // Bounded pages avoid Node 22's premature StatementSync iterator
+        // finalization while retaining exact sums at arbitrary cell counts.
+        const children = this.db.prepare("SELECT id,allocation FROM cells WHERE parent_id=? AND status!='retired' AND id>? ORDER BY id LIMIT 256");
+        let lastChildId = '';
+        while (true) {
+          const page = children.all(parentId,lastChildId);
+          for (const child of page) allocated += BigInt(integer(child.allocation,'child allocation'));
+          if (page.length < 256) break;
+          lastChildId = page.at(-1).id;
         }
         if (BigInt(parent.spent) + allocated + BigInt(budgetCents) > BigInt(parent.allocation)) fail('BUDGET','Insufficient unallocated parent budget.');
       } else {
@@ -398,10 +405,17 @@ export class FactoryControl {
     const p = grant.policy;
     capacityGrowthPolicy(p);
     let count = 0n, budget = 0n;
-    for (const row of this.db.prepare("SELECT details FROM events WHERE type='capacity_admitted' AND subject=?").iterate(p.grantId)) {
-      const admission = JSON.parse(row.details);
-      integer(admission.request.budgetCents, 'admitted budget');
-      budget += BigInt(admission.request.budgetCents); count++;
+    const admissions = this.db.prepare("SELECT seq,details FROM events WHERE type='capacity_admitted' AND subject=? AND seq>? ORDER BY seq LIMIT 256");
+    let lastSeq = 0;
+    while (true) {
+      const page = admissions.all(p.grantId,lastSeq);
+      for (const row of page) {
+        const admission = JSON.parse(row.details);
+        integer(admission.request.budgetCents, 'admitted budget');
+        budget += BigInt(admission.request.budgetCents); count++;
+      }
+      if (page.length < 256) break;
+      lastSeq = page.at(-1).seq;
     }
     if ((p.schemaVersion === 1 && count + (additionalBudget === null ? 0n : 1n) > BigInt(p.maxChildren))
         || budget + BigInt(additionalBudget ?? 0) > BigInt(p.maxBudgetCents)) fail('CAPACITY_GRANT_QUOTA', 'Standing grant count or logical budget is exhausted.');
