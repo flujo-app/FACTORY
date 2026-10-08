@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "factoryRevision": "2941626a9d48a73a604ba93886efdb20f2081632",
+  "flujoRevision": "128e2b4b83043b2f9c75ce0369a029eb2b133cfc",
+  "flujoPullRequest": "https://github.com/mario-andreschak/FLUJO/pull/958",
+  "runtime": {
+    "factoryNode": "24.19.0",
+    "flujo": "isolated development server on 127.0.0.1:4378",
+    "dataRoot": "isolated system temp directory",
+    "model": "local synthetic OpenAI-compatible loopback server",
+    "paidInference": false
+  },
+  "result": {
+    "accepted": true,
+    "workers": 1,
+    "conversations": 1,
+    "modelCalls": 1,
+    "replayed": true,
+    "fleetRetirement": "succeeded",
+    "workspaceAbsent": true,
+    "successfulProvisionEffects": 1,
+    "successfulFlowCallEffects": 1,
+    "serverStoppedAfterRun": true
+  },
+  "scope": "Live unpaid local verification of FactoryLocalFleet.run, replay, and the new fleet.retire path against the pinned FLUJO PR. The earlier 10-worker/300-conversation acceptance used the lower-level retirement call and was not rerun here."
+}

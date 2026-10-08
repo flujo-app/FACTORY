@@ -100,6 +100,10 @@ its original effect without another provider call. For an unknown local retireme
 `fleet.reconcileRetired(plan,{workerId})` after FLUJO has settled; this requires
 the adapter's read-only absence evidence. Retirement still does not close
 the Factory cell or claim provider accounting closure.
+The [live retirement check](evidence/local-flujo-fleet-retirement-20261008.json)
+ran the fleet-level path with one unpaid synthetic worker and conversation
+against the pinned FLUJO lifecycle PR. The earlier 10-worker/300-conversation
+acceptance exercised the same scheduler with lower-level retirement.
 
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
 Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new
