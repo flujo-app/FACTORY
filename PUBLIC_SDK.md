@@ -20,6 +20,11 @@ The packed package includes both the public CLI and the separate internal
 `npm run factory` and offline `npm run pilot` entry files. `npm test` is a
 source-checkout command: the public tarball omits the private/integration test
 fixtures and their dependencies.
+The [Public SDK CI run](https://github.com/flujo-app/FACTORY/actions/runs/37852291808)
+passed on Ubuntu with Node 24 at commit `2ca4d5a`: it audited runtime
+dependencies, ran 16 focused SAVIA and managed-fleet tests, installed the
+packed tarball in a fresh consumer, created a two-cell swarm and opened the
+installed CLI.
 The [fresh-install check](evidence/public-sdk-install-20261008.json) resolved
 main at `e3925c7` and created/replayed a three-cell swarm through the installed
 package. A separate credential-free HTTPS source download and tarball install
