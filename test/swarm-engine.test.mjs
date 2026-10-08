@@ -112,3 +112,35 @@ test('uncertain provider result keeps the reserved cell and blocks replay', asyn
     reopened.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('a child FACTORY lease can provision its own child in the same budget-only tree', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-recursive-'));
+  try {
+    const database = path.join(directory, 'control.sqlite');
+    const control = new FactoryControl(database);
+    control.initialize({ mission: 'Recursive FLUJO swarm', budgetCents: 100,
+      growthMode: 'budget-only' });
+    control.createTask({ taskId: 'root-task', projectId: 'project', branch: 'codex/root-task',
+      specification: { problem: 'Start child', acceptance: 'Receipt', baseline: 'main' } });
+    const root = control.claimTask('root-task', 'root', 60000);
+    control.close();
+    const engine = new FactorySwarmEngine(database, {
+      async provision(input) { return { app: input.app, worker: input.app, state: 'ready' }; },
+      async call() { throw new Error('unused'); }, async retire() { throw new Error('unused'); },
+    });
+    assert.equal((await engine.provisionWorker({ lease: root, cellId: 'child', app: 'worker-child',
+      budgetCents: 70, purpose: 'Child coordinator', role: 'coordinator', input: { app: 'worker-child' } })).effect.state, 'succeeded');
+    const childControl = new FactoryControl(database);
+    childControl.createTask({ taskId: 'child-task', projectId: 'project', branch: 'codex/child-task',
+      specification: { problem: 'Start grandchild', acceptance: 'Receipt', baseline: 'main' } });
+    const child = childControl.claimTask('child-task', 'child', 60000);
+    childControl.close();
+    assert.equal((await engine.provisionWorker({ lease: child, cellId: 'grandchild', app: 'worker-grandchild',
+      budgetCents: 40, purpose: 'Grandchild worker', input: { app: 'worker-grandchild' } })).effect.state, 'succeeded');
+    const observed = new FactoryControl(database);
+    assert.deepEqual(observed.status().cells.map(cell => [cell.id, cell.parent_id, cell.status]), [
+      ['child', 'root', 'ready'], ['grandchild', 'child', 'ready'], ['root', null, 'ready'],
+    ]);
+    observed.close();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

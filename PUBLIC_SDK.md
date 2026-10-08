@@ -61,16 +61,43 @@ uncertain provider outcome remains `unknown` and requires reconciliation.
 Worker retirement alone does not close the Factory cell; that requires the
 controller's separate provider-evidence closure path.
 
+Recursive delegation uses the same database: a ready child cell claims its own
+FACTORY task, then passes that lease to `provisionWorker` to reserve and launch
+its child. Budget-only growth retains each parent's allocation as the limit.
+
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
-Provisioning takes `{app, flowSpec}` and requires a new `swarm-<app>` workspace;
-it compiles the supplied flow spec before marking the worker ready. Calls take
+Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new
+`swarm-<app>` workspace; it compiles every supplied flow before marking the
+worker ready. `buildFactoryTeamSpecs` produces the local `swarm_agent` and
+`swarm_team` pair. With `CASE_SPECIALISTS_V1`, each team has one lead and a gate
+for nine specialist subflows; ten such teams describe SAVIA's 100-conversation
+topology. This is a template target, not evidence that 100 conversations ran.
+Pass `teamTemplate: {model, specialists: CASE_SPECIALISTS_V1}` during provisioning
+to build the pair from the newly created workspace's actual connected tool
+inventory.
+The template's `model` is an ID installed in each target FLUJO workspace. Pass
+`modelConfig` with the same ID during provisioning when the workspace needs that
+model installed. `availableServers` must reflect the workspace's connected tool
+inventory. Model credentials remain private input to the adapter and are not
+included in Factory observation receipts.
+Calls take
 `{conversationId, request:{flowName,prompt}}`. A workspace shares the FLUJO
 machine with other workspaces, so it is not a separate sandbox. The adapter
-does not install the recovered fleet template or grant agents delegation tools.
+does not grant agents recursive delegation tools.
 
-The FLUJO HTTP client in `src/flujo-swarm` is a source extraction from the
+The FLUJO HTTP client and specialist profile in `src/flujo-swarm` are source
+extractions from the
 MIT-licensed Seagulled package, revision `70f1a7f115203e723fdc18e5a2cd5b9d391db363`,
 which in turn records its source extraction from `flujo-app/swarm-teams`.
+
+## Observatory feed
+
+`createPresentationServer` and `startPresentationServer` are also exported by
+the SDK. They expose FACTORY's existing authenticated, command-disabled v1
+snapshot and event feed consumed by Brain Online and Brain Observatory. The
+viewer token belongs on the server; it must not be passed to the browser.
+See [BRAIN_ONLINE_INTEGRATION.md](BRAIN_ONLINE_INTEGRATION.md) for the exact
+identity, event, freshness and read-only contract.
 
 This is the first public cloud dispatch surface. It does not yet include the
 recursive worker scheduler, conversation templates, or the Observatory host.

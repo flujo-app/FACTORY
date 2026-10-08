@@ -1,4 +1,5 @@
 import { FlujoClient } from '../flujo-swarm/flujo-client.mjs';
+import { buildFactoryTeamSpecs } from '../flujo-swarm/template/factory-team.mjs';
 
 const WORKER = /^[a-z][a-z0-9-]{2,62}$/;
 const CONVERSATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -18,18 +19,48 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
   return Object.freeze({
     capabilities: Object.freeze({ adapter: 'flujo-workspace', machineIsolation: false,
       recursiveProvisioning: false, providerSpendObserved: false }),
-    async provision({ app, flowSpec } = {}) {
+    async provision({ app, flowSpec, flowSpecs, teamTemplate, modelConfig } = {}) {
       const client = clientFor(app);
-      if (!flowSpec || typeof flowSpec !== 'object' || Array.isArray(flowSpec)
-        || typeof flowSpec.name !== 'string' || !flowSpec.name.trim()) {
-        throw new TypeError('An explicit FLUJO flow spec is required');
+      const requestedSpecs = flowSpecs ?? (flowSpec === undefined ? null : [flowSpec]);
+      if (teamTemplate !== undefined && (flowSpec !== undefined || flowSpecs !== undefined)
+        || teamTemplate === undefined && (!Array.isArray(requestedSpecs)
+          || requestedSpecs.length < 1 || requestedSpecs.length > 32
+          || new Set(requestedSpecs.map(spec => spec?.name)).size !== requestedSpecs.length
+          || requestedSpecs.some(spec => !spec || typeof spec !== 'object' || Array.isArray(spec)
+            || typeof spec.name !== 'string' || !spec.name.trim()))
+        || teamTemplate !== undefined && (!teamTemplate || typeof teamTemplate !== 'object'
+          || Array.isArray(teamTemplate) || typeof teamTemplate.model !== 'string' || !teamTemplate.model.trim())) {
+        throw new TypeError('Distinct flow specs or one FACTORY team template are required');
+      }
+      if (modelConfig !== undefined && (!modelConfig || typeof modelConfig !== 'object'
+        || Array.isArray(modelConfig) || typeof modelConfig.id !== 'string' || !modelConfig.id.trim())) {
+        throw new TypeError('modelConfig must name an installed FLUJO model ID');
+      }
+      if (teamTemplate && modelConfig && teamTemplate.model !== modelConfig.id) {
+        throw new TypeError('Team template and model configuration must name the same model');
       }
       // A fresh FACTORY intent must never adopt or overwrite a preexisting workspace.
       if ((await client.workspaces()).includes(client.workspace)) throw new Error('Workspace identity is already occupied.');
       await client.ensureWorkspace();
-      const flow = await client.saveFlowSpec(flowSpec);
-      if (flow?.name !== flowSpec.name || typeof flow.id !== 'string' || !flow.id) {
-        throw new Error('FLUJO did not confirm the installed flow.');
+      if (modelConfig) await client.upsertModel(modelConfig);
+      let specs = requestedSpecs;
+      if (teamTemplate) {
+        const supported = new Set(['filesystem', 'bash', 'browser', 'flujo']);
+        const servers = (await client.servers()).filter(server => !server.disabled && supported.has(server.name));
+        const availableServers = [...new Set(servers.map(server => server.name))];
+        const availableTools = {};
+        for (const name of availableServers) {
+          const observed = await client.serverTools(name);
+          if (observed?.error || !Array.isArray(observed?.tools)) throw new Error('Connected FLUJO tool inventory is unavailable.');
+          availableTools[name] = observed.tools.map(tool => tool?.name).filter(name => typeof name === 'string');
+        }
+        specs = buildFactoryTeamSpecs({ ...teamTemplate, availableServers, availableTools });
+      }
+      for (const spec of specs) {
+        const flow = await client.saveFlowSpec(spec);
+        if (flow?.name !== spec.name || typeof flow.id !== 'string' || !flow.id) {
+          throw new Error('FLUJO did not confirm the installed flow.');
+        }
       }
       return { app, worker: app, workspace: client.workspace, state: 'ready' };
     },
