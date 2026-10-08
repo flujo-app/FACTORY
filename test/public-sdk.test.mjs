@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Factory } from '../src/public-sdk.mjs';
+import { Factory, FactoryControl } from '../src/public-sdk.mjs';
 
 const cli = fileURLToPath(new URL('../bin/factory-public.mjs', import.meta.url));
 const mcp = fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
@@ -54,6 +54,35 @@ test('invalid swarm allocation fails before creating a database', async t => {
   assert.throws(() => new Factory(database).createSwarm({ mission: 'Build', budgetCents: 1,
     agents: [{ id: 'builder', budgetCents: 2 }] }), /allocations exceed/);
   await assert.rejects(stat(database), { code: 'ENOENT' });
+});
+
+test('swarm creation rolls back agents admitted before a later conflict', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-public-atomic-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const factory = new Factory(join(dir, 'swarm.sqlite'));
+  factory.createSwarm({ mission: 'Build', agents: [{ id: 'existing', role: 'verifier' }] });
+  assert.throws(() => factory.createSwarm({ mission: 'Build', agents: [
+    { id: 'new-builder' }, { id: 'existing', role: 'developer' },
+  ] }), /Cell identity is already bound/);
+  assert.deepEqual(factory.status().cells.map(cell => cell.id).sort(), ['existing', 'root']);
+  assert.equal(factory.createSwarm({ mission: 'Build', agents: [
+    { id: 'new-builder' }, { id: 'existing', role: 'verifier' },
+  ] }).cells.length, 3);
+});
+
+test('failed initial admission rolls back the root and earlier agents', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-public-root-atomic-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const database = join(dir, 'swarm.sqlite');
+  const control = new FactoryControl(database);
+  try {
+    assert.throws(() => control.initializeSwarm({ mission: 'Build', budgetCents: 0, maxCells: 16, maxDepth: 2 }, [
+      { cellId: 'builder', budgetCents: 0, purpose: 'Build' },
+      { cellId: 'reviewer', budgetCents: 0, purpose: '' },
+    ]), /Role and purpose are required/);
+    assert.throws(() => control.status(), /Initialize the factory first/);
+  } finally { control.close(); }
+  assert.equal(new Factory(database).createSwarm({ mission: 'Build', agents: [{ id: 'builder' }] }).cells.length, 2);
 });
 
 test('empty swarm can enroll agents after creation', async t => {

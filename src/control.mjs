@@ -248,6 +248,10 @@ export class FactoryControl {
   }
   active() { const control = this.control(); if (control.status !== 'active') fail('PAUSED', 'Factory is paused.'); return control; }
   initialize(input) {
+    const { policy, budgetCents, mission } = this.#initializationPolicy(input);
+    return this.transaction(() => this.#initialize(policy, budgetCents, mission));
+  }
+  #initializationPolicy(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID','An initialization policy is required.');
     const { mission, budgetCents } = input;
     if (typeof mission !== 'string' || !mission.trim()) fail('INVALID', 'Mission is required.');
@@ -261,12 +265,25 @@ export class FactoryControl {
       const { maxCells = 4, maxDepth = 2 } = input;
       policy = { mission,budgetCents:integer(budgetCents,'budgetCents'),maxCells:integer(maxCells,'maxCells',1),maxDepth:integer(maxDepth,'maxDepth') };
     }
+    return { policy, budgetCents, mission };
+  }
+  #initialize(policy, budgetCents, mission) {
+    const previous = this.db.prepare('SELECT * FROM control WHERE id=1').get();
+    if (previous) { if (previous.policy !== canonical(policy)) fail('CONFLICT', 'Factory already has a different policy.'); return this.control(); }
+    this.db.prepare('INSERT INTO control VALUES(1,1,?,?)').run('active', canonical(policy));
+    this.db.prepare('INSERT INTO cells(id,parent_id,depth,role,allocation,status,purpose,heartbeat) VALUES(?,NULL,0,?,?,?, ?,?)').run('root', 'coordinator', budgetCents, 'ready', mission, this.clock());
+    this.event('initialized', 'root', policy); return this.control();
+  }
+  initializeSwarm(input, agents) {
+    if (!Array.isArray(agents)) fail('INVALID', 'Agents must be an array.');
+    const { policy, budgetCents, mission } = this.#initializationPolicy(input);
     return this.transaction(() => {
-      const previous = this.db.prepare('SELECT * FROM control WHERE id=1').get();
-      if (previous) { if (previous.policy !== canonical(policy)) fail('CONFLICT', 'Factory already has a different policy.'); return this.control(); }
-      this.db.prepare('INSERT INTO control VALUES(1,1,?,?)').run('active', canonical(policy));
-      this.db.prepare('INSERT INTO cells(id,parent_id,depth,role,allocation,status,purpose,heartbeat) VALUES(?,NULL,0,?,?,?, ?,?)').run('root', 'coordinator', budgetCents, 'ready', mission, this.clock());
-      this.event('initialized', 'root', policy); return this.control();
+      this.#initialize(policy,budgetCents,mission);
+      for (const agent of agents) {
+        this.#reserveCell(agent);
+        this.#enrollCell(agent.cellId);
+      }
+      return this.status();
     });
   }
   /** Trusted local policy change. It revokes old authority without changing any work or reopening admission. */
@@ -442,7 +459,8 @@ export class FactoryControl {
       return this.effect(binding.key);
     });
   }
-  enrollCell(cellId) { return this.transaction(() => { this.active(); const cell = this.db.prepare('SELECT * FROM cells WHERE id=?').get(id(cellId)); if (!cell || cell.status === 'retired') fail('CELL', 'Cell is unavailable.'); this.db.prepare('UPDATE cells SET status=?,heartbeat=? WHERE id=?').run('ready',this.clock(),cellId); this.event('cell_enrolled',cellId); return { cellId, status: 'ready' }; }); }
+  enrollCell(cellId) { return this.transaction(() => this.#enrollCell(cellId)); }
+  #enrollCell(cellId) { this.active(); const cell = this.db.prepare('SELECT * FROM cells WHERE id=?').get(id(cellId)); if (!cell || cell.status === 'retired') fail('CELL', 'Cell is unavailable.'); this.db.prepare('UPDATE cells SET status=?,heartbeat=? WHERE id=?').run('ready',this.clock(),cellId); this.event('cell_enrolled',cellId); return { cellId, status: 'ready' }; }
   heartbeat(cellId) { const result = this.db.prepare("UPDATE cells SET heartbeat=? WHERE id=? AND status='ready'").run(this.clock(),id(cellId)); if (!result.changes) fail('CELL','Ready cell is required.'); return { cellId, observed: this.clock() }; }
   createTask({ taskId, projectId, branch, specification }) {
     id(taskId); id(projectId);

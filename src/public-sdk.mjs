@@ -42,15 +42,11 @@ export class Factory {
       if (!Number.isSafeInteger(allocated) || allocated > budgetCents) throw new TypeError('agent allocations exceed swarm budget');
       ids.add(agent.id);
     }
-    return this.#withControl(control => {
-      control.initialize(growthMode === 'budget-only' ? { mission, budgetCents, growthMode }
-        : { mission, budgetCents, maxCells, maxDepth });
-      for (const agent of agents) {
-        control.reserveCell({ cellId: agent.id, parentId: agent.parentId ?? 'root', role: agent.role ?? 'developer', budgetCents: agent.budgetCents ?? 0, purpose: agent.purpose ?? mission });
-        control.enrollCell(agent.id);
-      }
-      return control.status();
-    });
+    return this.#withControl(control => control.initializeSwarm(
+      growthMode === 'budget-only' ? { mission, budgetCents, growthMode }
+        : { mission, budgetCents, maxCells, maxDepth },
+      agents.map(agent => ({ cellId: agent.id, parentId: agent.parentId ?? 'root', role: agent.role ?? 'developer',
+        budgetCents: agent.budgetCents ?? 0, purpose: agent.purpose ?? mission }))));
   }
 
   addAgent({ id, parentId = 'root', role = 'developer', budgetCents = 0, purpose } = {}) {

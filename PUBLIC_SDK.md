@@ -3,7 +3,8 @@
 Licensed under [MIT](LICENSE), including commercial use.
 
 Factory keeps a durable swarm ledger: mission, agent cells, budget allocations,
-tasks, and external effects. `createSwarm` only initializes that ledger.
+tasks, and external effects. `createSwarm` initializes the mission and initial
+agents in one transaction; a failed agent admission leaves no partial swarm.
 `FactorySwarmEngine` can dispatch work through an explicitly configured local
 FLUJO or managed cloud adapter. Agents can also use the SDK or MCP directly.
 
