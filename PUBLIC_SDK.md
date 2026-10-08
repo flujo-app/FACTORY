@@ -190,8 +190,8 @@ acceptance exercised the same scheduler with lower-level retirement.
 The [live cell-closure check](evidence/local-flujo-cell-closure-20261008.json)
 then ran one unpaid synthetic worker through the current SDK's workspace
 retirement and trusted logical cell closure against an isolated FLUJO scratch
-server. The scratch source is identified in that record and is not the
-FLUJO #955 release candidate.
+server. The scratch source is identified in that record and predates the
+merged FLUJO #955 main commit.
 
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
 Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new
@@ -292,6 +292,10 @@ consumer. [PR #955](https://github.com/mario-andreschak/FLUJO/pull/955)
 then auto-merged into protected FLUJO `main` as
 `91ba5131743eed7ac3121753791d80b0b99c8e58`. This establishes source
 adoption, not a published FLUJO release or a production SAVIA role run.
+At the 2026-10-08 check, FLUJO main declared package `flujo-ai` version
+`3.46.3`, while npm and the latest GitHub release still exposed `3.46.2`.
+Install FLUJO from a source revision containing the merge when testing this
+local lifecycle; the published `3.46.2` package is not evidence for it.
 
 To reproduce without paid inference, start an isolated local FLUJO server and run
 `FACTORY_FLUJO_ORIGIN=http://127.0.0.1:<port> npm run smoke:local-flujo`
