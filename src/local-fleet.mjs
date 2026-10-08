@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { FactoryControl, FactoryError, digest } from './control.mjs';
 import { FactorySwarmEngine, conversationEffectKey } from './swarm-engine.mjs';
 import { observeLocalCellRetirement } from './provider-retirement.mjs';
+import { SpendingLedger } from './spending.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const APP = /^[a-z][a-z0-9-]{2,62}$/;
@@ -172,6 +173,7 @@ export class FactoryLocalFleet {
             operation: { kind: 'provision', cellId: worker.id, app: worker.app },
             parentId: worker.parentId ?? 'root', allocationCents: worker.budgetCents,
             purpose: worker.purpose,
+            ...(worker.paidCeilingCents === undefined ? {} : { paidCeilingCents: worker.paidCeilingCents }),
             provisionInputDigest: digest(worker.provisionInput) } });
         for (const job of worker.conversations) {
           control.createTask({ taskId: `run-${job.id}`, projectId: plan.projectId,
@@ -447,8 +449,66 @@ export class FactoryLocalFleet {
 
 /** Managed FLUJO-CLOUD scheduling with the same FACTORY tasks and durable effects. */
 export class FactoryManagedFleet extends FactoryLocalFleet {
-  constructor(database, adapter, options = {}) {
-    super(database, adapter, { ...options, [MANAGED_FLEET]: true });
+  constructor(database, adapter, { paidAdmission, provider, ...options } = {}) {
+    if (!(paidAdmission instanceof SpendingLedger) || typeof provider !== 'string'
+      || !/^[a-z][a-z0-9-]{0,31}$/.test(provider)) {
+      throw new TypeError('Managed fleets require an initialized shared SpendingLedger and provider');
+    }
+    paidAdmission.policy();
+    const ceilings = new Map();
+    const reservationId = app => `managed-${digest({ database: resolve(database), app }).slice(0, 48)}`;
+    const guarded = Object.freeze({
+      source: adapter?.source, capabilities: adapter?.capabilities,
+      async provision(input) {
+        const ceilingCents = ceilings.get(input?.app);
+        if (!Number.isSafeInteger(ceilingCents) || ceilingCents < 1)
+          throw new TypeError('Managed worker has no paid ceiling');
+        paidAdmission.reserve({ reservationId: reservationId(input.app), provider, ceilingCents });
+        paidAdmission.start(reservationId(input.app));
+        return adapter.provision(input);
+      },
+      async call(app, input) {
+        paidAdmission.start(reservationId(app));
+        return adapter.call(app, input);
+      },
+      async retire(app) {
+        const row = paidAdmission.row(reservationId(app));
+        if (row.provider !== provider || row.ceiling_cents !== ceilings.get(app))
+          throw new TypeError('Managed paid reservation does not match this worker');
+        const receipt = await adapter.retire(app);
+        if (receipt?.worker !== app || receipt?.app !== undefined && receipt.app !== app
+          || !['destroyed', 'retired'].includes(receipt?.state))
+          throw new TypeError('Managed retirement receipt is not confirmed');
+        paidAdmission.retire(reservationId(app), { evidenceDigest: digest(receipt) });
+        return receipt;
+      },
+    });
+    super(database, guarded, { ...options, [MANAGED_FLEET]: true });
+    this.paidAdmission = paidAdmission;
+    this.paidCeilings = ceilings;
+    this.paidProvider = provider;
+  }
+
+  #bindPaidPlan(plan) {
+    validatePlan(plan);
+    for (const worker of plan.workers) {
+      if (!Number.isSafeInteger(worker.paidCeilingCents) || worker.paidCeilingCents < 1)
+        throw new TypeError('Each managed worker needs a positive paidCeilingCents');
+      const previous = this.paidCeilings.get(worker.app);
+      if (previous !== undefined && previous !== worker.paidCeilingCents)
+        throw new TypeError('Managed worker paid ceiling changed');
+    }
+    for (const worker of plan.workers) this.paidCeilings.set(worker.app, worker.paidCeilingCents);
+  }
+
+  async run(plan, options) {
+    this.#bindPaidPlan(plan);
+    return super.run(plan, options);
+  }
+
+  async retire(plan, options) {
+    this.#bindPaidPlan(plan);
+    return super.retire(plan, options);
   }
 
   async closeRetired() {

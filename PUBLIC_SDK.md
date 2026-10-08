@@ -98,6 +98,13 @@ retain the attempt files and use the provider's recovery procedure before
 claiming closure. `FactoryManagedFleet` accepts this managed adapter and the
 same durable worker plan shape as `FactoryLocalFleet`: `run`, append-only
 `scale`, bounded conversation dispatch, replay and child-first `retire`.
+Each worker needs a positive `paidCeilingCents`; `budgetCents` remains a separate
+logical cell allocation. Pass an already initialized shared `SpendingLedger`
+and an explicit provider to the fleet. It reserves and starts one durable paid
+hold before each managed provision, checks paid admission again before each
+managed flow call, and retains the full hold pending final billing after
+retirement. This is an accounting admission boundary; it cannot enforce a
+provider-side spending cap or establish final charges.
 Each worker's `provisionInput` is its exact `ManagedCloud.up` input, including
 `app`; each conversation supplies its exact `conversationId`, FLUJO request
 and absolute private output path. FACTORY persists input digests and effect
@@ -109,13 +116,18 @@ ManagedCloud's cached `list` inventory is not live health or physical absence
 evidence.
 
 ```js
-import { FactoryManagedFleet, createManagedCloudAdapter } from 'flujo-factory';
+import { FactoryManagedFleet, SpendingLedger, createManagedCloudAdapter } from 'flujo-factory';
 
+const paidAdmission = new SpendingLedger('/absolute/private/shared-spending.sqlite');
+paidAdmission.initialize({ limitCents: 10000, currency: 'USD' });
 const adapter = await createManagedCloudAdapter({
   modulePath: '/absolute/flujo-cloud/lib/managed.mjs', options: privateOptions,
 });
-const fleet = new FactoryManagedFleet('/absolute/private/factory.sqlite', adapter);
+// Each managedPlan worker includes paidCeilingCents and its ManagedCloud.up input.
+const fleet = new FactoryManagedFleet('/absolute/private/factory.sqlite', adapter,
+  { paidAdmission, provider: 'fly' });
 const result = await fleet.run(managedPlan, { workerConcurrency: 4, conversationConcurrency: 20 });
+paidAdmission.close();
 ```
 
 Recursive delegation uses the same database: a ready child cell claims its own

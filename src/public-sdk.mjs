@@ -72,6 +72,7 @@ export class Factory {
 }
 
 export { FactoryControl } from './control.mjs';
+export { SpendingLedger } from './spending.mjs';
 export { FactorySwarmEngine, conversationEffectKey, conversationMessageKey, conversationCancelKey } from './swarm-engine.mjs';
 export { FactoryLocalFleet, FactoryManagedFleet } from './local-fleet.mjs';
 export { createManagedCloudAdapter } from './adapters/managed-cloud.mjs';
