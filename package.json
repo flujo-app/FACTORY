@@ -2,13 +2,15 @@
   "name": "flujo-factory",
   "version": "0.2.0",
   "description": "Durable local Factory swarm coordination SDK, CLI, and MCP server",
+  "license": "MIT",
   "files": [
     "src/",
     "bin/factory-public.mjs",
     "bin/factory-mcp.mjs",
     "scripts/watch-pilot.mjs",
     "README.md",
-    "PUBLIC_SDK.md"
+    "PUBLIC_SDK.md",
+    "LICENSE"
   ],
   "exports": {
     ".": "./src/public-sdk.mjs"

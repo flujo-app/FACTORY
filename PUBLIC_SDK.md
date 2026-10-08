@@ -1,12 +1,14 @@
 # Public local Factory SDK, CLI, and MCP
 
+Licensed under [MIT](LICENSE), including commercial use.
+
 Factory is a durable **local coordinator**. A swarm here means a mission, named
 agent cells, budget allocations, and claimable tasks in one SQLite database.
 Creating a swarm does not start agent processes, call an AI provider, or deploy
 cloud infrastructure. Agents can be your own programs using this SDK or MCP.
 
-Requires Node.js 24 or newer. Install into your project with
-`npm install github:flujo-app/FACTORY#main` or from a local checkout with
+Requires Node.js 24 or newer. Install version 0.2.0 into your project with
+`npm install github:flujo-app/FACTORY#v0.2.0` or from a local checkout with
 `npm install .`. Run the project-local CLI with `npx factory`.
 
 ## CLI
