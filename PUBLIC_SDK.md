@@ -109,6 +109,8 @@ hold before each managed provision, checks paid admission again before each
 managed flow call, and retains the full hold pending final billing after
 retirement. This is an accounting admission boundary; it cannot enforce a
 provider-side spending cap or establish final charges.
+`fleet.paidReservationId(app)` returns the stable reservation key for later
+meter observations and final billing reconciliation through the shared ledger.
 Each worker's `provisionInput` is its exact `ManagedCloud.up` input, including
 `app`; each conversation supplies its exact `conversationId`, FLUJO request
 and absolute private output path. FACTORY persists input digests and effect

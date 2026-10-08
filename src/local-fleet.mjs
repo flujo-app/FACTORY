@@ -11,6 +11,14 @@ const APP = /^[a-z][a-z0-9-]{2,62}$/;
 const CONVERSATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MANAGED_FLEET = Symbol('managed-fleet');
 
+/** Stable paid-ledger identity for one managed worker in one FACTORY database. */
+export function managedFleetReservationId(database, app) {
+  if (typeof database !== 'string' || !isAbsolute(database)
+    || typeof app !== 'string' || !APP.test(app))
+    throw new TypeError('An absolute FACTORY database and managed app are required');
+  return `managed-${digest({ database: resolve(database), app }).slice(0, 48)}`;
+}
+
 function validatePlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)
     || typeof plan.mission !== 'string' || !plan.mission.trim()
@@ -456,7 +464,7 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
     }
     paidAdmission.policy();
     const ceilings = new Map();
-    const reservationId = app => `managed-${digest({ database: resolve(database), app }).slice(0, 48)}`;
+    const reservationId = app => managedFleetReservationId(database, app);
     const guarded = Object.freeze({
       source: adapter?.source, capabilities: adapter?.capabilities,
       async provision(input) {
@@ -489,6 +497,8 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
     this.paidProvider = provider;
   }
 
+  paidReservationId(app) { return managedFleetReservationId(this.database, app); }
+
   #bindPaidPlan(plan) {
     validatePlan(plan);
     for (const worker of plan.workers) {
@@ -498,6 +508,7 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
       if (previous !== undefined && previous !== worker.paidCeilingCents)
         throw new TypeError('Managed worker paid ceiling changed');
     }
+    this.prepare(plan);
     for (const worker of plan.workers) this.paidCeilings.set(worker.app, worker.paidCeilingCents);
   }
 

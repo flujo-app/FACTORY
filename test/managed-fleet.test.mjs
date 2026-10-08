@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { FactoryLocalFleet, FactoryManagedFleet, SpendingLedger,
+import { FactoryLocalFleet, FactoryManagedFleet, SpendingLedger, managedFleetReservationId,
   createManagedCloudAdapter } from '../src/public-sdk.mjs';
 
 function plan(directory) {
@@ -49,6 +49,10 @@ test('managed fleet schedules, replays and retires through FACTORY durable effec
   assert.equal(result.conversations.every(item => item.status === 'completed'), true);
   assert.deepEqual(cloud.counts, { up: 2, call: 2, down: 0 });
   assert.equal(paid.status().committedCents, 200);
+  assert.equal(paid.status().reservations.some(item =>
+    item.reservationId === fleet.paidReservationId('managed-a')), true);
+  assert.equal(fleet.paidReservationId('managed-a'),
+    managedFleetReservationId(path.join(directory, 'managed.sqlite'), 'managed-a'));
   assert.equal(await readFile(work.workers[0].conversations[0].outputPath, 'utf8'),
     'managed-a:managed-a-conversation');
   const replay = await fleet.run(work, { workerConcurrency: 2, conversationConcurrency: 2 });
@@ -59,6 +63,29 @@ test('managed fleet schedules, replays and retires through FACTORY durable effec
   assert.deepEqual(cloud.counts, { up: 2, call: 2, down: 2 });
   assert.equal(paid.status().reservations.every(item => item.state === 'retired-meter-pending'), true);
   await assert.rejects(() => fleet.closeRetired(work, { workerId: 'managed-a' }), TypeError);
+});
+
+test('managed fleet restart reuses exact paid holds and rejects a changed ceiling', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-managed-restart-'));
+  const paidPath = path.join(directory, 'spending.sqlite');
+  const database = path.join(directory, 'managed.sqlite');
+  const paid = new SpendingLedger(paidPath);
+  paid.initialize({ limitCents: 200, currency: 'USD' });
+  t.after(async () => { paid.close(); await rm(directory, { recursive: true, force: true }); });
+  const cloud = service();
+  const adapter = await createManagedCloudAdapter({ service: cloud });
+  const work = plan(directory);
+  await new FactoryManagedFleet(database, adapter, { paidAdmission: paid, provider: 'fly' }).run(work,
+    { workerConcurrency: 2, conversationConcurrency: 2 });
+  const restarted = new FactoryManagedFleet(database, adapter, { paidAdmission: paid, provider: 'fly' });
+  const changed = { ...work, workers: work.workers.map((worker, index) => index === 0
+    ? { ...worker, paidCeilingCents: 101 } : worker) };
+  await assert.rejects(() => restarted.run(changed), /different input/i);
+  const replay = await restarted.run(work, { workerConcurrency: 2, conversationConcurrency: 2 });
+  assert.equal(replay.launches.every(item => item.replayed), true);
+  assert.equal(replay.conversations.every(item => item.replayed), true);
+  assert.deepEqual(cloud.counts, { up: 2, call: 2, down: 0 });
+  assert.equal(paid.status().reservations.length, 2);
 });
 
 test('managed fleet holds uncertain retirement without dispatching it twice', async t => {
