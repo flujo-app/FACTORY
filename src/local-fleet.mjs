@@ -8,6 +8,7 @@ import { observeLocalCellRetirement } from './provider-retirement.mjs';
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const APP = /^[a-z][a-z0-9-]{2,62}$/;
 const CONVERSATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const MANAGED_FLEET = Symbol('managed-fleet');
 
 function validatePlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)
@@ -77,11 +78,14 @@ async function boundedMap(values, concurrency, operation) {
   return results;
 }
 
-/** Local FLUJO fleet planning over one FACTORY controller, without a second worker registry. */
+/** FACTORY fleet planning over one controller, without a second worker registry. */
 export class FactoryLocalFleet {
-  constructor(database, adapter, { leaseTtlMs = 600000, renewEveryMs = 60000 } = {}) {
-    if (adapter?.capabilities?.adapter !== 'flujo-workspace') {
-      throw new TypeError('FactoryLocalFleet requires the local FLUJO workspace adapter');
+  constructor(database, adapter, { leaseTtlMs = 600000, renewEveryMs = 60000,
+    [MANAGED_FLEET]: managedFleet = false } = {}) {
+    if (adapter?.capabilities?.adapter !== (managedFleet ? 'managed-cloud' : 'flujo-workspace')) {
+      throw new TypeError(managedFleet
+        ? 'FactoryManagedFleet requires the managed FLUJO-CLOUD adapter'
+        : 'FactoryLocalFleet requires the local FLUJO workspace adapter');
     }
     if (!Number.isSafeInteger(leaseTtlMs) || leaseTtlMs < 2
       || !Number.isSafeInteger(renewEveryMs) || renewEveryMs < 1 || renewEveryMs >= leaseTtlMs / 2) {
@@ -438,5 +442,16 @@ export class FactoryLocalFleet {
       return { workerId, status: 'retired', replayed: false,
         cell: control.retireProvisionedCell(worker.id, request, proof) };
     } finally { try { control?.close(); } finally { this.retiring = false; } }
+  }
+}
+
+/** Managed FLUJO-CLOUD scheduling with the same FACTORY tasks and durable effects. */
+export class FactoryManagedFleet extends FactoryLocalFleet {
+  constructor(database, adapter, options = {}) {
+    super(database, adapter, { ...options, [MANAGED_FLEET]: true });
+  }
+
+  async closeRetired() {
+    throw new TypeError('Managed worker cell closure requires independent provider retirement evidence');
   }
 }

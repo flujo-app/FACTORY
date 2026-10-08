@@ -92,9 +92,28 @@ recorded cleanup. Each operation uses the FACTORY ledger and retains its
 original outcome on replay. The managed adapter does not implement live
 health inspection or automatic reconciliation of uncertain cloud retirement:
 retain the attempt files and use the provider's recovery procedure before
-claiming closure. The local `FactoryLocalFleet` scheduler accepts only local
-FLUJO workspaces; managed cloud callers schedule independent task leases with
-`FactorySwarmEngine.runConversations`.
+claiming closure. `FactoryManagedFleet` accepts this managed adapter and the
+same durable worker plan shape as `FactoryLocalFleet`: `run`, append-only
+`scale`, bounded conversation dispatch, replay and child-first `retire`.
+Each worker's `provisionInput` is its exact `ManagedCloud.up` input, including
+`app`; each conversation supplies its exact `conversationId`, FLUJO request
+and absolute private output path. FACTORY persists input digests and effect
+receipts rather than the private deployment input. Managed retirement confirms
+the adapter's `down` receipt, but does not close a logical cell:
+`closeRetired` refuses until an independent provider retirement proof path
+exists. Uncertain cloud results remain held and are not automatically retried.
+ManagedCloud's cached `list` inventory is not live health or physical absence
+evidence.
+
+```js
+import { FactoryManagedFleet, createManagedCloudAdapter } from 'flujo-factory';
+
+const adapter = await createManagedCloudAdapter({
+  modulePath: '/absolute/flujo-cloud/lib/managed.mjs', options: privateOptions,
+});
+const fleet = new FactoryManagedFleet('/absolute/private/factory.sqlite', adapter);
+const result = await fleet.run(managedPlan, { workerConcurrency: 4, conversationConcurrency: 20 });
+```
 
 Recursive delegation uses the same database: a ready child cell claims its own
 FACTORY task, then passes that lease to `provisionWorker` to reserve and launch
