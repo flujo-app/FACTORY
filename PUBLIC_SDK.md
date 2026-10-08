@@ -139,14 +139,19 @@ Each worker's `provisionInput` is its exact `ManagedCloud.up` input, including
 `app`; each conversation supplies its exact `conversationId`, FLUJO request
 and absolute private output path. FACTORY persists input digests and effect
 receipts rather than the private deployment input. Managed retirement confirms
-the adapter's `down` receipt, but does not close a logical cell:
-`closeRetired` refuses until an independent provider retirement proof path
-exists. Uncertain cloud results remain held and are not automatically retried.
+the adapter's `down` receipt; it leaves the logical cell ready. After successful
+child-first retirement, `fleet.closeRetired(plan,{workerId,flyPath,managedDirectory,org,workspace})`
+can close that cell using the original ManagedCloud private journal, the exact
+FACTORY task/effect/paid-hold binding, and a fresh read-only Fly app inventory
+from the explicitly selected CLI and organization. It rejects a visible app,
+changed generation, unresolved effect or missing provider evidence. The paid
+hold remains pending metering and final billing after logical cell closure.
+Uncertain cloud results remain held and are not automatically retried.
 ManagedCloud's cached `list` inventory is not live health or physical absence
 evidence.
 `FactoryManagedFleet` rejects inherited live message, cancellation and
-conversation/retirement reconciliation calls explicitly because this adapter
-cannot provide the corresponding FLUJO or provider evidence.
+conversation/uncertain-retirement reconciliation calls explicitly because this
+adapter cannot provide the corresponding FLUJO or provider evidence.
 The [real-module integration check](evidence/managed-fleet-real-module-20261008.json)
 ran this paid fleet through the vendored `ManagedCloud` application service and
 its private journal, with synthetic local source, image and cloud bridge

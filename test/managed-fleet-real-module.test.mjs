@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { Journal } from '../deploy/managed-cloud/lib/journal.mjs';
-import { createManagedCloudAdapter, FactoryManagedFleet, SpendingLedger } from '../src/public-sdk.mjs';
+import { createManagedCloudAdapter, FactoryControl, FactoryManagedFleet, SpendingLedger } from '../src/public-sdk.mjs';
 
 const modulePath = fileURLToPath(new URL('../deploy/managed-cloud/lib/managed.mjs', import.meta.url));
 const origin = 'http://127.0.0.1:43451';
@@ -30,7 +30,8 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
         workspace: options.workspace, image: options.image, flowIds: options.flowIds,
         state: 'ready', stage: 'ready', appCreated: true, appId: options.app,
         machineId: 'synthetic-machine' });
-      return { app: options.app, state: 'ready', machineId: 'synthetic-machine' };
+      return { app: options.app, workspace: options.workspace, state: 'ready',
+        machineId: 'synthetic-machine' };
     },
     async call(options) {
       calls.push(['call', options.conversationId]);
@@ -75,6 +76,14 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
     }] };
   const result = await fleet.run(plan);
   assert.equal(result.launches[0].status, 'completed');
+  const control = new FactoryControl(path.join(directory, 'factory.sqlite'));
+  try {
+    const receipt = control.effect('provision-managed-fixture').receipt;
+    assert.equal(receipt.workspace, 'test-cloud');
+    assert.equal(receipt.org, 'personal');
+    assert.equal(receipt.region, 'iad');
+    assert.equal(receipt.machineId, 'synthetic-machine');
+  } finally { control.close(); }
   assert.equal(result.conversations[0].status, 'completed');
   assert.equal(await readFile(plan.workers[0].conversations[0].outputPath, 'utf8'), 'synthetic managed answer');
   assert.deepEqual(calls.map(([kind]) => kind), ['up', 'call']);

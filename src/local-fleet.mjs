@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { FactoryControl, FactoryError, digest } from './control.mjs';
 import { FactorySwarmEngine, conversationEffectKey } from './swarm-engine.mjs';
-import { observeLocalCellRetirement } from './provider-retirement.mjs';
+import { observeLocalCellRetirement, observeProvisionedCellRetirement } from './provider-retirement.mjs';
 import { SpendingLedger } from './spending.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -542,7 +542,54 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
     throw new TypeError('Managed worker retirement requires independent provider evidence');
   }
 
-  async closeRetired() {
-    throw new TypeError('Managed worker cell closure requires independent provider retirement evidence');
+  async closeRetired(plan, { workerId, flyPath, managedDirectory, org, workspace } = {}) {
+    validatePlan(plan);
+    const worker = plan.workers.find(item => item.id === workerId);
+    if (!worker) throw new TypeError('The worker is absent from this fleet plan');
+    if (this.activeRuns || this.retiring) throw new FactoryError('BUSY', 'Fleet work is active');
+    this.retiring = true;
+    let control;
+    try {
+      this.#bindPaidPlan(plan);
+      control = new FactoryControl(this.database);
+      if (control.task(`launch-${worker.id}`).status !== 'completed'
+        || worker.conversations.some(job => !['completed', 'cancelled'].includes(control.task(`run-${job.id}`).status))) {
+        throw new FactoryError('WORKER', 'Worker tasks must be terminal before cell closure');
+      }
+      const cell = control.db.prepare('SELECT * FROM cells WHERE id=?').get(worker.id);
+      if (!cell || cell.parent_id !== (worker.parentId ?? 'root')
+        || cell.allocation !== worker.budgetCents || cell.purpose !== worker.purpose) {
+        throw new FactoryError('WORKER', 'Worker cell binding changed');
+      }
+      const closureId = `close-managed-${worker.id}`;
+      const previous = cell.status === 'retired'
+        ? control.db.prepare("SELECT details FROM events WHERE type='cell_retired' AND subject=?").get(worker.id)
+        : null;
+      const previousDetails = previous ? JSON.parse(previous.details) : null;
+      const request = {
+        closureId, expectedParent: cell.parent_id, expectedStatus: 'ready',
+        expectedAllocation: cell.allocation, expectedSpent: cell.spent,
+        expectedFactoryEpoch: previousDetails?.expectedFactoryEpoch ?? control.control().epoch,
+        provisionKey: `provision-${worker.id}`, retirementKey: `retire-${worker.app}`,
+      };
+      if (previousDetails) {
+        if (previousDetails.closureId !== closureId
+          || previousDetails.result?.resourceEvidence?.resourceScope
+            !== 'owned-fly-teardown-recorded-and-app-not-returned-by-configured-inventory') {
+          throw new FactoryError('WORKER', 'Cell was closed under another authority');
+        }
+        return { workerId, status: 'retired', replayed: true,
+          cell: control.retireProvisionedCell(worker.id, request) };
+      }
+      const retirement = control.effect(request.retirementKey);
+      if (retirement.state !== 'succeeded' || retirement.scope_id !== worker.app
+        || this.paidAdmission.row(this.paidReservationId(worker.app)).state !== 'retired-meter-pending') {
+        throw new FactoryError('WORKER', 'Exact managed retirement and paid hold must be confirmed before cell closure');
+      }
+      const proof = await observeProvisionedCellRetirement(control, worker.id, request,
+        { flyPath, managedDirectory, org, workspace });
+      return { workerId, status: 'retired', replayed: false,
+        cell: control.retireProvisionedCell(worker.id, request, proof) };
+    } finally { try { control?.close(); } finally { this.retiring = false; } }
   }
 }

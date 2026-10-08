@@ -70,7 +70,8 @@ test('managed fleet schedules, replays and retires through FACTORY durable effec
   assert.equal(retired.workers.every(item => item.status === 'retired'), true);
   assert.deepEqual(cloud.counts, { up: 2, call: 2, down: 2 });
   assert.equal(paid.status().reservations.every(item => item.state === 'retired-meter-pending'), true);
-  await assert.rejects(() => fleet.closeRetired(work, { workerId: 'managed-a' }), TypeError);
+  await assert.rejects(() => fleet.closeRetired(work, { workerId: 'managed-a' }),
+    { code: 'PROVIDER_RETIREMENT_INPUT' });
 });
 
 test('managed fleet restart reuses exact paid holds and rejects a changed ceiling', async t => {

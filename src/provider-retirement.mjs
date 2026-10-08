@@ -136,14 +136,29 @@ function managedIdentity(directory, app, options) {
 function artifactPin(artifact) { return { filename:artifact.filename,identity:artifact.identity,sha256:artifact.sha256 }; }
 function managedPin(value) { return { metadata:artifactPin(value.metadata),journal:artifactPin(value.journal),generation:value.generation }; }
 function equal(left,right) { return canonical(left) === canonical(right); }
-function originalGeneration(identity, managed, cellId) {
+function originalGeneration(control, identity, managed, cellId) {
   const generation = managed.generation;
   let origin;
   try { origin = new URL(generation.source); } catch { fail('PROVIDER_RETIREMENT_GENERATION'); }
   requireValue(['http:','https:'].includes(origin.protocol) && !origin.username && !origin.password
     && !origin.search && !origin.hash && origin.pathname === '/', 'PROVIDER_RETIREMENT_GENERATION');
-  requireValue(identity.provision.request_digest === sha(canonical({cellId,app:identity.app,source:generation.source,
-    workspace:generation.workspace,image:generation.image})), 'PROVIDER_RETIREMENT_REQUEST_BINDING');
+  const legacyRequest = sha(canonical({cellId,app:identity.app,source:generation.source,
+    workspace:generation.workspace,image:generation.image}));
+  if (identity.provision.request_digest !== legacyRequest) {
+    const task = control.task(`launch-${cellId}`), specification = task.specification;
+    const receipt = identity.provision.receipt;
+    requireValue(identity.provision.task_id === task.id && task.status === 'completed'
+      && specification?.operation?.kind === 'provision'
+      && specification.operation.cellId === cellId && specification.operation.app === identity.app
+      && HASH.test(specification.provisionInputDigest ?? '')
+      && integer(specification.paidCeilingCents, 1)
+      && identity.provision.request_digest === sha(canonical({cellId,app:identity.app,
+        inputDigest:specification.provisionInputDigest}))
+      && receipt?.workspace === generation.workspace && receipt?.org === generation.org
+      && receipt?.region === managed.journal.value.region
+      && receipt?.machineId === generation.machineId,
+    'PROVIDER_RETIREMENT_REQUEST_BINDING');
+  }
   for (const value of [generation.metadataCreatedAt,generation.journalCreatedAt]) {
     const created = Date.parse(value);
     requireValue(created >= identity.provision.created && created <= identity.provision.updated, 'PROVIDER_RETIREMENT_TIME_BINDING');
@@ -180,7 +195,7 @@ async function observe(control, cellId, input, options) {
   const configured = Object.freeze({ ...options });
   const startedAt = Date.now(), identity = controllerIdentity(control,cellId,request);
   const managed = managedIdentity(configured.managedDirectory,identity.app,configured), pin = managedPin(managed);
-  originalGeneration(identity,managed,cellId);
+  originalGeneration(control,identity,managed,cellId);
   const runner = readOnlyFlyRunner(configured.flyPath,{endAt:startedAt+10_000,org:configured.org,allowedApps:[identity.app]});
   let provider;
   try { provider = scopedAbsentInventory(await runner.run(['apps','list','--org',configured.org,'--json']),identity.app,configured.org); }
