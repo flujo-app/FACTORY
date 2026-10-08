@@ -68,6 +68,13 @@
     "managedFleetExport": "present",
     "scope": "Fresh Git package import and SAVIA plan construction only. No live FLUJO observation, provider resource, or model call. The npm launcher warned that its Node 22 runtime is below the package's Node 24 engine requirement."
   },
+  "managedUnsupportedMethodsRefresh": {
+    "resolvedCommit": "5df5c7ab48144611f3234744ef10a36c18fbd7db",
+    "freshPinnedGitInstall": "passed",
+    "executionRuntime": "Node.js 24.19.0",
+    "explicitlyRejectedMethods": ["message", "cancel", "reconcileCompleted", "reconcileCancelled", "reconcileRetired"],
+    "scope": "Installed package constructed a managed fleet with an inert adapter and confirmed all five unsupported methods reject as TypeError. No provider calls were made."
+  },
   "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. The Git install used this machine's Git configuration. The separate HTTPS source archive download sent an empty Authorization header, then a fresh local tarball install repeated the SDK check. npm dependency retrieval may still have used this machine's npm configuration. No live worker dispatch was tested here.",
   "npmRegistry": "flujo-factory returned 404 on 2026-10-08; no npm package was published."
 }

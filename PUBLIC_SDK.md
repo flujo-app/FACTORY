@@ -24,6 +24,9 @@ A fresh pinned Git install at `d086f9a` constructed the ten-lead plan with its
 case ID and exposed `observeSaviaCaseTopology` under Node 24. This confirms the
 current role-observation API is in the installable public package; the install
 check did not observe a live FLUJO run.
+A fresh pinned Git install at `5df5c7a` confirmed the installed managed fleet
+rejects its five unsupported message, cancellation and reconciliation methods
+before making a provider call.
 A fresh pinned Git install at `3579051` also exported and constructed
 `FactoryManagedFleet` under Node 24 with an inert synthetic adapter. It did not
 deploy a cloud worker.
@@ -283,6 +286,10 @@ fix was merged by PR #958 into FLUJO's
 branch is not FLUJO `main`. The integration branch's current lockfile passes
 `npm audit --include=dev --audit-level=high --package-lock-only` with zero
 high or critical findings (20 moderate findings remain).
+The [FLUJO #955 production workflow](https://github.com/mario-andreschak/FLUJO/actions/runs/37837094757)
+completed successfully on 2026-10-08, including its Windows packed Antigravity
+consumer. PR #955 was still open with auto-merge enabled when this record was
+written; workflow success alone is not adoption on FLUJO `main`.
 
 To reproduce without paid inference, start an isolated local FLUJO server and run
 `FACTORY_FLUJO_ORIGIN=http://127.0.0.1:<port> npm run smoke:local-flujo`
