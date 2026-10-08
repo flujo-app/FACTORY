@@ -146,7 +146,9 @@ FACTORY task/effect/paid-hold binding, and a fresh read-only Fly app inventory
 from the explicitly selected CLI and organization. It rejects a visible app,
 changed generation, unresolved effect or missing provider evidence. Closure
 accepts an already settled bill and never changes the paid reservation; an
-unsettled hold remains pending metering and final billing.
+unsettled hold remains pending metering and final billing. A new fleet instance
+with a reopened controller and paid ledger can complete or replay the closure
+without repeating the managed `down` operation.
 Uncertain cloud results remain held and are not automatically retried.
 ManagedCloud's cached `list` inventory is not live health or physical absence
 evidence.

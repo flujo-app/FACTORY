@@ -25,7 +25,8 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
 `);
   const previousOptions = process.env.NODE_OPTIONS;
   process.env.NODE_OPTIONS = `${previousOptions ? `${previousOptions} ` : ''}--import=${pathToFileURL(preload).href}`;
-  const paid = new SpendingLedger(path.join(directory, 'paid.sqlite'));
+  const paidPath = path.join(directory, 'paid.sqlite');
+  let paid = new SpendingLedger(paidPath);
   paid.initialize({ limitCents: 100, currency: 'USD' });
   t.after(async () => {
     if (previousOptions === undefined) delete process.env.NODE_OPTIONS;
@@ -72,7 +73,8 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
     },
   };
   const database = path.join(directory, 'control.sqlite');
-  const fleet = new FactoryManagedFleet(database, await createManagedCloudAdapter({ service }),
+  const adapter = await createManagedCloudAdapter({ service });
+  const fleet = new FactoryManagedFleet(database, adapter,
     { paidAdmission: paid, provider: 'fly' });
   const plan = { mission: 'Managed closure', budgetCents: 0, projectId: 'managed-closure',
     baseline: 'fixture', workers: [{ id: app, app, budgetCents: 0, paidCeilingCents: 100,
@@ -96,11 +98,15 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
   assert.equal(control.db.prepare('SELECT status FROM cells WHERE id=?').get(app).status, 'ready');
   control.close();
   await writeFile(inventory, '[]');
-  const result = await fleet.closeRetired(plan, options);
+  paid.close();
+  paid = new SpendingLedger(paidPath);
+  const restarted = new FactoryManagedFleet(database, adapter,
+    { paidAdmission: paid, provider: 'fly' });
+  const result = await restarted.closeRetired(plan, options);
   assert.equal(result.status, 'retired');
   assert.equal(result.cell.resourceEvidence.resourceScope,
     'owned-fly-teardown-recorded-and-app-not-returned-by-configured-inventory');
-  assert.equal((await fleet.closeRetired(plan, options)).replayed, true);
+  assert.equal((await restarted.closeRetired(plan, options)).replayed, true);
   control = new FactoryControl(database);
   assert.equal(control.db.prepare('SELECT status FROM cells WHERE id=?').get(app).status, 'retired');
   control.close();
