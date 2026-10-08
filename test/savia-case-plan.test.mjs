@@ -52,3 +52,10 @@ test('Savia case plan rejects ambiguous, overbudget or unbound inputs before adm
     { ...base, budgetCents: 1, teamBudgetCents: [2, ...Array(9).fill(0)] },
   ]) assert.throws(() => buildSaviaCasePlan(invalid), TypeError);
 });
+
+test('Savia case plan distributes the logical case budget exactly across ten teams', () => {
+  const plan = buildSaviaCasePlan({ ...input(path.join(os.tmpdir(), 'savia-private-output')),
+    budgetCents: 103 });
+  assert.deepEqual(plan.workers.map(worker => worker.budgetCents),
+    [11, 11, 11, 10, 10, 10, 10, 10, 10, 10]);
+});

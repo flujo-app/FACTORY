@@ -28,7 +28,8 @@ export function buildSaviaCasePlan({ caseId, mission, projectId, baseline, model
     || timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000)) {
     throw new TypeError('Budget and timeout must be bounded nonnegative integers');
   }
-  const allocations = teamBudgetCents ?? Array(TEAMS).fill(0);
+  const allocations = teamBudgetCents ?? Array.from({ length: TEAMS }, (_, index) =>
+    Math.floor(budgetCents / TEAMS) + (index < budgetCents % TEAMS ? 1 : 0));
   if (!Array.isArray(allocations) || allocations.length !== TEAMS
     || allocations.some(value => !Number.isSafeInteger(value) || value < 0)
     || allocations.reduce((sum, value) => sum + BigInt(value), 0n) > BigInt(budgetCents)) {
