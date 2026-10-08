@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "factorySourceRevisionBeforeHarness": "364a947d1f66c0bffeb8ff8683dc9b6268d92922",
+  "flujoSource": {
+    "description": "Isolated unregistered scratch copy based on FLUJO PR #958 with the local dependency-security trial; not the PR #955 release candidate",
+    "packageVersion": "3.46.2",
+    "workspaceRouteSha256": "faa872f2fb7faa1adc61f0691eb71a349d2eb7b691737140cd98f93d614cb731",
+    "conversationListRouteSha256": "2d022e971230c0f40db41ae49d9adbe41c2c5533b0d67ba252ad93153690bb9d"
+  },
+  "runtime": {
+    "node": "24.19.0",
+    "flujoOrigin": "http://127.0.0.1:4382",
+    "dataRoot": "fresh isolated private directory",
+    "model": "local synthetic OpenAI-compatible loopback server",
+    "paidInference": false
+  },
+  "result": {
+    "accepted": true,
+    "completedLeads": 10,
+    "completedDirectChildren": 90,
+    "topologyObserved": true,
+    "modelCalls": 110,
+    "conversationReplayWithoutNewCalls": true,
+    "retiredWorkspaces": 10,
+    "retiredLogicalCells": 10,
+    "factoryLedger": {
+      "completedTasks": 20,
+      "successfulProvisionEffects": 10,
+      "successfulFlowCallEffects": 10,
+      "successfulRetirementEffects": 10,
+      "readyCellsAfterClosure": 1,
+      "retiredCellsAfterClosure": 10
+    },
+    "serverStoppedAfterRun": true
+  },
+  "scope": "Live local FACTORY SDK plus FLUJO template, handoff, persisted lineage, replay, workspace retirement and logical cell closure. Child briefs used synthetic role labels. This does not prove nine distinct SAVIA specialist roles did useful work, customer outcome quality, paid inference, cloud scale, or qualification of unmerged FLUJO PR #955."
+}

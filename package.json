@@ -9,6 +9,8 @@
     "bin/factory-mcp.mjs",
     "scripts/watch-pilot.mjs",
     "scripts/run-tests.mjs",
+    "scripts/local-flujo-live-smoke.mjs",
+    "scripts/savia-local-live-smoke.mjs",
     "README.md",
     "PUBLIC_SDK.md",
     "LICENSE"
@@ -27,6 +29,7 @@
   "scripts": {
     "test": "node scripts/run-tests.mjs",
     "smoke:local-flujo": "node scripts/local-flujo-live-smoke.mjs",
+    "smoke:savia-local-flujo": "node scripts/savia-local-live-smoke.mjs",
     "pilot": "node scripts/pilot.mjs",
     "factory": "node bin/factory.mjs"
   },

@@ -171,6 +171,15 @@ all ten leads and exactly nine direct children per lead are persisted as
 completed, with no truncated descendant page. This is a point-in-time topology
 check. It does not prove that the nine children used distinct specialist roles,
 that their work met case quality criteria, or that provider billing is final.
+An [unpaid local live check](evidence/savia-local-topology-20261008.json) used
+this SDK with an isolated FLUJO scratch server and a scripted loopback model.
+It persisted ten completed leads and ninety completed direct children, then
+replayed without new model calls, retired all ten workspaces, and closed all ten
+logical cells. The scripted child briefs are synthetic; this does not qualify
+customer SAVIA work or the pending FLUJO production release. To repeat against
+an isolated local server, set `FACTORY_FLUJO_ORIGIN` to its loopback origin and
+`FACTORY_SAVIA_SMOKE_SPAWN=1`, then run `npm run smoke:savia-local-flujo` with
+Node 24.
 
 ```js
 import { FactoryLocalFleet, createFlujoWorkspaceAdapter } from 'flujo-factory';
