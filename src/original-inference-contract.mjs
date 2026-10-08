@@ -104,7 +104,7 @@ function validateBody(binding, model, receiverProfile = null) {
   unicode(binding.canonicalUtf8); check(hex(binding.sha256) && sha(Buffer.from(binding.canonicalUtf8, 'utf8')) === binding.sha256);
   const { value: body, numbers } = bodyProjection(binding.canonicalUtf8);
   const common = ['max_tokens', 'temperature', 'top_p', 'stop'];
-  bodyClosed(body, ['model', binding.kind === 'chat' ? 'messages' : 'prompt', 'stream', 'n'], [...common, 'stream_options', ...(binding.kind === 'chat' ? ['max_completion_tokens', 'enable_thinking'] : [])]);
+  bodyClosed(body, ['model', binding.kind === 'chat' ? 'messages' : 'prompt', 'stream', 'n'], [...common, ...(receiverProfile ? ['stream_options'] : []), ...(binding.kind === 'chat' ? ['max_completion_tokens', 'enable_thinking'] : [])]);
   check(body.model === model.manifestDigest && typeof body.stream === 'boolean' && body.n === 1 && numbers.get('.n') === '1');
   if (Object.hasOwn(body, 'stream_options')) {
     check(body.stream === true);
