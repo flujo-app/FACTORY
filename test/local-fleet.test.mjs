@@ -53,6 +53,44 @@ test('expanded plan adds a child and conversations while old work runs under one
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('a restarted fleet recovers completed FLUJO output without resending the call', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-recover-'));
+  try {
+    let calls = 0, observations = 0, observedStatus = 'running';
+    const adapter = { capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { return { worker: input.app, state: 'ready' }; },
+      async call() { calls++; throw new Error('transport lost after FLUJO started'); },
+      async observeCompleted(_worker, { conversationId }) { observations++;
+        return { conversationId, status: observedStatus, output: 'recovered answer' }; },
+      async retire() { throw new Error('unused'); },
+    };
+    const database = path.join(directory, 'control.sqlite');
+    const plan = { mission: 'Recover the original conversation', budgetCents: 0,
+      projectId: 'swarm', baseline: 'source', workers: [{ id: 'lead', app: 'worker-lead',
+        budgetCents: 0, purpose: 'Lead', provisionInput: { app: 'worker-lead' },
+        conversations: [{ id: 'job-one', input: { conversationId: 'conversation-one',
+          request: { flowName: 'Work', prompt: 'Start' } }, outputPath: path.join(directory, 'output.txt') }] }] };
+    const first = new FactoryLocalFleet(database, adapter);
+    assert.equal((await first.run(plan)).conversations[0].status, 'held');
+    const restarted = new FactoryLocalFleet(database, adapter);
+    await assert.rejects(restarted.reconcileCompleted(plan, { jobId: 'job-one' }),
+      { code: 'CONVERSATION_EVIDENCE' });
+    const pending = new FactoryControl(database);
+    assert.equal(pending.effect(conversationEffectKey('worker-lead','conversation-one')).state, 'unknown');
+    pending.close();
+    observedStatus = 'completed';
+    await writeFile(path.join(directory, 'output.txt'), 'conflicting answer');
+    await assert.rejects(restarted.reconcileCompleted(plan, { jobId: 'job-one' }), { code: 'OUTPUT' });
+    await rm(path.join(directory, 'output.txt'));
+    assert.equal((await restarted.reconcileCompleted(plan, { jobId: 'job-one' })).status, 'completed');
+    assert.equal(await readFile(path.join(directory, 'output.txt'), 'utf8'), 'recovered answer');
+    assert.equal((await restarted.reconcileCompleted(plan, { jobId: 'job-one' })).status, 'completed');
+    assert.equal(observations, 3);
+    assert.equal((await restarted.run(plan)).conversations[0].replayed, true);
+    assert.equal(calls, 1);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('local fleet retains one cancellation request while original FLUJO call resolves', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-cancel-'));
   try {

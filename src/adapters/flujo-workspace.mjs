@@ -1,4 +1,4 @@
-import { FlujoClient } from '../flujo-swarm/flujo-client.mjs';
+import { FlujoClient, lastAssistantText } from '../flujo-swarm/flujo-client.mjs';
 import { buildFactoryTeamSpecs } from '../flujo-swarm/template/factory-team.mjs';
 
 const WORKER = /^[a-z][a-z0-9-]{2,62}$/;
@@ -108,6 +108,15 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
       return { conversationId, status: response.body.status,
         classification: response.body.recovery?.classification,
         failureCategory: response.body.recovery?.failure?.category };
+    },
+    async observeCompleted(app, { conversationId } = {}) {
+      if (typeof conversationId !== 'string' || !CONVERSATION.test(conversationId))
+        throw new TypeError('A conversation ID is required');
+      const response = await clientFor(app).conversation(conversationId);
+      if (response?.status !== 200 || response?.body?.id !== conversationId
+        || response.body.status !== 'completed' || !Array.isArray(response.body.messages))
+        throw new Error('FLUJO terminal conversation output is unavailable.');
+      return { conversationId, status: 'completed', output: lastAssistantText(response.body.messages) };
     },
     async retire(app) {
       const client = clientFor(app);

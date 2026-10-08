@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { FactoryControl, FactoryError, digest } from './control.mjs';
 import { executeEffect } from './gateway.mjs';
@@ -196,6 +197,68 @@ export class FactorySwarmEngine {
         expectedOwner: task.owner, expectedStatus: task.status,
         expectedTaskControlEpoch: task.control_epoch, expectedFactoryEpoch: control.control().epoch,
         completionEffectKey: conversationEffectKey(worker, conversationId) });
+    } finally { control.close(); }
+  }
+
+  /** Recover an original completed FLUJO run by read-only observation of its fixed conversation ID. */
+  async reconcileCompletedConversation({ taskId, worker, conversationId, outputPath,
+    closureId = `complete-${taskId}` }) {
+    if (typeof outputPath !== 'string' || !isAbsolute(outputPath))
+      throw new TypeError('An absolute private outputPath is required');
+    const control = new FactoryControl(this.database);
+    try {
+      const task = control.task(taskId);
+      const operation = task.specification?.operation;
+      if (task.specification?.taskType !== 'conversation' || operation?.app !== worker
+        || operation?.conversationId !== conversationId || operation?.outputPath !== outputPath)
+        throw new FactoryError('CONVERSATION_BINDING', 'Recovery must match the immutable conversation task');
+      const key = conversationEffectKey(worker, conversationId);
+      const effect = control.effect(key);
+      if (effect.kind !== 'flow_call' || effect.scope !== 'task' || effect.scope_id !== taskId
+        || effect.task_id !== taskId || effect.owner !== operation.cellId
+        || effect.owner_epoch !== task.epoch || effect.control_epoch !== task.control_epoch && task.status !== 'completed'
+        || effect.request_digest !== digest({worker,cellId:operation.cellId,conversationId,
+          provisionKey:operation.provisionKey,inputDigest:operation.inputDigest}))
+        throw new FactoryError('CONVERSATION_BINDING', 'Original Flow call identity is inconsistent');
+      if (task.status === 'completed') {
+        const prior = control.db.prepare("SELECT details FROM events WHERE type='task_completed' AND subject=? ORDER BY seq DESC LIMIT 1").get(taskId);
+        const recorded = prior ? JSON.parse(prior.details) : null;
+        if (recorded?.closureId !== closureId || recorded?.result?.completionEffectKey !== key
+          || effect.state !== 'succeeded')
+          throw new FactoryError('CONVERSATION_EVIDENCE', 'Recorded completion is inconsistent');
+        const actual = createHash('sha256').update(readFileSync(outputPath)).digest('hex');
+        if (effect.receipt?.outputPath !== outputPath || effect.receipt?.outputSha256 !== actual)
+          throw new FactoryError('CONVERSATION_EVIDENCE', 'Recorded output changed');
+        return control.completeConversationTask(taskId, { closureId,
+          expectedAttempt: recorded.result.attempt, expectedOwner: recorded.result.previousOwner,
+          expectedStatus: 'running', expectedTaskControlEpoch: recorded.result.previousTaskControlEpoch,
+          expectedFactoryEpoch: recorded.expectedFactoryEpoch, completionEffectKey: key });
+      }
+      if (task.status !== 'running') throw new FactoryError('TASK', 'Running conversation task is required');
+      if (!['running','unknown','succeeded'].includes(effect.state))
+        throw new FactoryError('CONVERSATION_EVIDENCE', 'Original Flow call is not recoverable as completed');
+      if (effect.state !== 'succeeded') {
+        if (typeof this.adapter.observeCompleted !== 'function')
+          throw new TypeError('Worker adapter cannot observe completed conversations');
+        const observed = await this.adapter.observeCompleted(worker, { conversationId });
+        if (observed?.conversationId !== conversationId || observed?.status !== 'completed'
+          || typeof observed.output !== 'string')
+          throw new FactoryError('CONVERSATION_EVIDENCE', 'FLUJO completion is not confirmed');
+        const bytes = Buffer.from(observed.output, 'utf8');
+        const expectedSha256 = createHash('sha256').update(bytes).digest('hex');
+        if (!existsSync(outputPath)) await writeFile(outputPath, bytes, { mode: 0o600, flag: 'wx' });
+        const file = lstatSync(outputPath);
+        if (!file.isFile() || file.isSymbolicLink() || file.nlink !== 1
+          || createHash('sha256').update(readFileSync(outputPath)).digest('hex') !== expectedSha256)
+          throw new FactoryError('OUTPUT', 'Recovered conversation output conflicts with retained bytes');
+        if (control.effect(key).state !== 'succeeded')
+          control.settleEffect(key, 'succeeded', { outputPath, outputSha256: expectedSha256, reconciled: true });
+      }
+      const current = control.task(taskId);
+      return control.completeConversationTask(taskId, { closureId,
+        expectedAttempt: current.epoch, expectedOwner: current.owner,
+        expectedStatus: current.status, expectedTaskControlEpoch: current.control_epoch,
+        expectedFactoryEpoch: control.control().epoch, completionEffectKey: key });
     } finally { control.close(); }
   }
 

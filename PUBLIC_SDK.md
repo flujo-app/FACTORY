@@ -138,6 +138,13 @@ stays in the ledger for reconciliation and is never blindly sent again.
 The fleet renews its task leases during provisioning and conversation calls.
 The optional constructor settings `{leaseTtlMs, renewEveryMs}` default to ten
 minutes and one minute; keep the renewal interval below half the lease TTL.
+If a process or transport failure leaves the original call `running` or
+`unknown`, a new fleet instance can call `reconcileCompleted(plan,{jobId})`.
+It reads the original FLUJO conversation ID, accepts only a matching terminal
+`completed` response, retains the answer at the plan's private output path,
+settles the original effect, and closes the exact task. A conflicting output
+file or nonterminal response stays held; no inference is sent again. Completed
+reconciliation replays from FACTORY's ledger without another FLUJO read.
 `fleet.cancel({jobId})` records one stop intent and asks FLUJO to cancel the
 active conversation. A `requested` receipt confirms the request was processed,
 not that the run reached a terminal cancelled state. If the original call then

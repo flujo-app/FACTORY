@@ -250,8 +250,14 @@ export class FactoryLocalFleet {
       });
     } catch (error) {
       try {
-        if (this.#control(control => control.task(taskId).status) === 'cancelled')
+        const status = this.#control(control => control.task(taskId).status);
+        if (status === 'cancelled')
           return { conversationId: job.input.conversationId, status: 'cancelled' };
+        if (status === 'completed') {
+          await this.engine.reconcileCompletedConversation({ taskId, worker: worker.app,
+            conversationId: job.input.conversationId, outputPath: job.outputPath });
+          return { conversationId: job.input.conversationId, status: 'completed', replayed: true };
+        }
       } catch {}
       return { conversationId: job.input.conversationId, status: 'held', code: error.code ?? 'UNCONFIRMED' };
     } finally {
@@ -281,6 +287,17 @@ export class FactoryLocalFleet {
     if (!binding) throw new TypeError('The job is absent from this fleet plan');
     return this.engine.reconcileCancelledConversation({ taskId: `run-${jobId}`,
       worker: binding.worker.app, conversationId: binding.job.input.conversationId });
+  }
+
+  /** Recover a completed FLUJO run from its original conversation, without new inference. */
+  async reconcileCompleted(plan, { jobId }) {
+    validatePlan(plan);
+    const binding = plan.workers.flatMap(worker => worker.conversations.map(job => ({worker,job})))
+      .find(item => item.job.id === jobId);
+    if (!binding) throw new TypeError('The job is absent from this fleet plan');
+    return this.engine.reconcileCompletedConversation({ taskId: `run-${jobId}`,
+      worker: binding.worker.app, conversationId: binding.job.input.conversationId,
+      outputPath: binding.job.outputPath });
   }
 
   async run(plan, { workerConcurrency = 4, conversationConcurrency = 30 } = {}) {

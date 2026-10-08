@@ -77,6 +77,16 @@ test('workspace cancellation observation exposes only terminal status metadata',
   });
 });
 
+test('workspace completion observation keeps the original conversation and last assistant answer', async () => {
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: () => ({
+    async conversation(id) { return { status: 200, body: { id, status: 'completed',
+      messages: [{ role: 'assistant', content: 'final answer' }, { role: 'tool', content: 'private' }] } }; },
+  }) });
+  assert.deepEqual(await adapter.observeCompleted('worker-one', { conversationId: 'conversation-one' }), {
+    conversationId: 'conversation-one', status: 'completed', output: 'final answer',
+  });
+});
+
 test('workspace adapter installs a paired agent and team flow before readiness', async () => {
   const installed = [];
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({
