@@ -12,6 +12,12 @@ Requires Node.js 24 or newer. The new fleet APIs are on the development main
 branch: `npm install github:flujo-app/FACTORY#main`. A local checkout can be
 installed with `npm install .`. The older `v0.2.0` tag contains only the local
 coordination SDK. Run the project-local CLI with `npx factory`.
+The `0.3.0-dev.7` package declares the exact public Git repository and defaults
+an npm publication to the `next` tag. Its first registry publication still
+requires an authorized npm owner session; npm's trusted-publisher setup is
+configured from an existing package's settings. After that bootstrap, a
+[trusted GitHub publisher](https://docs.npmjs.com/trusted-publishers/) can be
+configured for subsequent releases. No npm publication has occurred.
 The [0.3.0-dev.7 release-candidate check](evidence/public-release-candidate-20261008.json)
 packed the current source, installed its tarball into a fresh local consumer,
 created a durable two-cell swarm, opened the installed CLI and passed all 793
