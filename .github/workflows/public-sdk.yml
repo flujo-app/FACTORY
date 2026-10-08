@@ -1,0 +1,42 @@
+name: Public SDK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: node --test test/savia-case-plan.test.mjs test/savia-topology.test.mjs test/managed-fleet.test.mjs test/managed-fleet-real-module.test.mjs
+      - name: Install and exercise the packed public package
+        shell: bash
+        run: |
+          tarball=$(npm pack --pack-destination "$RUNNER_TEMP" --json | node -e "let raw='';process.stdin.on('data',chunk=>raw+=chunk).on('end',()=>process.stdout.write(JSON.parse(raw)[0].filename))")
+          mkdir "$RUNNER_TEMP/consumer"
+          npm install --prefix "$RUNNER_TEMP/consumer" "$RUNNER_TEMP/$tarball" --ignore-scripts --no-audit --no-fund
+          FACTORY_CONSUMER="$RUNNER_TEMP/consumer" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const consumer = process.env.FACTORY_CONSUMER;
+          const sdk = await import(pathToFileURL(join(consumer, 'node_modules', 'flujo-factory', 'src', 'public-sdk.mjs')));
+          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology']) {
+            assert.equal(typeof sdk[name], 'function', `${name} is missing`);
+          }
+          const factory = new sdk.Factory(join(consumer, 'control.sqlite'));
+          factory.createSwarm({ mission: 'package smoke', budgetCents: 0, agents: [{ id: 'agent-a' }] });
+          assert.equal(factory.status().cells.length, 2);
+          NODE
+          node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-public.mjs" --help
