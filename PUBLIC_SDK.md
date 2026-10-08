@@ -281,15 +281,17 @@ replay and retirement of all ten workspaces. The
 pins the tested revisions and result. These checks establish local synthetic
 dispatch, replay, and workspace cleanup; they do not measure paid model
 inference, independent answer quality, or cloud machine isolation. The FLUJO
-fix was merged by PR #958 into FLUJO's
-`codex/563-consolidated-integration-20261008` branch on 2026-10-08; that
-branch is not FLUJO `main`. The integration branch's current lockfile passes
+fix was first merged by PR #958 into FLUJO's
+`codex/563-consolidated-integration-20261008` branch on 2026-10-08. That
+integration branch's lockfile passed
 `npm audit --include=dev --audit-level=high --package-lock-only` with zero
 high or critical findings (20 moderate findings remain).
 The [FLUJO #955 production workflow](https://github.com/mario-andreschak/FLUJO/actions/runs/37837094757)
 completed successfully on 2026-10-08, including its Windows packed Antigravity
-consumer. PR #955 was still open with auto-merge enabled when this record was
-written; workflow success alone is not adoption on FLUJO `main`.
+consumer. [PR #955](https://github.com/mario-andreschak/FLUJO/pull/955)
+then auto-merged into protected FLUJO `main` as
+`91ba5131743eed7ac3121753791d80b0b99c8e58`. This establishes source
+adoption, not a published FLUJO release or a production SAVIA role run.
 
 To reproduce without paid inference, start an isolated local FLUJO server and run
 `FACTORY_FLUJO_ORIGIN=http://127.0.0.1:<port> npm run smoke:local-flujo`
