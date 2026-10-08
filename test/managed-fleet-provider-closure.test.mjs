@@ -7,8 +7,13 @@ import { pathToFileURL } from 'node:url';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { FactoryControl, FactoryManagedFleet, SpendingLedger, createManagedCloudAdapter } from '../src/public-sdk.mjs';
 
-for (const uncertainDown of [false, true]) test(
-  uncertainDown ? 'managed fleet reconciles an unknown cloud teardown before cell closure'
+for (const { uncertainDown, paidPreRetired } of [
+  { uncertainDown: false, paidPreRetired: false },
+  { uncertainDown: true, paidPreRetired: false },
+  { uncertainDown: true, paidPreRetired: true },
+]) test(
+  paidPreRetired ? 'managed fleet recovers an unknown teardown after the paid hold retired'
+    : uncertainDown ? 'managed fleet reconciles an unknown cloud teardown before cell closure'
     : 'managed fleet closes a paid worker cell only after trusted live provider absence', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-managed-closure-'));
   const managedDirectory = path.join(directory, 'managed');
@@ -43,6 +48,7 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
   const image = `ghcr.io/example/flujo@sha256:${'a'.repeat(64)}`;
   const metadataPath = path.join(workers, `${app}.deployment.json`);
   const journalPath = path.join(workers, `${app}.journal.json`);
+  let downCalls = 0;
   const writePrivate = async (filename, value) => writeFile(filename, JSON.stringify(value), { mode: 0o600 });
   const service = {
     async sources() { return []; },
@@ -66,6 +72,7 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
     async call() { return { body: 'synthetic', contentType: 'text/plain' }; },
     async list() { return []; },
     async down() {
+      downCalls++;
       const metadata = JSON.parse(await readFile(metadataPath, 'utf8'));
       const journal = JSON.parse(await readFile(journalPath, 'utf8'));
       await writePrivate(metadataPath, { ...metadata, phase: 'destroyed', retirement: 'cloud-confirmed' });
@@ -86,10 +93,21 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
         outputPath: path.join(directory, 'output.txt') }] }] };
   assert.equal((await fleet.run(plan)).conversations[0].status, 'completed');
   assert.equal((await fleet.retire(plan)).workers[0].status, uncertainDown ? 'held' : 'retired');
+  if (paidPreRetired) paid.retire(fleet.paidReservationId(app),
+    { evidenceDigest: 'e'.repeat(64) });
   if (!uncertainDown) paid.settle(fleet.paidReservationId(app),
     { finalCents: 12, evidenceDigest: 'd'.repeat(64) });
   const options = { workerId: app, flyPath: process.execPath, managedDirectory,
     org: 'personal', workspace: 'test-cloud' };
+  if (uncertainDown && !paidPreRetired) {
+    const inFlight = new FactoryControl(database);
+    inFlight.db.prepare("UPDATE effects SET state='running' WHERE key=?").run(`retire-${app}`);
+    inFlight.close();
+    await assert.rejects(() => fleet.reconcileRetired(plan, options), { code: 'WORKER' });
+    const retained = new FactoryControl(database);
+    retained.db.prepare("UPDATE effects SET state='unknown' WHERE key=?").run(`retire-${app}`);
+    retained.close();
+  }
   const originalJournal = JSON.parse(await readFile(journalPath, 'utf8'));
   await writePrivate(journalPath, { ...originalJournal, machineId: 'another-machine' });
   const inspect = () => uncertainDown ? fleet.reconcileRetired(plan, options) : fleet.closeRetired(plan, options);
@@ -124,4 +142,5 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
   control.close();
   assert.equal(paid.row(fleet.paidReservationId(app)).state,
     uncertainDown ? 'retired-meter-pending' : 'settled');
+  assert.equal(downCalls, 1);
 });

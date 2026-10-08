@@ -570,7 +570,7 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
         if (paid.state === 'started') throw new FactoryError('WORKER', 'Paid retirement remains unreconciled');
         return { workerId, reconciled: false, effect };
       }
-      if (!['running','unknown'].includes(effect.state))
+      if (effect.state !== 'unknown')
         throw new FactoryError('WORKER', 'An uncertain retirement effect is required');
       const request = { closureId: `reconcile-managed-${worker.id}`,
         expectedParent: cell.parent_id, expectedStatus: 'ready',

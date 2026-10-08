@@ -226,7 +226,7 @@ export async function observeProvisionedCellRetirement(control, cellId, input, o
 
 /** Read-only recovery of a previously attempted cloud teardown with a retained unknown result. */
 export async function observeManagedRetirementReconciliation(control, cellId, input, options) {
-  try { return await observe(control,cellId,input,options,['running','unknown']); }
+  try { return await observe(control,cellId,input,options,['unknown']); }
   catch (error) { sanitized(error); }
 }
 

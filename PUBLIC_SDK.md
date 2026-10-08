@@ -149,7 +149,9 @@ accepts an already settled bill and never changes the paid reservation; an
 unsettled hold remains pending metering and final billing. A new fleet instance
 with a reopened controller and paid ledger can complete or replay the closure
 without repeating the managed `down` operation.
-An uncertain managed `down` remains held without a second provider call.
+An `unknown` managed `down` remains held without a second provider call;
+an effect still marked `running` cannot be reconciled while its caller may
+remain active.
 If ManagedCloud's private journal already records cloud-confirmed teardown,
 `fleet.reconcileRetired(plan,{workerId,flyPath,managedDirectory,org,workspace})`
 can use the same fresh provider absence inspection to settle the original
