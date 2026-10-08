@@ -406,7 +406,7 @@ integration revision. The PR is not yet adopted or connected to a live FACTORY
 source.
 
 ```js
-import { createObservatoryClient } from 'flujo-factory';
+import { createObservatoryClient } from 'flujo-factory/observatory';
 const reader = createObservatoryClient({
   snapshotUrl: 'http://127.0.0.1:4343/v1/snapshot',
   token: process.env.FACTORY_VIEWER_TOKEN,

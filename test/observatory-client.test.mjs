@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { FactoryControl } from '../src/control.mjs';
 import { startPresentationServer } from '../src/presentation.mjs';
-import { createObservatoryClient } from '../src/public-sdk.mjs';
+import { createObservatoryClient } from 'flujo-factory/observatory';
 
 const TOKEN = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 

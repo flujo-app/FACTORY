@@ -26,7 +26,8 @@
     "LICENSE"
   ],
   "exports": {
-    ".": "./src/public-sdk.mjs"
+    ".": "./src/public-sdk.mjs",
+    "./observatory": "./src/observatory-client.mjs"
   },
   "bin": {
     "factory": "./bin/factory-public.mjs",

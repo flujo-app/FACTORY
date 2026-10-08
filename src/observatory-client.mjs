@@ -1,4 +1,4 @@
-import { decodeCursor, validateViewerToken } from './presentation.mjs';
+import { decodeCursor, validateViewerToken } from './presentation-protocol.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const STATUSES = new Set(['reserved', 'ready', 'retired']);

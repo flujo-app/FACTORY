@@ -7,6 +7,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createModalObservationReader } from './modal-observation.mjs';
+import { PresentationError, requireValue, integer, validateViewerToken, encodeCursor, decodeCursor } from './presentation-protocol.mjs';
+
+export { PresentationError, validateViewerToken, encodeCursor, decodeCursor } from './presentation-protocol.mjs';
 
 const runFile = promisify(execFile);
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -23,13 +26,6 @@ const SPENDING_COLUMNS = Object.freeze({
   spending_events: ['seq', 'type', 'reservation_id', 'details', 'created_at'],
 });
 
-export class PresentationError extends Error {
-  constructor(code, status = 503) { super('Factory presentation state is unavailable.'); this.code = code; this.status = status; }
-}
-function requireValue(condition, code = 'FACTORY_STATE_UNAVAILABLE', status = 503) {
-  if (!condition) throw new PresentationError(code, status);
-}
-function integer(value, minimum = 0) { requireValue(Number.isSafeInteger(value) && value >= minimum); return value; }
 function identifier(value) { requireValue(typeof value === 'string' && ID.test(value)); return value; }
 function text(value, maxLength) { requireValue(typeof value === 'string'); return value.slice(0, maxLength); }
 function hash(value) { requireValue(typeof value === 'string' && HASH.test(value)); return value; }
@@ -43,12 +39,6 @@ function sumCents(values) {
 }
 function nullableInteger(value) { return value === null ? null : integer(value); }
 function nullableIso(value) { return value === null ? null : iso(value); }
-
-export function validateViewerToken(value) {
-  requireValue(typeof value === 'string' && /^[A-Za-z0-9_-]{32,256}$/.test(value)
-    && new Set(value).size >= 8, 'VIEWER_TOKEN_INVALID', 400);
-  return value;
-}
 
 // The token file is checked without placing its contents in process arguments or output.
 const windowsTokenCheck = String.raw`
@@ -96,17 +86,6 @@ export async function loadViewerToken({ tokenFile, env = process.env } = {}) {
     return validateViewerToken(trimmed.startsWith('{') ? JSON.parse(trimmed).token : trimmed);
   } catch { throw new PresentationError('VIEWER_TOKEN_FILE_UNSAFE', 400); }
   finally { await handle?.close(); }
-}
-
-/** Cursors are opaque to clients, bounded sequence bookmarks rather than execution authority. */
-export function encodeCursor(sequence) { integer(sequence); return Buffer.from(String(sequence)).toString('base64url'); }
-export function decodeCursor(value) {
-  requireValue(typeof value === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(value), 'INVALID_CURSOR', 400);
-  const decoded = Buffer.from(value, 'base64url').toString('utf8');
-  requireValue(/^(0|[1-9][0-9]{0,15})$/.test(decoded), 'INVALID_CURSOR', 400);
-  const result = Number(decoded);
-  requireValue(Number.isSafeInteger(result) && encodeCursor(result) === value, 'INVALID_CURSOR', 400);
-  return result;
 }
 
 function readTransaction(databasePath, operation) {
