@@ -209,6 +209,12 @@ kinds (`provision`, `flow_call`, `retire`, `delivery`). FACTORY also presents
 [Brain Online PR #41](https://github.com/flujo-app/brain-online/pull/41).
 Both are stacked on their existing Observatory branches and remain pending
 until merged; private effect receipts stay out of the read-only feed.
+The base viewer is [Brain PR #4](https://github.com/flujo-app/brain/pull/4),
+consumed by [Brain Online PR #34](https://github.com/flujo-app/brain-online/pull/34).
+The effect-contract PRs above must land with those bases. The base PRs document
+their own release gates: a qualified FLUJO release, private source connectivity,
+and signed-in staff observation. The preview deployment demonstrates the viewer;
+it does not establish a live FACTORY source in production.
 
 ## MCP
 
