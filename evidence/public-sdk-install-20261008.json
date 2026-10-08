@@ -28,6 +28,17 @@
     "localCellClosureMethod": "present",
     "note": "The npm launcher reported a Node 22 engine warning during installation; the installed SDK import and SQLite swarm creation ran under Node 24."
   },
+  "saviaPlanRefresh": {
+    "resolvedCommit": "7c23d03697b326b5b711c425190ed31e71b8589e",
+    "freshPinnedGitInstall": "passed",
+    "executionRuntime": "Node.js 24.19.0",
+    "installedSdkFleetExport": "present",
+    "installedSdkSaviaPlanExport": "present",
+    "teamLeads": 10,
+    "logicalCaseBudgetCents": 103,
+    "teamAllocationsCents": [11, 11, 11, 10, 10, 10, 10, 10, 10, 10],
+    "scope": "Installed public Git package plan construction only; no FLUJO provider or model call."
+  },
   "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. The Git install used this machine's Git configuration. The separate HTTPS source archive download sent an empty Authorization header, then a fresh local tarball install repeated the SDK check. npm dependency retrieval may still have used this machine's npm configuration. No live worker dispatch was tested here.",
   "npmRegistry": "flujo-factory returned 404 on 2026-10-08; no npm package was published."
 }

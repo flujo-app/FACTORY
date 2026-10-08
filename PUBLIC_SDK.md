@@ -17,6 +17,9 @@ main at `e3925c7` and created/replayed a three-cell swarm through the installed
 package. A separate credential-free HTTPS source download and tarball install
 passed the same local SDK check. A pinned Git install at `b93f627` also created
 three cells through the installed SDK and exposed `FactoryLocalFleet.closeRetired`.
+A pinned public Git install at `7c23d03` exported `buildSaviaCasePlan` and
+constructed ten team leads with an exact 103-cent logical allocation under
+Node 24; see the same evidence record. This check did not call FLUJO or a model.
 `flujo-factory` is not yet published to the npm registry.
 
 ## CLI
