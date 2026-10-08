@@ -15,6 +15,25 @@ export class Factory {
 
   createSwarm({ mission, budgetCents = 0, agents = [], maxCells = agents.length + 1, maxDepth = 2 } = {}) {
     if (!Array.isArray(agents)) throw new TypeError('agents must be an array');
+    if (typeof mission !== 'string' || !mission.trim()) throw new TypeError('mission is required');
+    if (!Number.isSafeInteger(budgetCents) || budgetCents < 0) throw new TypeError('budgetCents must be a nonnegative integer');
+    if (!Number.isSafeInteger(maxCells) || maxCells < agents.length + 1) throw new TypeError('maxCells must include the root and every agent');
+    if (!Number.isSafeInteger(maxDepth) || maxDepth < 1) throw new TypeError('maxDepth must be positive');
+    const ids = new Set();
+    let allocated = 0;
+    for (const agent of agents) {
+      if (!agent || typeof agent !== 'object' || Array.isArray(agent)
+        || typeof agent.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(agent.id)
+        || agent.id === 'root' || ids.has(agent.id)) throw new TypeError('agent ids must be unique and valid');
+      if (agent.parentId !== undefined && agent.parentId !== 'root') throw new TypeError('createSwarm agents must have root as parent; use addAgent for nested cells');
+      if (agent.role !== undefined && !['developer', 'verifier', 'watcher', 'coordinator'].includes(agent.role)) throw new TypeError('invalid agent role');
+      if (agent.purpose !== undefined && (typeof agent.purpose !== 'string' || !agent.purpose.trim())) throw new TypeError('agent purpose must be nonempty');
+      const allocation = agent.budgetCents ?? 0;
+      if (!Number.isSafeInteger(allocation) || allocation < 0) throw new TypeError('agent budgetCents must be a nonnegative integer');
+      allocated += allocation;
+      if (!Number.isSafeInteger(allocated) || allocated > budgetCents) throw new TypeError('agent allocations exceed swarm budget');
+      ids.add(agent.id);
+    }
     return this.#withControl(control => {
       control.initialize({ mission, budgetCents, maxCells, maxDepth });
       for (const agent of agents) {
