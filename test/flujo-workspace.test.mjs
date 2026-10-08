@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import { createFlujoWorkspaceAdapter } from '../src/adapters/flujo-workspace.mjs';
 import { CASE_SPECIALISTS_V1 } from '../src/flujo-swarm/template/factory-team.mjs';
 
@@ -27,15 +28,16 @@ test('workspace adapter creates one owned workspace and runs an exact conversati
 
 test('workspace retirement observation maps sustained absence to the exact app', async () => {
   let absent = false;
+  const originDigest = createHash('sha256').update('http://127.0.0.1:4200').digest('hex');
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({
     workspace: settings.workspace,
     async confirmWorkspaceAbsent(name) { assert.equal(name, 'swarm-worker-one'); return absent; },
   }) });
   assert.deepEqual(await adapter.observeRetired('worker-one'),
-    { app: 'worker-one', worker: 'worker-one', state: 'present' });
+    { app: 'worker-one', worker: 'worker-one', originDigest, state: 'present' });
   absent = true;
   assert.deepEqual(await adapter.observeRetired('worker-one'),
-    { app: 'worker-one', worker: 'worker-one', state: 'destroyed' });
+    { app: 'worker-one', worker: 'worker-one', originDigest, state: 'destroyed' });
 });
 
 test('occupied workspace and uncertain conversation do not claim success', async () => {

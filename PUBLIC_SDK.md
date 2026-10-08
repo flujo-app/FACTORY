@@ -114,8 +114,16 @@ recorded cleanup effects. A concurrent run or unresolved conversation or
 steering effect holds retirement. Repeating a successful retirement observes
 its original effect without another provider call. For an unknown local retirement, call
 `fleet.reconcileRetired(plan,{workerId})` after FLUJO has settled; this requires
-the adapter's read-only absence evidence. Retirement still does not close
-the Factory cell or claim provider accounting closure.
+the adapter's read-only absence evidence. Workspace retirement alone does not
+close the Factory cell. With the official `createFlujoWorkspaceAdapter`, call
+`fleet.closeRetired(plan,{workerId})` after the worker's retirement succeeds,
+closing children before parents. It makes a separate direct, read-only
+15-second exact-workspace absence check against the origin bound into the
+original provision and retirement receipts, then retires the logical cell
+through FACTORY's opaque proof path. Replaying a closed cell does not inspect
+FLUJO again. An injected adapter or an older provision receipt without that
+origin binding cannot use this closure path. Local workspace absence does not
+establish physical machine isolation or provider billing finality.
 The [live retirement check](evidence/local-flujo-fleet-retirement-20261008.json)
 ran the fleet-level path with one unpaid synthetic worker and conversation
 against the pinned FLUJO lifecycle PR. The earlier 10-worker/300-conversation

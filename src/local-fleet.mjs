@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { FactoryControl, FactoryError, digest } from './control.mjs';
 import { FactorySwarmEngine, conversationEffectKey } from './swarm-engine.mjs';
+import { observeLocalCellRetirement } from './provider-retirement.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const APP = /^[a-z][a-z0-9-]{2,62}$/;
@@ -387,5 +388,55 @@ export class FactoryLocalFleet {
     if (!worker) throw new TypeError('The worker is absent from this fleet plan');
     if (this.activeRuns || this.retiring) throw new FactoryError('BUSY', 'Fleet work is active');
     return this.engine.reconcileRetiredWorker({ app: worker.app });
+  }
+
+  /** Reclaim one retired worker's logical cell from fresh trusted local absence evidence. */
+  async closeRetired(plan, { workerId }) {
+    validatePlan(plan);
+    const worker = plan.workers.find(item => item.id === workerId);
+    if (!worker) throw new TypeError('The worker is absent from this fleet plan');
+    if (this.activeRuns || this.retiring) throw new FactoryError('BUSY', 'Fleet work is active');
+    this.retiring = true;
+    let control;
+    try {
+      control = new FactoryControl(this.database);
+      this.prepare(plan);
+      if (control.task(`launch-${worker.id}`).status !== 'completed'
+        || worker.conversations.some(job => !['completed', 'cancelled'].includes(control.task(`run-${job.id}`).status))) {
+        throw new FactoryError('WORKER', 'Worker tasks must be terminal before cell closure');
+      }
+      const cell = control.db.prepare('SELECT * FROM cells WHERE id=?').get(worker.id);
+      if (!cell || cell.parent_id !== (worker.parentId ?? 'root')
+        || cell.allocation !== worker.budgetCents || cell.purpose !== worker.purpose) {
+        throw new FactoryError('WORKER', 'Worker cell binding changed');
+      }
+      const closureId = `close-local-${worker.id}`;
+      const previous = cell.status === 'retired'
+        ? control.db.prepare("SELECT details FROM events WHERE type='cell_retired' AND subject=?").get(worker.id)
+        : null;
+      const previousDetails = previous ? JSON.parse(previous.details) : null;
+      const request = {
+        closureId, expectedParent: cell.parent_id, expectedStatus: 'ready',
+        expectedAllocation: cell.allocation, expectedSpent: cell.spent,
+        expectedFactoryEpoch: previousDetails?.expectedFactoryEpoch ?? control.control().epoch,
+        provisionKey: `provision-${worker.id}`, retirementKey: `retire-${worker.app}`,
+      };
+      if (previousDetails) {
+        if (previousDetails.closureId !== closureId
+          || previousDetails.result?.resourceEvidence?.resourceScope
+            !== 'local-flujo-workspace-absent-after-continuous-observation') {
+          throw new FactoryError('WORKER', 'Cell was closed under another authority');
+        }
+        return { workerId, status: 'retired', replayed: true,
+          cell: control.retireProvisionedCell(worker.id, request) };
+      }
+      const retirement = control.effect(request.retirementKey);
+      if (retirement.state !== 'succeeded' || retirement.scope_id !== worker.app) {
+        throw new FactoryError('WORKER', 'Exact worker retirement must be confirmed before cell closure');
+      }
+      const proof = await observeLocalCellRetirement(control, worker.id, request, this.engine.adapter);
+      return { workerId, status: 'retired', replayed: false,
+        cell: control.retireProvisionedCell(worker.id, request, proof) };
+    } finally { try { control?.close(); } finally { this.retiring = false; } }
   }
 }

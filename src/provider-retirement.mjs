@@ -3,6 +3,8 @@ import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } fro
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { readOnlyFlyRunner } from '../scripts/watch-pilot.mjs';
+import { FlujoClient } from './flujo-swarm/flujo-client.mjs';
+import { trustedLocalWorkspace } from './adapters/flujo-workspace.mjs';
 
 const proofs = new WeakMap();
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
@@ -205,6 +207,40 @@ export async function observeProvisionedCellRetirement(control, cellId, input, o
   try { return await observe(control,cellId,input,options); } catch (error) { sanitized(error); }
 }
 
+/** Direct read-only FLUJO absence proof for a provisioned local workspace. */
+export async function observeLocalCellRetirement(control, cellId, input, adapter) {
+  try {
+    const request = capturedInput(input);
+    const authority = trustedLocalWorkspace(adapter);
+    requireValue(authority, 'PROVIDER_RETIREMENT_INPUT');
+    const startedAt = Date.now();
+    const identity = controllerIdentity(control, cellId, request);
+    const workspace = `swarm-${identity.app}`;
+    const originDigest = sha(authority.origin);
+    requireValue(identity.provision.receipt?.originDigest === originDigest
+      && identity.retirement.receipt?.originDigest === originDigest,
+    'PROVIDER_RETIREMENT_BINDING');
+    const client = new FlujoClient({ origin: authority.origin, token: authority.token,
+      workspace, deadlineAt: startedAt + 30_000 });
+    requireValue(await client.confirmWorkspaceAbsent(workspace), 'PROVIDER_RETIREMENT_PRESENT');
+    const observedAt = Date.now(), observedMonotonic = performance.now();
+    requireValue(observedAt >= startedAt && observedAt - startedAt <= 30_000,
+      'PROVIDER_RETIREMENT_STALE');
+    requireValue(equal(identity, controllerIdentity(control, cellId, request)),
+      'PROVIDER_RETIREMENT_STALE');
+    const receipt = Object.freeze({
+      resourceScope: 'local-flujo-workspace-absent-after-continuous-observation',
+      inventoryScope: 'exact-local-flujo-workspace-list', app: identity.app,
+      originDigest, workspace, observedAt: new Date(observedAt).toISOString(),
+      evidenceDigest: sha(canonical({ identity, originDigest, workspace, observedAt })),
+    });
+    const proof = Object.freeze(Object.create(null));
+    proofs.set(proof, { kind: 'local', control, cellId, request, identity, authority,
+      observedAt, observedMonotonic, receipt });
+    return proof;
+  } catch (error) { sanitized(error); }
+}
+
 /** Read-only evidence for a prepared adoption report; reading it does not grant or consume authority. */
 export function providerRetirementEvidence(proof, control) {
   const record = proofs.get(proof);
@@ -221,6 +257,13 @@ export function consumeProviderRetirementProof(proof, control, cellId, input) {
     const monotonic = performance.now();
     requireValue(now >= record.observedAt && now-record.observedAt <= TTL_MS
       && monotonic >= record.observedMonotonic && monotonic-record.observedMonotonic <= TTL_MS, 'PROVIDER_RETIREMENT_STALE');
+    if (record.kind === 'local') {
+      requireValue(equal(record.identity, controllerIdentity(control, cellId, record.request))
+        && sha(record.authority.origin) === record.receipt.originDigest,
+      'PROVIDER_RETIREMENT_STALE');
+      proofs.delete(proof);
+      return record.receipt;
+    }
     requireValue(equal(record.identity,controllerIdentity(control,cellId,record.request))
       && equal(record.pin,managedPin(managedIdentity(record.configured.managedDirectory,record.identity.app,record.configured))),
     'PROVIDER_RETIREMENT_STALE');

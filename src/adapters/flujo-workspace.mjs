@@ -1,11 +1,17 @@
 import { FlujoClient, lastAssistantText } from '../flujo-swarm/flujo-client.mjs';
 import { buildFactoryTeamSpecs } from '../flujo-swarm/template/factory-team.mjs';
+import { createHash } from 'node:crypto';
 
 const WORKER = /^[a-z][a-z0-9-]{2,62}$/;
 const CONVERSATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const defaultClientFactory = settings => new FlujoClient(settings);
+const trustedLocalAdapters = new WeakMap();
+
+/** Internal-only authority for independent, direct read-only retirement checks. */
+export function trustedLocalWorkspace(adapter) { return trustedLocalAdapters.get(adapter) ?? null; }
 
 /** Local FLUJO workspaces are isolated by workspace identity, not by machine. */
-export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = settings => new FlujoClient(settings) } = {}) {
+export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = defaultClientFactory } = {}) {
   const url = new URL(origin);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/'
     || url.search || url.hash) throw new TypeError('origin must be an exact HTTP(S) origin');
@@ -16,7 +22,8 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
     return `swarm-${app}`;
   };
   const clientFor = app => clientFactory({ origin: url.origin, token, workspace: workspaceFor(app) });
-  return Object.freeze({
+  const originDigest = createHash('sha256').update(url.origin).digest('hex');
+  const adapter = Object.freeze({
     capabilities: Object.freeze({ adapter: 'flujo-workspace', machineIsolation: false,
       recursiveProvisioning: false, providerSpendObserved: false }),
     async provision({ app, flowSpec, flowSpecs, teamTemplate, modelConfig } = {}) {
@@ -62,7 +69,7 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
           throw new Error('FLUJO did not confirm the installed flow.');
         }
       }
-      return { app, worker: app, workspace: client.workspace, state: 'ready' };
+      return { app, worker: app, workspace: client.workspace, originDigest, state: 'ready' };
     },
     async call(app, { conversationId, request, timeoutMs } = {}) {
       const client = clientFor(app);
@@ -121,12 +128,14 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
     async retire(app) {
       const client = clientFor(app);
       await client.deleteWorkspace(client.workspace);
-      return { app, worker: app, state: 'destroyed' };
+      return { app, worker: app, originDigest, state: 'destroyed' };
     },
     async observeRetired(app) {
       const client = clientFor(app);
       const absent = await client.confirmWorkspaceAbsent(client.workspace);
-      return { app, worker: app, state: absent ? 'destroyed' : 'present' };
+      return { app, worker: app, originDigest, state: absent ? 'destroyed' : 'present' };
     },
   });
+  if (clientFactory === defaultClientFactory) trustedLocalAdapters.set(adapter, Object.freeze({ origin: url.origin, token }));
+  return adapter;
 }

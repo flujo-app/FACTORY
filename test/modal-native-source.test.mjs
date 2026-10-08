@@ -22,7 +22,9 @@ async function fixture(t) {
   await privateFiles.ensurePrivateDirectory(directory);
   const state = { token: randomBytes(32).toString('base64url'), archive: 'b'.repeat(64), compatibility: { ...compatibility },
     workspace: 'factory-pilot', models: [], flows: [], routes: [], driverCalls: [], mutation: null };
-  const server = http.createServer(async (request, response) => {
+  const inFlight = new Set(), handlerErrors = [];
+  const server = http.createServer((request, response) => {
+    const work = (async () => {
     state.routes.push({ path: request.url, method: request.method });
     if (request.headers.authorization !== 'Bearer ' + state.token) { response.writeHead(401); response.end('{}'); return; }
     if (request.method !== 'GET') { response.writeHead(405); response.end('{}'); return; }
@@ -36,6 +38,11 @@ async function fixture(t) {
     };
     response.writeHead(Object.hasOwn(values, request.url) ? 200 : 404, { 'content-type': 'application/json' });
     response.end(JSON.stringify(values[request.url] ?? {}));
+    })();
+    inFlight.add(work);
+    void work.then(() => inFlight.delete(work), error => {
+      handlerErrors.push(error); inFlight.delete(work); response.destroy();
+    });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const profile = { schemaVersion: 1, origin: 'http://127.0.0.1:' + server.address().port,
@@ -69,6 +76,7 @@ async function fixture(t) {
       appAbsent: true, volumeAbsent: true, modelArtifactValidation: payload.modelArtifactValidation, httpResumeValidation: payload.httpResumeValidation }; } };
   state.routes.length = 0;
   t.after(async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+    await Promise.allSettled([...inFlight]); assert.deepEqual(handlerErrors, []);
     assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith('factory-modal-native-source-'));
     await rm(directory, { recursive: true, force: true }); });
   return { directory, state, profile, profilePath, evidence, evidencePath, identity, source, binding, options, dependencies };

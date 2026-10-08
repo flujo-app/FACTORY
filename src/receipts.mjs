@@ -6,6 +6,7 @@ export function safeReceipt(input={}) {
   for(const key of ['worker','app']) if(typeof input[key]==='string' && /^[a-z][a-z0-9-]{2,62}$/.test(input[key]))output[key]=input[key];
   for(const key of ['head','previousHead','sha256','outputSha256']) if(typeof input[key]==='string' && new RegExp('^[a-f0-9]{'+(key.endsWith('Sha256')||key==='sha256'?64:40)+'}$').test(input[key]))output[key]=input[key];
   if(typeof input.observationSha256==='string' && /^[a-f0-9]{64}$/.test(input.observationSha256))output.observationSha256=input.observationSha256;
+  if(typeof input.originDigest==='string' && /^[a-f0-9]{64}$/.test(input.originDigest))output.originDigest=input.originDigest;
   for(const key of ['path','outputPath']) if(typeof input[key]==='string' && isAbsolute(input[key]))output[key]=input[key];
   if(typeof input.ref==='string' && /^refs\/heads\/[a-zA-Z0-9/_-]+$/.test(input.ref))output.ref=input.ref;
   if(typeof input.contentType==='string' && /^[a-z-]+\/[a-z0-9.+-]+(?:;\s*charset=[a-z0-9-]+)?$/i.test(input.contentType))output.contentType=input.contentType;

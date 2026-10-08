@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { once } from 'node:events';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { FactoryControl, FactoryLocalFleet, conversationEffectKey, conversationMessageKey, conversationCancelKey } from '../src/public-sdk.mjs';
+import { createFlujoWorkspaceAdapter } from '../src/adapters/flujo-workspace.mjs';
 
 test('expanded plan adds a child and conversations while old work runs under one fleet limit', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-scale-'));
@@ -409,4 +412,60 @@ test('fleet reconciles one unknown local retirement from exact absence evidence'
     assert.equal(retireCalls, 1);
     assert.equal(observations, 1);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('trusted local absence closes a provision-bound cell once and rejects another origin', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-cell-close-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const workspaces = new Set();
+  const server = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+    const route = new URL(request.url, 'http://127.0.0.1').pathname;
+    let payload = {};
+    if (route === '/api/workspaces' && request.method === 'GET')
+      payload = { workspaces: [...workspaces].map(name => ({ name })) };
+    else if (route === '/api/workspaces' && request.method === 'POST') workspaces.add(body.name);
+    else if (route === '/api/workspaces' && request.method === 'DELETE') workspaces.delete(body.name);
+    else if (route === '/api/flow' && request.method === 'GET') payload = [];
+    else if (route === '/api/mcp/servers') payload = { servers: [] };
+    else if (route === '/api/flow/compile') {
+      response.statusCode = 201; payload = { flow: { id: 'flow-one', name: body.spec.name } };
+    }
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(payload));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const database = path.join(directory, 'control.sqlite');
+  const plan = { mission: 'Close a local worker', budgetCents: 5, projectId: 'swarm', baseline: 'source',
+    workers: [{ id: 'lead', app: 'worker-lead', budgetCents: 5, purpose: 'Lead',
+      provisionInput: { app: 'worker-lead', flowSpec: { name: 'Work' } }, conversations: [] }] };
+  const fleet = new FactoryLocalFleet(database, createFlujoWorkspaceAdapter({ origin }));
+  assert.equal((await fleet.run(plan)).launches[0].status, 'completed');
+  assert.equal((await fleet.retire(plan)).workers[0].status, 'retired');
+  assert.equal(workspaces.size, 0);
+  const wrongOrigin = new FactoryLocalFleet(database,
+    createFlujoWorkspaceAdapter({ origin: `http://127.0.0.1:${server.address().port + 1}` }));
+  await assert.rejects(wrongOrigin.closeRetired(plan, { workerId: 'lead' }),
+    { code: 'PROVIDER_RETIREMENT_BINDING' });
+  const forged = new FactoryLocalFleet(database, createFlujoWorkspaceAdapter({ origin,
+    clientFactory: () => ({ async confirmWorkspaceAbsent() { return true; } }) }));
+  await assert.rejects(forged.closeRetired(plan, { workerId: 'lead' }),
+    { code: 'PROVIDER_RETIREMENT_INPUT' });
+  workspaces.add('swarm-worker-lead');
+  await assert.rejects(fleet.closeRetired(plan, { workerId: 'lead' }),
+    { code: 'PROVIDER_RETIREMENT_PRESENT' });
+  workspaces.delete('swarm-worker-lead');
+  const closed = await fleet.closeRetired(plan, { workerId: 'lead' });
+  assert.equal(closed.cell.status, 'retired');
+  assert.equal(closed.cell.resourceEvidence.resourceScope,
+    'local-flujo-workspace-absent-after-continuous-observation');
+  assert.equal((await fleet.closeRetired(plan, { workerId: 'lead' })).replayed, true);
+  const control = new FactoryControl(database);
+  try { assert.equal(control.db.prepare('SELECT status FROM cells WHERE id=?').get('lead').status, 'retired'); }
+  finally { control.close(); }
 });
