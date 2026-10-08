@@ -522,6 +522,26 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
     return super.retire(plan, options);
   }
 
+  async message() {
+    throw new TypeError('ManagedCloud does not support live conversation messages');
+  }
+
+  async cancel() {
+    throw new TypeError('ManagedCloud does not support live conversation cancellation');
+  }
+
+  async reconcileCompleted() {
+    throw new TypeError('ManagedCloud cannot read a completed conversation for reconciliation');
+  }
+
+  async reconcileCancelled() {
+    throw new TypeError('ManagedCloud cannot verify conversation cancellation');
+  }
+
+  async reconcileRetired() {
+    throw new TypeError('Managed worker retirement requires independent provider evidence');
+  }
+
   async closeRetired() {
     throw new TypeError('Managed worker cell closure requires independent provider retirement evidence');
   }

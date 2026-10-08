@@ -44,6 +44,14 @@ test('managed fleet schedules, replays and retires through FACTORY durable effec
   const fleet = new FactoryManagedFleet(path.join(directory, 'managed.sqlite'), adapter,
     { paidAdmission: paid, provider: 'fly' });
   const work = plan(directory);
+  for (const operation of [
+    () => fleet.message({ jobId: 'managed-a-job', messageId: 'next', content: 'Continue' }),
+    () => fleet.cancel({ jobId: 'managed-a-job' }),
+    () => fleet.reconcileCompleted(work, { jobId: 'managed-a-job' }),
+    () => fleet.reconcileCancelled(work, { jobId: 'managed-a-job' }),
+    () => fleet.reconcileRetired(work, { workerId: 'managed-a' }),
+  ]) await assert.rejects(operation, TypeError);
+  assert.deepEqual(cloud.counts, { up: 0, call: 0, down: 0 });
   const result = await fleet.run(work, { workerConcurrency: 2, conversationConcurrency: 2 });
   assert.equal(result.launches.every(item => item.status === 'completed'), true);
   assert.equal(result.conversations.every(item => item.status === 'completed'), true);
