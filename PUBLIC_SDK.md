@@ -15,8 +15,9 @@ coordination SDK. Run the project-local CLI with `npx factory`.
 The [fresh-install check](evidence/public-sdk-install-20261008.json) resolved
 main at `e3925c7` and created/replayed a three-cell swarm through the installed
 package. A separate credential-free HTTPS source download and tarball install
-passed the same local SDK check. `flujo-factory` is not yet published to the npm
-registry.
+passed the same local SDK check. A pinned Git install at `b93f627` also created
+three cells through the installed SDK and exposed `FactoryLocalFleet.closeRetired`.
+`flujo-factory` is not yet published to the npm registry.
 
 ## CLI
 

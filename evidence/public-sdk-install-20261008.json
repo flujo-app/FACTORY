@@ -20,6 +20,14 @@
     "factoryLocalFleetExport": "present",
     "presentationServerExport": "present"
   },
+  "currentMainRefresh": {
+    "resolvedCommit": "b93f6276fb89ae916e84cde58428ec6ce54ca2e2",
+    "freshPinnedGitInstall": "passed",
+    "executionRuntime": "Node.js 24.19.0",
+    "createdCells": 3,
+    "localCellClosureMethod": "present",
+    "note": "The npm launcher reported a Node 22 engine warning during installation; the installed SDK import and SQLite swarm creation ran under Node 24."
+  },
   "scope": "Fresh GitHub package install and local SQLite SDK creation/replay. The Git install used this machine's Git configuration. The separate HTTPS source archive download sent an empty Authorization header, then a fresh local tarball install repeated the SDK check. npm dependency retrieval may still have used this machine's npm configuration. No live worker dispatch was tested here.",
   "npmRegistry": "flujo-factory returned 404 on 2026-10-08; no npm package was published."
 }
