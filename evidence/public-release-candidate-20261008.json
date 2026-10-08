@@ -1,0 +1,27 @@
+{
+  "format": "factory-public-release-candidate-check",
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "sourceCommit": "429ca1965884fb63b458df7cdf130152c526d859",
+  "package": "flujo-factory@0.3.0-dev.7",
+  "tarball": {
+    "filename": "flujo-factory-0.3.0-dev.7.tgz",
+    "sha1": "06cb036ba1efeedcdf1076e01d1b5c8336fc3861",
+    "entryCount": 55,
+    "sizeBytes": 192443,
+    "freshLocalTarballInstall": "passed"
+  },
+  "runtime": "Node.js 24.19.0",
+  "installedPackageSmoke": {
+    "exports": ["Factory", "FactoryManagedFleet", "observeSaviaCaseTopology"],
+    "durableSwarmCellsIncludingRoot": 2,
+    "factoryCliHelp": "passed"
+  },
+  "fullSourceSuite": {
+    "tests": 793,
+    "passed": 793,
+    "failed": 0,
+    "durationMs": 164220
+  },
+  "scope": "Packed from the local clean source revision, installed into an isolated local consumer, and executed under Node 24. The npm launcher itself used Node 22 and reported an engine warning. No npm publication, live FLUJO role run, cloud provider resource, or final billing was exercised."
+}
