@@ -7,7 +7,7 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
-import { buildSaviaCasePlan, observeSaviaCaseTopology, FactoryLocalFleet,
+import { buildSaviaCasePlan, observeSaviaCaseTopology, CASE_SPECIALISTS_V1, FactoryLocalFleet,
   createFlujoWorkspaceAdapter } from '../src/public-sdk.mjs';
 
 const origin = process.env.FACTORY_FLUJO_ORIGIN;
@@ -17,7 +17,10 @@ const root = await mkdtemp(path.join(os.tmpdir(), 'factory-savia-live-'));
 const caseId = `probe-${randomBytes(3).toString('hex')}`;
 let modelCalls = 0;
 const spawnSpecialists = process.env.FACTORY_SAVIA_SMOKE_SPAWN === '1';
+assert.equal(CASE_SPECIALISTS_V1.roles.length,
+  CASE_SPECIALISTS_V1.topologyTarget.specialistSubflowsPerWorker);
 const spawnedLeads = new Set();
+const observedRoles = new Map();
 const model = http.createServer(async (request, response) => {
   try {
     assert.equal(request.method, 'POST');
@@ -30,13 +33,20 @@ const model = http.createServer(async (request, response) => {
       model: 'factory-savia-synthetic' };
     const handoffName = body.tools?.map(tool => tool.function?.name)
       .find(name => /^handoff_to_.*agent/.test(name));
-    const teamId = JSON.stringify(body.messages ?? []).match(/TEAM_ID:\s*(savia-[a-z0-9-]+-team-\d+)/)?.[1];
+    const messageText = JSON.stringify(body.messages ?? []);
+    const teamId = messageText.match(/TEAM_ID:\s*(savia-[a-z0-9-]+-team-\d+)/)?.[1];
+    const roleId = messageText.match(/ROLE_ID:\s*([a-z][a-z0-9_]+)/)?.[1];
+    if (teamId && roleId) {
+      const roles = observedRoles.get(teamId) ?? new Set();
+      roles.add(roleId);
+      observedRoles.set(teamId, roles);
+    }
     const shouldSpawn = spawnSpecialists && handoffName && teamId && !spawnedLeads.has(teamId);
     if (shouldSpawn) spawnedLeads.add(teamId);
-    const calls = shouldSpawn ? Array.from({ length: 9 }, (_, index) => ({
+    const calls = shouldSpawn ? CASE_SPECIALISTS_V1.roles.map((role, index) => ({
       id: `call_${modelCalls}_${index + 1}`, type: 'function',
       function: { name: handoffName, arguments: JSON.stringify({
-        task: `CASE_ID: ${caseId}; AGENT_ID: ${teamId}-agent-${index + 1}; ROLE_ID: synthetic_${index + 1}; ANGLE: independent synthetic check ${index + 1}; TASK: return an evidence-labeled synthetic result; DONE_WHEN: one synthetic result is returned.` }) },
+        task: `CASE_ID: ${caseId}; TEAM_ID: ${teamId}; AGENT_ID: ${teamId}-agent-${index + 1}; ROLE_ID: ${role.id}; ANGLE: independent synthetic check ${index + 1}; TASK: return an evidence-labeled synthetic result; DONE_WHEN: one synthetic result is returned.` }) },
     })) : [];
     if (body.stream) {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -82,6 +92,12 @@ try {
   assert.equal(result.conversations.every(item => item.status === 'completed'), true);
   const topology = await observeSaviaCaseTopology(plan, { origin });
   if (spawnSpecialists) assert.equal(topology.topologyObserved, true);
+  const expectedRoles = new Set(CASE_SPECIALISTS_V1.roles.map(role => role.id));
+  const roleBriefCoverageObserved = plan.workers.every(worker => {
+    const roles = observedRoles.get(worker.id);
+    return roles?.size === expectedRoles.size && [...expectedRoles].every(role => roles.has(role));
+  });
+  if (spawnSpecialists) assert.equal(roleBriefCoverageObserved, true);
   const callsBeforeReplay = modelCalls;
   const replay = await fleet.run(plan, { workerConcurrency: 2, conversationConcurrency: 10 });
   assert.equal(replay.conversations.every(item => item.replayed), true);
@@ -93,7 +109,8 @@ try {
   assert.equal(closures.every(item => item.cell.status === 'retired'), true);
   process.stdout.write(`${JSON.stringify({ accepted: true, origin, root, leadsCompleted: 10,
     childConversationsObserved: topology.teams.reduce((sum, team) => sum + team.observedChildren, 0),
-    topologyObserved: topology.topologyObserved, spawnSpecialists, modelCalls, replayed: true,
+    topologyObserved: topology.topologyObserved, roleBriefCoverageObserved,
+    spawnSpecialists, modelCalls, replayed: true,
     retiredWorkers: retirement.workers.length, closedCells: closures.length })}\n`);
 } catch (error) {
   process.stderr.write(`${JSON.stringify({ accepted: false, root, error: error.message, modelCalls })}\n`);
