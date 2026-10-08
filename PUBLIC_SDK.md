@@ -207,18 +207,16 @@ identity, event, freshness and read-only contract.
 The SDK also exports the local fleet scheduler and conversation templates above.
 Observatory consumes this read-only feed as a separate host. FACTORY does not
 provide Observatory's UI or its private provider-detail projection.
-The active Observatory consumer branches still recognize only four effect
-kinds (`provision`, `flow_call`, `retire`, `delivery`). FACTORY also presents
-`worker_wake`, `worker_sleep`, `message`, and `flow_cancel`, with a terminal
-`cancelled` state and worker scope. The allowlist updates are in
-[Brain PR #7](https://github.com/flujo-app/brain/pull/7) and
+FACTORY presents `worker_wake`, `worker_sleep`, `message`, and `flow_cancel`
+alongside its original effect kinds, with a terminal `cancelled` state and
+worker scope. The consumer allowlist updates merged into the Observatory
+branches through [Brain PR #7](https://github.com/flujo-app/brain/pull/7) and
 [Brain Online PR #41](https://github.com/flujo-app/brain-online/pull/41).
-Both are stacked on their existing Observatory branches and remain pending
-until merged; private effect receipts stay out of the read-only feed.
+Private effect receipts stay out of the read-only feed.
 The base viewer is [Brain PR #4](https://github.com/flujo-app/brain/pull/4),
 consumed by [Brain Online PR #34](https://github.com/flujo-app/brain-online/pull/34).
-The effect-contract PRs above must land with those bases. The base PRs document
-their own release gates: a qualified FLUJO release, private source connectivity,
+The base PRs remain open and document their release gates: a qualified FLUJO
+release, private source connectivity,
 and signed-in staff observation. The preview deployment demonstrates the viewer;
 it does not establish a live FACTORY source in production.
 
