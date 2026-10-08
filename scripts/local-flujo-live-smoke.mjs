@@ -120,10 +120,16 @@ try {
   const control = new FactoryControl(fleet.database);
   const status = control.status();
   control.close();
+  const effectCounts = status.effects.reduce((counts, effect) => {
+    const identity = `${effect.kind}:${effect.state}`;
+    counts[identity] = (counts[identity] ?? 0) + 1;
+    return counts;
+  }, {});
   process.stderr.write(`${JSON.stringify({ accepted: false, error: error.message,
     workers, conversations: workers * perWorker,
     launches: status.tasks.filter(task => task.id.startsWith('launch-')).map(task => ({ id: task.id, status: task.status })),
-    effects: status.effects.map(effect => ({ kind: effect.kind, state: effect.state, key: effect.key })),
+    effectCounts, unresolvedKeys: status.effects.filter(effect => ['accepted', 'running', 'unknown'].includes(effect.state))
+      .map(effect => effect.key),
     unresolvedEffects: status.unresolvedEffects })}\n`);
   throw error;
 } finally {
