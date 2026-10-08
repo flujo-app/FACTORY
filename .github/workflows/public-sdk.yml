@@ -19,7 +19,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
-      - run: node --test test/savia-case-plan.test.mjs test/savia-topology.test.mjs test/managed-fleet.test.mjs test/managed-fleet-real-module.test.mjs test/managed-fleet-provider-closure.test.mjs test/provider-cell-retirement.test.mjs test/presentation.test.mjs test/presentation-modal.test.mjs test/presentation-closure.test.mjs
+      - run: node --test test/savia-case-plan.test.mjs test/savia-topology.test.mjs test/managed-fleet.test.mjs test/managed-fleet-real-module.test.mjs test/managed-fleet-provider-closure.test.mjs test/provider-cell-retirement.test.mjs test/presentation.test.mjs test/presentation-modal.test.mjs test/presentation-closure.test.mjs test/observatory-client.test.mjs
       - name: Install and exercise the packed public package
         shell: bash
         run: |
@@ -32,7 +32,7 @@ jobs:
           import { pathToFileURL } from 'node:url';
           const consumer = process.env.FACTORY_CONSUMER;
           const sdk = await import(pathToFileURL(join(consumer, 'node_modules', 'flujo-factory', 'src', 'public-sdk.mjs')));
-          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology']) {
+          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology', 'createObservatoryClient']) {
             assert.equal(typeof sdk[name], 'function', `${name} is missing`);
           }
           const factory = new sdk.Factory(join(consumer, 'control.sqlite'));

@@ -81,3 +81,4 @@ export { buildFactoryTeamSpecs, CASE_SPECIALISTS_V1, FACTORY_FLOW_NAMES } from '
 export { buildSaviaCasePlan } from './flujo-swarm/template/savia-case-plan.mjs';
 export { observeSaviaCaseTopology } from './flujo-swarm/template/savia-topology.mjs';
 export { createPresentationServer, startPresentationServer } from './presentation.mjs';
+export { createObservatoryClient } from './observatory-client.mjs';

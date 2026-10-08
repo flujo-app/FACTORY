@@ -385,6 +385,24 @@ which in turn records its source extraction from `flujo-app/swarm-teams`.
 
 ## Observatory feed
 
+Server-side hosts such as FLUJO-WORLD can use `createObservatoryClient` to read
+the local feed without placing the bearer in browser code. The client pins the
+expected factory ID, accepts only an explicit `127.0.0.1` snapshot endpoint,
+rejects redirects and invalid topology, and returns the versioned snapshot
+envelope. This is the bridge for showing FACTORY cells and tasks alongside
+FLUJO-WORLD's separate automation map; the Wave Observatory UI does not yet
+consume it.
+
+```js
+import { createObservatoryClient } from 'flujo-factory';
+const reader = createObservatoryClient({
+  snapshotUrl: 'http://127.0.0.1:4343/v1/snapshot',
+  token: process.env.FACTORY_VIEWER_TOKEN,
+  expectedFactoryId: 'my-swarm',
+});
+const envelope = await reader.snapshot();
+```
+
 `createPresentationServer` and `startPresentationServer` are also exported by
 the SDK. They expose FACTORY's existing authenticated, command-disabled v1
 snapshot and event feed consumed by Brain Online and Brain Observatory. The
