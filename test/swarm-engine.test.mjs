@@ -42,6 +42,34 @@ test('Factory owns worker dispatch and does not replay provision, call or retire
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('unknown retirement is reconciled only after read-only exact worker observation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-retire-reconcile-'));
+  try {
+    const database = path.join(directory, 'control.sqlite');
+    const control = new FactoryControl(database);
+    control.initialize({ mission: 'Retire one worker', budgetCents: 0, maxCells: 2, maxDepth: 1 });
+    control.createTask({ taskId: 'launch', projectId: 'project', branch: 'codex/launch',
+      specification: { problem: 'Launch', acceptance: 'Worker ready', baseline: 'main' } });
+    const lease = control.claimTask('launch', 'root');
+    control.close();
+    let observed = 'present';
+    const engine = new FactorySwarmEngine(database, {
+      async provision() { return { app: 'worker-one', worker: 'worker-one', state: 'ready' }; },
+      async call() { throw new Error('unused'); },
+      async retire() { throw new Error('Deletion outcome unknown'); },
+      async observeRetired() { return { app: 'worker-one', worker: 'worker-one', state: observed }; },
+    });
+    await engine.provisionWorker({ lease, cellId: 'cell-one', app: 'worker-one', purpose: 'Worker', input: {} });
+    assert.equal((await engine.retireWorker({ app: 'worker-one' })).effect.state, 'unknown');
+    assert.equal((await engine.reconcileRetiredWorker({ app: 'worker-one' })).effect.state, 'unknown');
+    observed = 'destroyed';
+    assert.equal((await engine.reconcileRetiredWorker({ app: 'worker-one' })).effect.state, 'succeeded');
+    assert.equal((await engine.reconcileRetiredWorker({ app: 'worker-one' })).reconciled, false);
+    await assert.rejects(engine.reconcileRetiredWorker({ app: 'foreign-worker', key: 'retire-worker-one' }),
+      { code: 'CONFLICT' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('conversation fanout is bounded and each call is retained under its own task', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-fanout-'));
   try {

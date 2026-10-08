@@ -307,4 +307,24 @@ export class FactorySwarmEngine {
       }
     });
   }
+
+  /** Resolve a held retirement from a fresh, read-only provider observation. */
+  async reconcileRetiredWorker({ app, key = `retire-${app}` }) {
+    if (typeof this.adapter.observeRetired !== 'function')
+      throw new TypeError('The adapter must provide read-only retirement observation.');
+    return this.#control(async control => {
+      const effect = control.effect(key);
+      if (effect.kind !== 'retire' || effect.scope !== 'cleanup' || effect.scope_id !== app)
+        throw new FactoryError('CONFLICT', 'Retirement effect belongs to another worker.');
+      if (effect.state === 'succeeded') return { reconciled: false, effect };
+      if (!['running', 'unknown'].includes(effect.state))
+        throw new FactoryError('EFFECT', 'An unsettled retirement is required.');
+      const observation = await this.adapter.observeRetired(app);
+      if (observation?.app !== app || observation?.worker !== app)
+        throw new FactoryError('RETIREMENT', 'Retirement observation identity did not match.');
+      if (observation.state !== 'destroyed') return { reconciled: false, effect: control.effect(key) };
+      return { reconciled: true, effect: control.settleEffect(key, 'succeeded',
+        { app, worker: app, state: 'destroyed', reconciled: true }) };
+    });
+  }
 }

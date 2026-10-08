@@ -123,5 +123,10 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
       await client.deleteWorkspace(client.workspace);
       return { app, worker: app, state: 'destroyed' };
     },
+    async observeRetired(app) {
+      const client = clientFor(app);
+      const absent = await client.confirmWorkspaceAbsent(client.workspace);
+      return { app, worker: app, state: absent ? 'destroyed' : 'present' };
+    },
   });
 }

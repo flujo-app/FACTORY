@@ -33,3 +33,12 @@ test('workspace retirement rejects when FLUJO repeatedly recreates the directory
     { verificationWindowMs: 2, pollIntervalMs: 1 }), /Could not confirm deletion/);
   assert.equal(deletes, 4);
 });
+
+test('read-only retirement observation refuses a workspace that reappears', async () => {
+  const client = new FlujoClient({ origin: 'http://127.0.0.1:4200', workspace: 'swarm-owned' });
+  let reads = 0;
+  client.workspaces = async () => ++reads >= 3 ? ['swarm-owned'] : [];
+  assert.equal(await client.confirmWorkspaceAbsent('swarm-owned',
+    { verificationWindowMs: 20, pollIntervalMs: 1 }), false);
+  assert.equal(reads, 3);
+});

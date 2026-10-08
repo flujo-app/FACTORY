@@ -59,6 +59,14 @@ queue, preserving each task and conversation ID for recovery.
 `retireWorker` records an owned cleanup effect.
 Repeated keys return the retained effect without another external call. An
 uncertain provider outcome remains `unknown` and requires reconciliation.
+For an unknown local FLUJO retirement, call
+`engine.reconcileRetiredWorker({app})` after the external lifecycle has settled.
+The FLUJO adapter observes exact workspace absence for 15 seconds without
+issuing another delete. A present or reappearing workspace leaves the original
+effect unknown; a confirmed absence settles that effect and makes subsequent
+replays stable. Other adapters must implement `observeRetired(app)` to use this
+method. The observation is bounded and cannot guarantee that a faulty FLUJO
+background writer will never recreate the workspace later.
 Worker retirement alone does not close the Factory cell; that requires the
 controller's separate provider-evidence closure path.
 

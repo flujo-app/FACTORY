@@ -25,6 +25,19 @@ test('workspace adapter creates one owned workspace and runs an exact conversati
   assert.deepEqual(actions, ['create', 'flow', 'call', 'retire:swarm-worker-one']);
 });
 
+test('workspace retirement observation maps sustained absence to the exact app', async () => {
+  let absent = false;
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({
+    workspace: settings.workspace,
+    async confirmWorkspaceAbsent(name) { assert.equal(name, 'swarm-worker-one'); return absent; },
+  }) });
+  assert.deepEqual(await adapter.observeRetired('worker-one'),
+    { app: 'worker-one', worker: 'worker-one', state: 'present' });
+  absent = true;
+  assert.deepEqual(await adapter.observeRetired('worker-one'),
+    { app: 'worker-one', worker: 'worker-one', state: 'destroyed' });
+});
+
 test('occupied workspace and uncertain conversation do not claim success', async () => {
   let created = 0;
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({

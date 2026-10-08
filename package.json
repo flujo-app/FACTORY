@@ -1,6 +1,6 @@
 {
   "name": "flujo-factory",
-  "version": "0.3.0-dev.6",
+  "version": "0.3.0-dev.7",
   "description": "Durable FLUJO swarm engine and Factory SDK, CLI, and MCP server",
   "license": "MIT",
   "files": [

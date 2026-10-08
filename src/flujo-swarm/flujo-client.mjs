@@ -90,12 +90,23 @@ export class FlujoClient {
     return true;
   }
 
-  /** Stop the workspace's MCP servers first: on Windows their open files block the delete. */
-  async deleteWorkspace(name, { verificationWindowMs = 15_000, pollIntervalMs = 500 } = {}) {
+  /** Read-only observation; a missing workspace must stay missing throughout the window. */
+  async confirmWorkspaceAbsent(name, { verificationWindowMs = 15_000, pollIntervalMs = 500 } = {}) {
     if (!Number.isSafeInteger(verificationWindowMs) || verificationWindowMs < 1 ||
       !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 1) {
-      throw new TypeError('Workspace deletion verification timings must be positive integers.');
+      throw new TypeError('Workspace absence verification timings must be positive integers.');
     }
+    const deadline = Date.now() + verificationWindowMs;
+    while (true) {
+      if ((await this.workspaces()).includes(name)) return false;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return true;
+      await sleep(Math.min(pollIntervalMs, remaining));
+    }
+  }
+
+  /** Stop the workspace's MCP servers first: on Windows their open files block the delete. */
+  async deleteWorkspace(name, { verificationWindowMs = 15_000, pollIntervalMs = 500 } = {}) {
     for (const server of await this.servers().catch(() => [])) {
       await this.api('PUT', `/api/mcp/servers/${encodeURIComponent(server.name)}`, { name: server.name, disabled: true }, { workspace: name });
     }
@@ -105,15 +116,7 @@ export class FlujoClient {
       if (last.status === 200) {
         // A successful deletion response can race an active background writer.
         // Require continuous exact-name absence across a bounded observation window.
-        const deadline = Date.now() + verificationWindowMs;
-        let absent = true;
-        while (true) {
-          if ((await this.workspaces()).includes(name)) { absent = false; break; }
-          const remaining = deadline - Date.now();
-          if (remaining <= 0) break;
-          await sleep(Math.min(pollIntervalMs, remaining));
-        }
-        if (absent) return last.body;
+        if (await this.confirmWorkspaceAbsent(name, { verificationWindowMs, pollIntervalMs })) return last.body;
       }
       await sleep(1500);
     }
