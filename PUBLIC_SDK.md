@@ -25,6 +25,10 @@ passed on Ubuntu with Node 24 at commit `2ca4d5a`: it audited runtime
 dependencies, ran 16 focused SAVIA and managed-fleet tests, installed the
 packed tarball in a fresh consumer, created a two-cell swarm and opened the
 installed CLI.
+The [expanded gate](https://github.com/flujo-app/FACTORY/actions/runs/37852542753)
+also passed the 23 FACTORY presentation tests at `7096f39`, covering the
+authenticated read-only snapshot, events, Modal observation and paid-budget
+projection consumed by Brain Online and the Observatory.
 The [fresh-install check](evidence/public-sdk-install-20261008.json) resolved
 main at `e3925c7` and created/replayed a three-cell swarm through the installed
 package. A separate credential-free HTTPS source download and tarball install
