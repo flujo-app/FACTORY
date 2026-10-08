@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -63,4 +63,14 @@ test('empty swarm can enroll agents after creation', async t => {
   assert.equal(factory.createSwarm({ mission: 'Build' }).cells.length, 1);
   assert.equal(factory.addAgent({ id: 'builder' }).status, 'ready');
   assert.equal(factory.status().cells.length, 2);
+});
+
+test('CLI reads a JSON file without shell quoting', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-public-file-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const input = join(dir, 'create.json'), database = join(dir, 'swarm.sqlite');
+  await writeFile(input, JSON.stringify({ mission: 'Build', agents: [{ id: 'builder' }] }));
+  const result = spawnSync(process.execPath, [cli, 'create', database, '@' + input], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).cells.length, 2);
 });
