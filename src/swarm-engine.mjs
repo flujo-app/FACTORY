@@ -1,6 +1,23 @@
 import { isAbsolute, resolve } from 'node:path';
-import { FactoryControl, digest } from './control.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { FactoryControl, FactoryError, digest } from './control.mjs';
 import { executeEffect } from './gateway.mjs';
+
+function completedEffect(control, lease, key, kind, request) {
+  let effect;
+  try { effect = control.effect(key); }
+  catch (error) { if (error.code === 'EFFECT') return null; throw error; }
+  if (effect.kind !== kind || effect.scope !== 'task' || effect.scope_id !== lease.scopeId
+    || effect.task_id !== lease.scopeId || effect.request_digest !== digest(request)) {
+    throw new FactoryError('CONFLICT', 'Effect identity belongs to another operation.');
+  }
+  return effect.state === 'succeeded' ? effect : null;
+}
+
+export function conversationEffectKey(worker, conversationId) {
+  return `conversation-${digest({ worker, conversationId })}`;
+}
 
 /** FACTORY-owned dispatch surface for an explicitly configured FLUJO worker adapter. */
 export class FactorySwarmEngine {
@@ -23,6 +40,7 @@ export class FactorySwarmEngine {
     budgetCents = 0, purpose, input, key = `provision-${cellId}` }) {
     if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{2,62}$/.test(app)
       || !input || typeof input !== 'object' || Array.isArray(input)
+      || typeof key !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(key)
       || input.app !== undefined && input.app !== app) {
       throw new TypeError('A valid app and matching provision input are required');
     }
@@ -30,6 +48,14 @@ export class FactorySwarmEngine {
       control.authority(lease);
       control.reserveCell({ cellId, parentId, role, budgetCents, purpose });
       const request = { cellId, app, inputDigest: digest(input) };
+      const previous = completedEffect(control, lease, key, 'provision', request);
+      if (previous) {
+        const owned = control.ownedWorker(app);
+        if (owned.provisionKey !== key || previous.receipt?.worker !== app
+          || previous.receipt?.state !== 'ready') throw new FactoryError('PROVISION_BINDING', 'Recorded worker identity is inconsistent.');
+        control.enrollCell(cellId);
+        return { dispatched: false, effect: previous };
+      }
       const result = await executeEffect(control, lease, { key, kind: 'provision', request },
         async () => {
           const receipt = await this.adapter.provision(input);
@@ -52,11 +78,26 @@ export class FactorySwarmEngine {
     if (typeof outputPath !== 'string' || !isAbsolute(outputPath)) {
       throw new TypeError('An absolute private outputPath is required before dispatch');
     }
-    const key = `conversation-${digest({ worker, conversationId: input.conversationId })}`;
+    const key = conversationEffectKey(worker, input.conversationId);
     return this.#control(control => {
+      control.authority(lease);
       const owned = control.ownedWorker(worker);
+      const request = { worker, cellId: lease.cellId, conversationId: input.conversationId,
+        provisionKey: owned.provisionKey, inputDigest: digest(input) };
+      const previous = completedEffect(control, lease, key, 'flow_call', request);
+      if (previous) {
+        const receipt = previous.receipt;
+        let actual;
+        try { actual = createHash('sha256').update(readFileSync(outputPath)).digest('hex'); }
+        catch { throw new FactoryError('OUTPUT', 'Recorded conversation output is unavailable.'); }
+        if (receipt?.outputPath !== outputPath || receipt?.outputSha256 !== actual) {
+          throw new FactoryError('OUTPUT', 'Recorded conversation output changed.');
+        }
+        return { dispatched: false, effect: previous };
+      }
+      if (existsSync(outputPath)) throw new FactoryError('OUTPUT', 'Output path already exists before dispatch.');
       return executeEffect(control, lease,
-        { key, kind: 'flow_call', request: { worker, provisionKey: owned.provisionKey, inputDigest: digest(input) } },
+        { key, kind: 'flow_call', request },
         () => this.adapter.call(worker, input), { outputPath });
     });
   }
@@ -88,6 +129,17 @@ export class FactorySwarmEngine {
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, work));
     return results;
+  }
+
+  completeConversation({ taskId, worker, conversationId, closureId = `complete-${taskId}` }) {
+    const control = new FactoryControl(this.database);
+    try {
+      const task = control.task(taskId);
+      return control.completeConversationTask(taskId, { closureId, expectedAttempt: task.epoch,
+        expectedOwner: task.owner, expectedStatus: task.status,
+        expectedTaskControlEpoch: task.control_epoch, expectedFactoryEpoch: control.control().epoch,
+        completionEffectKey: conversationEffectKey(worker, conversationId) });
+    } finally { control.close(); }
   }
 
   /** Provider retirement is recorded; cell closure still requires provider evidence. */

@@ -44,7 +44,7 @@ const methods = {
   factory_pause: () => factory.pause(),
   factory_resume: () => factory.resume(),
 };
-const server = new Server({ name: 'factory-local', version: '0.2.0' }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'factory-local', version: '0.3.0-dev.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: definitions.map(([name, description]) => ({
   name, description, inputSchema: { type: 'object', additionalProperties: false, ...(schemas[name] ?? {}) },
   annotations: { readOnlyHint: name === 'factory_status', openWorldHint: false },

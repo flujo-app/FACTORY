@@ -7,9 +7,10 @@ tasks, and external effects. `createSwarm` only initializes that ledger.
 `FactorySwarmEngine` can dispatch work through an explicitly configured local
 FLUJO or managed cloud adapter. Agents can also use the SDK or MCP directly.
 
-Requires Node.js 24 or newer. Install version 0.2.0 into your project with
-`npm install github:flujo-app/FACTORY#v0.2.0` or from a local checkout with
-`npm install .`. Run the project-local CLI with `npx factory`.
+Requires Node.js 24 or newer. The new fleet APIs are on the development main
+branch: `npm install github:flujo-app/FACTORY#main`. A local checkout can be
+installed with `npm install .`. The older `v0.2.0` tag contains only the local
+coordination SDK. Run the project-local CLI with `npx factory`.
 
 ## CLI
 
@@ -64,6 +65,11 @@ controller's separate provider-evidence closure path.
 Recursive delegation uses the same database: a ready child cell claims its own
 FACTORY task, then passes that lease to `provisionWorker` to reserve and launch
 its child. Budget-only growth retains each parent's allocation as the limit.
+`FactoryLocalFleet` automates this for a supplied local FLUJO plan: it creates
+immutable provision and conversation tasks, launches parents before children,
+dispatches bounded conversations, and closes only from exact retained receipts.
+Replaying a completed plan checks the original worker binding and saved output
+bytes. Busy or uncertain work returns `held` and is not sent again.
 
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
 Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new
@@ -80,6 +86,35 @@ The template's `model` is an ID installed in each target FLUJO workspace. Pass
 model installed. `availableServers` must reflect the workspace's connected tool
 inventory. Model credentials remain private input to the adapter and are not
 included in Factory observation receipts.
+
+```js
+import { FactoryLocalFleet, createFlujoWorkspaceAdapter } from 'flujo-factory';
+
+const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200' });
+const fleet = new FactoryLocalFleet('/absolute/path/factory.sqlite', adapter);
+const result = await fleet.run({
+  mission: 'Investigate a case', budgetCents: 0, projectId: 'case', baseline: 'reviewed-source',
+  workers: [{ id: 'team-one', app: 'team-one', budgetCents: 0, purpose: 'Investigate',
+    provisionInput: { app: 'team-one', teamTemplate: { model: 'installed-model' } },
+    conversations: [{ id: 'lead-one', input: { conversationId: 'case-one-lead',
+      request: { flowName: 'swarm_team', prompt: 'Investigate the case' } },
+      outputPath: '/absolute/private/lead-one.txt' }],
+  }],
+});
+```
+
+The example requires a reachable FLUJO installation with that model available
+in the created workspace. `FactoryLocalFleet` uses local workspaces and does not
+make provider spend or physical machine isolation claims. A completed
+conversation task means its original output was retained, not that its answer
+passed independent review.
+
+On 2026-10-08, the generic team and SAVIA specialist pair both compiled on an
+isolated FLUJO 3.46.1 development server. Each test workspace was deleted and
+its absence confirmed. No inference ran in those checks. A separate older,
+shared FLUJO checkout returned HTTP 500 on workspace creation; no test
+workspace remained there. The 10-worker/100-conversation and 300-conversation
+checks use injected adapters, so live fleet throughput is still unverified.
 Calls take
 `{conversationId, request:{flowName,prompt}}`. A workspace shares the FLUJO
 machine with other workspaces, so it is not a separate sandbox. The adapter

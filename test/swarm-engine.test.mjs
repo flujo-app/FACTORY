@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { FactoryControl, FactorySwarmEngine } from '../src/public-sdk.mjs';
 
 test('Factory owns worker dispatch and does not replay provision, call or retirement', async () => {
@@ -28,6 +28,9 @@ test('Factory owns worker dispatch and does not replay provision, call or retire
     const call = { lease, worker: 'worker-one',
       input: { conversationId: 'conversation-one', request: { flowId: 'flow-one' } }, outputPath: path.join(directory, 'output.txt') };
     await assert.rejects(engine.callWorker({ ...call, outputPath: undefined }), TypeError);
+    await writeFile(call.outputPath, 'occupied');
+    await assert.rejects(engine.callWorker(call), { code: 'OUTPUT' });
+    await rm(call.outputPath);
     assert.equal((await engine.callWorker(call)).effect.state, 'succeeded');
     assert.equal((await engine.callWorker(call)).dispatched, false);
     assert.equal(await readFile(call.outputPath, 'utf8'), 'worker answer');
@@ -142,5 +145,39 @@ test('a child FACTORY lease can provision its own child in the same budget-only 
       ['child', 'root', 'ready'], ['grandchild', 'child', 'ready'], ['root', null, 'ready'],
     ]);
     observed.close();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('new task lease observes completed worker and conversation effects without dispatch', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-takeover-'));
+  try {
+    const database = path.join(directory, 'control.sqlite');
+    const control = new FactoryControl(database);
+    control.initialize({ mission: 'Recover a FLUJO run', budgetCents: 0, maxCells: 3, maxDepth: 2 });
+    control.createTask({ taskId: 'job', projectId: 'project', branch: 'codex/job',
+      specification: { problem: 'Run worker', acceptance: 'Receipt', baseline: 'main' } });
+    const first = control.claimTask('job', 'root', 60000);
+    control.close();
+    const counts = { provision: 0, call: 0 };
+    const engine = new FactorySwarmEngine(database, {
+      async provision() { counts.provision++; return { app: 'worker-one', worker: 'worker-one', state: 'ready' }; },
+      async call() { counts.call++; return { body: 'retained result', contentType: 'text/plain' }; },
+      async retire() { throw new Error('unused'); },
+    });
+    const provision = { cellId: 'child', app: 'worker-one', purpose: 'Worker', input: { app: 'worker-one' } };
+    const call = { worker: 'worker-one', input: { conversationId: 'same-conversation',
+      request: { flowName: 'Work', prompt: 'Do work' } }, outputPath: path.join(directory, 'answer.txt') };
+    await engine.provisionWorker({ lease: first, ...provision });
+    await engine.callWorker({ lease: first, ...call });
+    const reopened = new FactoryControl(database);
+    reopened.pause(); reopened.resume();
+    const second = reopened.claimTask('job', 'root', 60000);
+    reopened.close();
+    assert.equal((await engine.provisionWorker({ lease: second, ...provision })).dispatched, false);
+    assert.equal((await engine.callWorker({ lease: second, ...call })).dispatched, false);
+    assert.deepEqual(counts, { provision: 1, call: 1 });
+    await writeFile(call.outputPath, 'changed');
+    await assert.rejects(engine.callWorker({ lease: second, ...call }), { code: 'OUTPUT' });
+    assert.equal(counts.call, 1);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

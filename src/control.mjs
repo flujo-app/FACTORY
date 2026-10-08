@@ -116,6 +116,21 @@ function operationContract(specification) {
   if (Object.hasOwn(specification,'deliveryTarget')) fail('INVALID', 'An operation cannot carry a software delivery target.');
   return operation;
 }
+function conversationContract(specification) {
+  const operation = closureInput(specification.operation,
+    ['kind','cellId','app','conversationId','provisionKey','inputDigest','outputPath']);
+  if (operation.kind !== 'flow_call' || typeof operation.app !== 'string'
+    || !/^[a-z][a-z0-9-]{2,62}$/.test(operation.app)
+    || typeof operation.conversationId !== 'string'
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(operation.conversationId)
+    || typeof operation.inputDigest !== 'string' || !/^[a-f0-9]{64}$/.test(operation.inputDigest)
+    || !isAbsolute(operation.outputPath)) fail('INVALID', 'A bounded conversation operation is required.');
+  id(operation.cellId); id(operation.provisionKey);
+  const acceptance = closureInput(specification.acceptance,['scope']);
+  if (acceptance.scope !== 'recorded-controller-conversation-receipt-only'
+    || Object.hasOwn(specification,'deliveryTarget')) fail('INVALID', 'Conversation acceptance must describe its recorded receipt scope.');
+  return operation;
+}
 function retainedTaskIdentity(task) {
   return { projectId:task.project_id, branch:task.branch, specification:task.specification, specDigest:task.spec_digest,
     candidate:task.candidate, review:task.review };
@@ -432,11 +447,12 @@ export class FactoryControl {
   createTask({ taskId, projectId, branch, specification }) {
     id(taskId); id(projectId);
     if (typeof branch !== 'string' || !/^codex\/[a-zA-Z0-9/_-]+$/.test(branch) || !specification?.problem || !specification?.acceptance || !specification?.baseline) fail('INVALID', 'Task requires a codex branch, problem, acceptance and baseline.');
-    if (Object.hasOwn(specification,'taskType') && !['software','operation'].includes(specification.taskType)) fail('INVALID', 'Unsupported immutable task type.');
+    if (Object.hasOwn(specification,'taskType') && !['software','operation','conversation'].includes(specification.taskType)) fail('INVALID', 'Unsupported immutable task type.');
     if (specification.taskType === 'operation') operationContract(specification);
+    else if (specification.taskType === 'conversation') conversationContract(specification);
     else if (Object.hasOwn(specification,'operation')) fail('INVALID', 'An operation contract requires an explicit operation task type.');
     if(Object.hasOwn(specification,'nativeMission')) {
-      if(specification.taskType==='operation') fail('INVALID','Native mission execution requires a software task.');
+      if(['operation','conversation'].includes(specification.taskType)) fail('INVALID','Native mission execution requires a software task.');
       validateNativeMission(specification.nativeMission);
     }
     if (Object.hasOwn(specification,'originalInference')) {
@@ -800,6 +816,43 @@ export class FactoryControl {
       return result;
     });
   }
+  /** Close one exact completed FLUJO call; model quality and software review remain separate. */
+  completeConversationTask(taskId, input) {
+    id(taskId);
+    const request = closureInput(input,[...TASK_CLOSURE_KEYS,'completionEffectKey']);
+    taskClosureIdentity(request,['running']); id(request.completionEffectKey);
+    const requestDigest = digest({taskId,...request});
+    return this.transaction(() => {
+      const { task, previous } = taskClosureRecord(this,taskId,request,'task_completed',requestDigest,'completed');
+      if (previous) return previous.result;
+      const specification = JSON.parse(task.specification);
+      if (specification.taskType !== 'conversation' || task.candidate !== null || task.review !== null) {
+        fail('TASK', 'An unsubmitted conversation task is required.');
+      }
+      const operation = conversationContract(specification);
+      const provisionKey = provisionIdentity(this,operation);
+      if (provisionKey !== operation.provisionKey || task.owner !== operation.cellId) {
+        fail('CONVERSATION_BINDING', 'Conversation worker identity changed.');
+      }
+      const effect = operationReceipt(this,request.completionEffectKey,'flow_call',task);
+      const recorded = effect.receipt;
+      if (recorded?.outputPath !== operation.outputPath || !/^[a-f0-9]{64}$/.test(recorded?.outputSha256 ?? '')
+        || evidence(operation.outputPath).sha256 !== recorded.outputSha256
+        || effect.request_digest !== digest({worker:operation.app,cellId:operation.cellId,
+          conversationId:operation.conversationId,provisionKey:operation.provisionKey,inputDigest:operation.inputDigest})) {
+        fail('CONVERSATION_EVIDENCE', 'Exact retained conversation output is required.');
+      }
+      const result = {taskId,status:'completed',attempt:task.epoch,previousOwner:task.owner,
+        previousTaskControlEpoch:task.control_epoch,completionScope:'recorded-controller-conversation-receipt-only',
+        completionEffectKey:request.completionEffectKey,outputSha256:recorded.outputSha256,
+        reviewedSoftwareDelivered:false,workerQuiescence:'unverified'};
+      this.db.prepare("UPDATE tasks SET status='completed',owner=NULL,token_hash=NULL,expires=NULL,control_epoch=NULL WHERE id=?").run(taskId);
+      this.event('task_completed',taskId,{closureId:request.closureId,requestDigest,
+        expectedFactoryEpoch:request.expectedFactoryEpoch,retainedTask:retainedTaskIdentity(task),
+        retainedEffects:[effect],result});
+      return result;
+    });
+  }
   /** Explicit abandonment, including while paused. Candidate/review and unmet acceptance remain historical. */
   cancelTask(taskId, input) {
     id(taskId);
@@ -948,6 +1001,16 @@ export class FactoryControl {
             const retirementRequest = closureInput(request,['cellId','app','provisionKey']);
             id(retirementRequest.provisionKey);
             if (provisionIdentity(this,operation) !== retirementRequest.provisionKey) fail('OPERATION_BINDING', 'Retirement must retain exact provisioning bindings.');
+          }
+        }
+        if (task.specification.taskType === 'conversation') {
+          const operation = conversationContract(task.specification);
+          if (kind !== 'flow_call' || lease.cellId !== operation.cellId
+            || request?.worker !== operation.app || request?.cellId !== operation.cellId
+            || request?.conversationId !== operation.conversationId
+            || request?.provisionKey !== operation.provisionKey
+            || request?.inputDigest !== operation.inputDigest) {
+            fail('CONVERSATION_BINDING', 'Effect must match the immutable conversation operation.');
           }
         }
       }
