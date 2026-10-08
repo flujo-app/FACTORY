@@ -98,14 +98,19 @@ function bodyClosed(v, required, optional = []) {
   check(v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === null);
   const keys = Object.keys(v); check(required.every(k => Object.hasOwn(v, k)) && keys.every(k => required.includes(k) || optional.includes(k)));
 }
-function validateBody(binding, model) {
+function validateBody(binding, model, receiverProfile = null) {
   closed(binding, ['kind', 'renderer', 'canonicalUtf8', 'sha256']);
   check(['chat', 'completion'].includes(binding.kind) && binding.renderer === 'communityai-python-json-v1');
   unicode(binding.canonicalUtf8); check(hex(binding.sha256) && sha(Buffer.from(binding.canonicalUtf8, 'utf8')) === binding.sha256);
   const { value: body, numbers } = bodyProjection(binding.canonicalUtf8);
   const common = ['max_tokens', 'temperature', 'top_p', 'stop'];
-  bodyClosed(body, ['model', binding.kind === 'chat' ? 'messages' : 'prompt', 'stream', 'n'], [...common, ...(binding.kind === 'chat' ? ['max_completion_tokens', 'enable_thinking'] : [])]);
+  bodyClosed(body, ['model', binding.kind === 'chat' ? 'messages' : 'prompt', 'stream', 'n'], [...common, ...(receiverProfile ? ['stream_options'] : []), ...(binding.kind === 'chat' ? ['max_completion_tokens', 'enable_thinking'] : [])]);
   check(body.model === model.manifestDigest && typeof body.stream === 'boolean' && body.n === 1 && numbers.get('.n') === '1');
+  if (receiverProfile) {
+    check(binding.kind === 'chat' && body.stream === true && Object.hasOwn(body, 'stream_options'));
+    bodyClosed(body.stream_options, ['include_usage']);
+    check(body.stream_options.include_usage === true);
+  }
   for (const k of ['max_tokens', 'max_completion_tokens']) if (Object.hasOwn(body, k)) check(integer(body[k], 1, 1048576) && numbers.get('.' + k) === String(body[k]));
   for (const k of ['temperature', 'top_p']) if (Object.hasOwn(body, k)) check(typeof body[k] === 'number' && Number.isFinite(body[k]) && body[k] >= 0 && body[k] <= (k === 'temperature' ? 2 : 1));
   if (Object.hasOwn(body, 'enable_thinking')) check(typeof body.enable_thinking === 'boolean');
@@ -125,12 +130,13 @@ function validateBody(binding, model) {
 }
 export function validateOriginalCallPlan(plan) {
   closed(plan, ['format', 'schemaVersion', 'slots']);
-  check(plan.format === 'factory-original-call-plan' && plan.schemaVersion === 1 && Array.isArray(plan.slots) && plan.slots.length > 0 && plan.slots.length <= 128);
+  check(plan.format === 'factory-original-call-plan' && [1, 2].includes(plan.schemaVersion) && Array.isArray(plan.slots) && plan.slots.length > 0 && plan.slots.length <= 128);
   const requests = new Set(), nonces = new Set(), slots = new Set();
   for (const row of plan.slots) {
-    closed(row, ['requestId', 'nonce', 'slot', 'bindingSha256', 'requiredOutcome']); closed(row.slot, ['nodeId', 'ordinal']);
+    closed(row, ['requestId', 'nonce', 'slot', 'bindingSha256', 'requiredOutcome', ...(plan.schemaVersion === 2 ? ['receiverProfileSha256'] : [])]); closed(row.slot, ['nodeId', 'ordinal']);
     check(row.requiredOutcome === 'succeeded');
     check(/^[a-f0-9]{32}$/.test(row.requestId) && /^[a-f0-9]{32}$/.test(row.nonce) && id(row.slot.nodeId) && integer(row.slot.ordinal, 0, 1048576) && hex(row.bindingSha256));
+    if (plan.schemaVersion === 2) check(hex(row.receiverProfileSha256));
     const slot = canonical(row.slot);
     check(!requests.has(row.requestId) && !nonces.has(row.nonce) && !slots.has(slot));
     requests.add(row.requestId); nonces.add(row.nonce); slots.add(slot);
@@ -139,23 +145,36 @@ export function validateOriginalCallPlan(plan) {
 }
 export function validateOriginalInferenceSpecification(value) {
   closed(value, ['schemaVersion', 'classification', 'issuerId', 'keyId', 'factoryId', 'originId', 'completeOriginalSha256', 'planSha256', 'plan']);
-  check(value.schemaVersion === 1); ordinary(value.classification);
+  check([1, 2].includes(value.schemaVersion)); ordinary(value.classification);
   check([value.issuerId, value.keyId, value.factoryId, value.originId].every(id) && hex(value.completeOriginalSha256) && hex(value.planSha256));
-  validateOriginalCallPlan(value.plan); check(digest(value.plan) === value.planSha256);
+  validateOriginalCallPlan(value.plan); check(value.plan.schemaVersion === value.schemaVersion && digest(value.plan) === value.planSha256);
   return value;
 }
+function validateReceiverProfile(profile, record) {
+  closed(profile, ['format', 'schemaVersion', 'recipientId', 'recipientOrigin', 'recipientIdentitySha256', 'endpoint', 'renderer', 'ingressSchemaSha256', 'normalizerSha256', 'runtimeSha256', 'recipientBuildSha256', 'generationSha256', 'streamOptionsPolicy']);
+  const selected = record.recipients.find(recipient => recipient.id === record.call.recipientId);
+  check(profile.format === 'factory-communityai-receiver-profile' && profile.schemaVersion === 1
+    && profile.recipientId === record.call.recipientId && profile.endpoint === '/v1/chat/completions'
+    && profile.renderer === 'communityai-python-json-v1' && profile.streamOptionsPolicy === 'strict-include-usage-v1'
+    && [profile.ingressSchemaSha256, profile.normalizerSha256, profile.runtimeSha256].every(hex)
+    && selected && profile.recipientOrigin === selected.origin && profile.recipientIdentitySha256 === selected.identitySha256
+    && profile.recipientBuildSha256 === selected.buildSha256 && profile.generationSha256 === selected.generationSha256);
+}
 function validate(record, configured) {
-  closed(record, ['format', 'schemaVersion', 'canonicalization', 'issuer', 'authority', 'classification', 'task', 'parent', 'lease', 'reservation', 'call', 'model', 'recipients', 'body', 'plan']);
-  check(record.format === 'factory-original-inference' && record.schemaVersion === 2 && record.canonicalization === 'factory-json-safe-integer-v1');
+  check(record && [2, 3].includes(record.schemaVersion));
+  const receiverV3 = record.schemaVersion === 3;
+  closed(record, ['format', 'schemaVersion', 'canonicalization', 'issuer', 'authority', 'classification', 'task', 'parent', 'lease', 'reservation', 'call', 'model', 'recipients', 'body', 'plan', ...(receiverV3 ? ['receiverProfile'] : [])]);
+  check(record.format === 'factory-original-inference' && record.canonicalization === 'factory-json-safe-integer-v1');
   ordinary(record.classification);
   closed(record.issuer, ['id', 'keyId']); check(record.issuer.id === configured.issuerId && record.issuer.keyId === configured.keyId);
-  closed(record.authority, ['factoryId', 'originId', 'contractVersion']); check(id(record.authority.factoryId) && id(record.authority.originId) && record.authority.contractVersion === 2);
+  closed(record.authority, ['factoryId', 'originId', 'contractVersion']); check(id(record.authority.factoryId) && id(record.authority.originId) && record.authority.contractVersion === record.schemaVersion);
   const task = record.task; closed(task, ['id', 'projectId', 'branch', 'specification', 'specDigest']);
   check(id(task.id) && id(task.projectId) && typeof task.branch === 'string' && /^codex\/[a-zA-Z0-9/_-]+$/.test(task.branch) && task.branch.length <= 256 && hex(task.specDigest));
   const spec = task.specification;
   closed(spec, ['problem', 'acceptance', 'baseline', 'nativeMission', 'taskType', 'originalInference']);
   check(typeof spec.problem === 'string' && spec.problem.length > 0 && typeof spec.baseline === 'string' && spec.baseline.length > 0 && Array.isArray(spec.acceptance) && spec.acceptance.length > 0 && spec.acceptance.every(v => typeof v === 'string' && v.length > 0));
   check(spec.taskType === 'software'); validateOriginalInferenceSpecification(spec.originalInference);
+  check(spec.originalInference.schemaVersion === (receiverV3 ? 2 : 1));
   check(spec.originalInference.issuerId === record.issuer.id && spec.originalInference.keyId === record.issuer.keyId && spec.originalInference.factoryId === record.authority.factoryId && spec.originalInference.originId === record.authority.originId);
   check(equal(record.classification, spec.originalInference.classification)); check(digest(spec) === task.specDigest);
   check(/^[a-f0-9]{40}$/.test(spec.nativeMission?.worker?.compatibility?.revision ?? ''));
@@ -182,11 +201,16 @@ function validate(record, configured) {
     const url = new URL(recipient.origin); check(url.origin === recipient.origin && (url.protocol === 'https:' || url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname)) && !url.username && !url.password);
     if (recipient.id === record.call.recipientId) { check(recipient.principalId === record.call.principalId && recipient.role === record.call.role); selected++; }
   }
-  check(selected === 1); validateBody(record.body, record.model);
+  check(selected === 1);
+  if (receiverV3) validateReceiverProfile(record.receiverProfile, record);
+  validateBody(record.body, record.model, receiverV3 ? record.receiverProfile : null);
   validateOriginalCallPlan(record.plan); check(equal(record.plan, spec.originalInference.plan));
   const selectedSlot = record.plan.slots.filter(s => s.requestId === record.call.requestId);
   check(selectedSlot.length === 1 && selectedSlot[0].nonce === record.call.nonce && equal(selectedSlot[0].slot, record.call.slot)
-    && selectedSlot[0].bindingSha256 === digest({ call: record.call, model: record.model, recipients: record.recipients, body: record.body }));
+    && (!receiverV3 || selectedSlot[0].receiverProfileSha256 === digest(record.receiverProfile))
+    && selectedSlot[0].bindingSha256 === digest(receiverV3
+      ? { call: record.call, model: record.model, recipients: record.recipients, body: record.body, receiverProfile: record.receiverProfile }
+      : { call: record.call, model: record.model, recipients: record.recipients, body: record.body }));
   return freeze(record);
 }
 
@@ -196,7 +220,7 @@ export function withOriginalInferenceCapability(bootstrap, capability, reader) {
   return bootstraps.get(bootstrap)(capability, reader);
 }
 
-/** Pure v2 provenance bootstrap. No lease freshness, durable claim, budget or transport grant. */
+/** Pure v2/v3 provenance bootstrap. No lease freshness, durable claim, budget or transport grant. */
 export function createOriginalInferenceBootstrap(configuration) {
   try { closed(configuration, ['issuerId', 'keyId', 'verifyOriginal']); check(id(configuration.issuerId) && id(configuration.keyId) && typeof configuration.verifyOriginal === 'function'); }
   catch { deny(); }
@@ -219,7 +243,7 @@ export function createOriginalInferenceBootstrap(configuration) {
     authenticate,
     inspect(capability) {
       const { record: r, envelopeSha256 } = verified(capability);
-      return Object.freeze({ format: 'factory-original-inference-provenance', schemaVersion: 2, requestId: r.call.requestId, nonce: r.call.nonce, taskId: r.task.id, specDigest: r.task.specDigest, bodySha256: r.body.sha256, envelopeSha256, scope: 'provenance-only', runtimeAdmission: 'HOLD' });
+      return Object.freeze({ format: 'factory-original-inference-provenance', schemaVersion: r.schemaVersion, requestId: r.call.requestId, nonce: r.call.nonce, taskId: r.task.id, specDigest: r.task.specDigest, bodySha256: r.body.sha256, ...(r.schemaVersion === 3 ? { receiverProfileSha256: digest(r.receiverProfile) } : {}), envelopeSha256, scope: 'provenance-only', runtimeAdmission: 'HOLD' });
     },
     withVerified(capability, reader) { const { record } = verified(capability); check(typeof reader === 'function'); return reader(record); }
   });

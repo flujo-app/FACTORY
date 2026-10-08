@@ -9,6 +9,7 @@ const canonical = v => v === null || typeof v !== 'object' ? JSON.stringify(v) :
 const sha = v => createHash('sha256').update(v).digest('hex');
 const encoded = v => Buffer.from(canonical(v));
 const proof = Buffer.from('owned-synthetic-proof');
+const pr35ReceiverNormalizedBody = '{"max_tokens":8,"messages":[{"content":"offline bridge fixture","role":"user"}],"model":"sha256:' + '1'.repeat(64) + '","n":1,"stream":true,"stream_options":{"include_usage":true},"temperature":1.0}';
 const denied = operation => assert.throws(operation, e => e.code === 'ORIGINAL_INFERENCE_DENIED' && e.message === 'Original inference provenance denied.' && !Object.hasOwn(e, 'cause'));
 function fixture({ callId = 'd'.repeat(32), taskId = 'develop', problem = 'Improve FLUJO' } = {}) {
   const nativeMission = { schemaVersion: 1, missionId: 'b'.repeat(32), cellId: 'child', app: 'factory-child', provisionKey: 'provision', worker: { workspace: 'mission', archiveSha256: 'a'.repeat(64), compatibility: { applicationVersion: '3.46.0', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, revision: 'c'.repeat(40) } }, flowId: 'flow', flowSha256: 'f'.repeat(64), paid: { provider: 'modal', ceilingCents: 500 } };
@@ -33,7 +34,10 @@ function fixture({ callId = 'd'.repeat(32), taskId = 'develop', problem = 'Impro
 }
 function rebindProjection(record) {
   const slot = record.plan.slots.find(s => s.requestId === record.call.requestId);
-  slot.bindingSha256 = sha(encoded({ call: record.call, model: record.model, recipients: record.recipients, body: record.body }));
+  if (record.schemaVersion === 3) slot.receiverProfileSha256 = sha(encoded(record.receiverProfile));
+  slot.bindingSha256 = sha(encoded(record.schemaVersion === 3
+    ? { call: record.call, model: record.model, recipients: record.recipients, body: record.body, receiverProfile: record.receiverProfile }
+    : { call: record.call, model: record.model, recipients: record.recipients, body: record.body }));
   const spec = record.task.specification; spec.originalInference.planSha256 = sha(encoded(record.plan));
   record.task.specDigest = sha(encoded(spec));
   const request = nativeMissionRequest({ id: record.task.id, project_id: record.task.projectId, branch: record.task.branch, specification: spec, spec_digest: record.task.specDigest }, record.lease, record.parent.request.outputFile);
@@ -54,6 +58,20 @@ function host(records = [fixture()], override) {
   return { bootstrap, counters, run };
 }
 function rebody(record, source) { record.body.canonicalUtf8 = source; record.body.sha256 = sha(Buffer.from(source)); return rebindProjection(record); }
+function v3Fixture() {
+  const record = fixture();
+  record.schemaVersion = 3; record.authority.contractVersion = 3;
+  record.receiverProfile = {format:'factory-communityai-receiver-profile',schemaVersion:1,
+    recipientId:record.call.recipientId,recipientOrigin:record.recipients[0].origin,
+    recipientIdentitySha256:record.recipients[0].identitySha256,
+    endpoint:'/v1/chat/completions',renderer:'communityai-python-json-v1',
+    ingressSchemaSha256:'9'.repeat(64),normalizerSha256:'8'.repeat(64),runtimeSha256:'a'.repeat(64),
+    recipientBuildSha256:record.recipients[0].buildSha256,generationSha256:record.recipients[0].generationSha256,
+    streamOptionsPolicy:'strict-include-usage-v1'};
+  record.plan.schemaVersion = 2;
+  record.task.specification.originalInference.schemaVersion = 2;
+  return rebody(record,pr35ReceiverNormalizedBody);
+}
 function leaves(v, prefix = []) { return v && typeof v === 'object' ? Object.entries(v).flatMap(([k, x]) => leaves(x, [...prefix, k])) : [[prefix, v]]; }
 function set(root, path, value) { let at = root; for (const key of path.slice(0, -1)) at = at[key]; at[path.at(-1)] = value; }
 
@@ -64,6 +82,48 @@ test('verified complete original lineage yields only a local frozen provenance c
   assert.equal(Object.isFrozen(capability), true); assert.equal(Object.isFrozen(view), true);
   h.bootstrap.withVerified(capability, value => { assert.deepEqual(value, r); assert.equal(Object.isFrozen(value.task.specification.nativeMission.worker), true); });
   assert.deepEqual(h.counters, { verifier: 1, credential: 0, database: 0 });
+});
+test('v3 authenticates a separately versioned PR35 normalized body/profile and remains on HOLD', () => {
+  const r=v3Fixture(),h=host([r]),cap=h.bootstrap.authenticate(encoded(r),proof),view=h.bootstrap.inspect(cap);
+  assert.equal(r.body.sha256,'21a0d9be9d903deba02504bb66506208338bc4423c8669a71db1904d21aa4890');
+  assert.equal(view.schemaVersion,3);assert.equal(view.receiverProfileSha256,sha(encoded(r.receiverProfile)));
+  assert.equal(view.runtimeAdmission,'HOLD');assert.equal(h.counters.verifier,1);
+  assert.equal(h.counters.credential,0);assert.equal(h.counters.database,0);
+});
+test('v2 never reinterprets PR35 stream options as its historical body grammar', () => {
+  const r=rebody(fixture(),pr35ReceiverNormalizedBody),h=host([r]);
+  denied(()=>h.bootstrap.authenticate(encoded(r),proof));
+  assert.equal(h.counters.verifier,0);
+});
+test('v3 refuses receiver profile/slot, generation, body and nested option tampering before verification', () => {
+  const variants=[
+    r=>r.receiverProfile.normalizerSha256='f'.repeat(64),
+    r=>r.plan.slots[0].receiverProfileSha256='f'.repeat(64),
+    r=>r.receiverProfile.generationSha256='f'.repeat(64),
+    r=>r.receiverProfile.recipientOrigin='http://127.0.0.1:9000',
+    r=>r.receiverProfile.recipientIdentitySha256='f'.repeat(64),
+    r=>r.receiverProfile.recipientBuildSha256='f'.repeat(64),
+    r=>r.body.canonicalUtf8=r.body.canonicalUtf8.replace('"include_usage":true','"include_usage":false'),
+    r=>r.body.canonicalUtf8=r.body.canonicalUtf8.replace('"include_usage":true','"include_usage":true,"unexpected":true'),
+    r=>delete r.receiverProfile,
+    r=>r.task.specification.originalInference.schemaVersion=1,
+    r=>r.plan.schemaVersion=1,
+  ];
+  for(const mutate of variants){const r=v3Fixture();mutate(r);const h=host([r]);
+    denied(()=>h.bootstrap.authenticate(encoded(r),proof));assert.equal(h.counters.verifier,0);}
+});
+test('v3 rejects invalid signed receiver profiles and unsupported fields after every digest is recomputed', () => {
+  const variants=[
+    r=>{r.receiverProfile.generationSha256='f'.repeat(64);rebindProjection(r);},
+    r=>{r.receiverProfile.recipientOrigin='http://127.0.0.1:9000';rebindProjection(r);},
+    r=>{r.receiverProfile.streamOptionsPolicy='lenient';rebindProjection(r);},
+    r=>rebody(r,r.body.canonicalUtf8.replace('"include_usage":true','"include_usage":false')),
+    r=>rebody(r,r.body.canonicalUtf8.replace('"include_usage":true','"include_usage":true,"unexpected":true')),
+    r=>rebody(r,r.body.canonicalUtf8.replace('"stream":true','"stream":false')),
+    r=>rebody(r,r.body.canonicalUtf8.replace('"n":1,','"n":1,"prompt_cache_key":"cache-key",')),
+  ];
+  for(const mutate of variants){const r=v3Fixture();mutate(r);const h=host([r]);
+    denied(()=>h.bootstrap.authenticate(encoded(r),proof));assert.equal(h.counters.verifier,0);}
 });
 test('identical body bytes remain distinct authenticated calls and full original specifications', () => {
   const a = fixture(), b = fixture({ callId: '7'.repeat(32), taskId: 'review', problem: 'Review FLUJO' });
