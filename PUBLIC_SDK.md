@@ -151,6 +151,17 @@ model installed. `availableServers` must reflect the workspace's connected tool
 inventory. Model credentials remain private input to the adapter and are not
 included in Factory observation receipts.
 
+For a SAVIA case, `buildSaviaCasePlan` assembles the ten distinct lead launches
+and their `swarm_team` submissions. Supply ten independent `angles`, an explicit
+logical `budgetCents`, an installed `model`, and an existing absolute private
+`outputDirectory` before calling `fleet.run(plan)`. Optional `teamBudgetCents`
+allocates that budget across the ten leads; optional `timeoutMs` sets a per-lead
+deadline. Without it, the FLUJO client uses its normal run timeout. Keep any
+`modelConfig` and generated plan private if they contain credentials. The helper
+does not start a provider call by itself. The nine specialist subflows per team
+remain a topology target until run records prove that they launched and finished;
+the plan records ten lead conversations in FACTORY.
+
 ```js
 import { FactoryLocalFleet, createFlujoWorkspaceAdapter } from 'flujo-factory';
 

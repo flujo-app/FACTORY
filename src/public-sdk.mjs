@@ -77,4 +77,5 @@ export { FactoryLocalFleet } from './local-fleet.mjs';
 export { createManagedCloudAdapter } from './adapters/managed-cloud.mjs';
 export { createFlujoWorkspaceAdapter } from './adapters/flujo-workspace.mjs';
 export { buildFactoryTeamSpecs, CASE_SPECIALISTS_V1, FACTORY_FLOW_NAMES } from './flujo-swarm/template/factory-team.mjs';
+export { buildSaviaCasePlan } from './flujo-swarm/template/savia-case-plan.mjs';
 export { createPresentationServer, startPresentationServer } from './presentation.mjs';
