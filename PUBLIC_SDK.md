@@ -20,6 +20,9 @@ three cells through the installed SDK and exposed `FactoryLocalFleet.closeRetire
 A pinned public Git install at `7c23d03` exported `buildSaviaCasePlan` and
 constructed ten team leads with an exact 103-cent logical allocation under
 Node 24; see the same evidence record. This check did not call FLUJO or a model.
+A fresh pinned Git install at `3579051` also exported and constructed
+`FactoryManagedFleet` under Node 24 with an inert synthetic adapter. It did not
+deploy a cloud worker.
 `flujo-factory` is not yet published to the npm registry.
 
 ## CLI
