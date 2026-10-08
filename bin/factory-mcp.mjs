@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -44,7 +45,8 @@ const methods = {
   factory_pause: () => factory.pause(),
   factory_resume: () => factory.resume(),
 };
-const server = new Server({ name: 'factory-local', version: '0.3.0-dev.0' }, { capabilities: { tools: {} } });
+const packageVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const server = new Server({ name: 'factory-local', version: packageVersion }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: definitions.map(([name, description]) => ({
   name, description, inputSchema: { type: 'object', additionalProperties: false, ...(schemas[name] ?? {}) },
   annotations: { readOnlyHint: name === 'factory_status', openWorldHint: false },

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,7 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Factory, FactoryControl } from '../src/public-sdk.mjs';
 
 const cli = fileURLToPath(new URL('../bin/factory-public.mjs', import.meta.url));
-const mcp = fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
+const mcp = process.env.FACTORY_TEST_MCP ?? fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
 
 test('public SDK and CLI coordinate a local swarm without a provider', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-public-'));
@@ -38,6 +38,8 @@ test('public MCP stdio server creates and reads a local swarm', async t => {
   const client = new Client({ name: 'factory-public-test', version: '1.0.0' });
   t.after(async () => { await client.close(); });
   await client.connect(transport);
+  const packageVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
+  assert.equal(client.getServerVersion()?.version, packageVersion);
   const names = (await client.listTools()).tools.map(tool => tool.name);
   assert.ok(names.includes('factory_create') && names.includes('factory_status'));
   const created = await client.callTool({ name: 'factory_create', arguments: { mission: 'Build', budgetCents: 0,
