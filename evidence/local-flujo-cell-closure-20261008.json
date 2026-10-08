@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "factoryCoreRevision": "559c455c869b54c066ecfb7fbaf4774d98d3f84b",
+  "flujoSource": {
+    "description": "Isolated unregistered scratch copy based on FLUJO PR #958 with the local dependency-security trial applied; not the PR #955 merge candidate",
+    "packageVersion": "3.46.2",
+    "workspaceRouteSha256": "faa872f2fb7faa1adc61f0691eb71a349d2eb7b691737140cd98f93d614cb731"
+  },
+  "runtime": {
+    "node": "24.19.0",
+    "flujoOrigin": "http://127.0.0.1:4379",
+    "dataRoot": "fresh isolated system temp directory",
+    "model": "local synthetic OpenAI-compatible loopback server",
+    "paidInference": false
+  },
+  "result": {
+    "accepted": true,
+    "workers": 1,
+    "conversations": 1,
+    "modelCalls": 1,
+    "conversationReplayWithoutNewCall": true,
+    "workspaceAbsent": true,
+    "cellsRetired": 1,
+    "cellClosureReplayWithoutNewObservation": true,
+    "successfulProvisionEffects": 1,
+    "successfulFlowCallEffects": 1,
+    "serverStoppedAfterRun": true
+  },
+  "scope": "Live local FACTORY SDK lifecycle verification. This does not qualify the unmerged FLUJO #955 candidate, paid inference, cloud resource retirement, or production Observatory connectivity."
+}

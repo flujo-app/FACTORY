@@ -128,6 +128,11 @@ The [live retirement check](evidence/local-flujo-fleet-retirement-20261008.json)
 ran the fleet-level path with one unpaid synthetic worker and conversation
 against the pinned FLUJO lifecycle PR. The earlier 10-worker/300-conversation
 acceptance exercised the same scheduler with lower-level retirement.
+The [live cell-closure check](evidence/local-flujo-cell-closure-20261008.json)
+then ran one unpaid synthetic worker through the current SDK's workspace
+retirement and trusted logical cell closure against an isolated FLUJO scratch
+server. The scratch source is identified in that record and is not the
+FLUJO #955 release candidate.
 
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
 Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new

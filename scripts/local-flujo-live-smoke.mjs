@@ -104,12 +104,18 @@ try {
   const retirement = await fleet.retire(plan, { workerConcurrency });
   assert.equal(retirement.workers.every(worker => worker.status === 'retired'), true);
   for (const worker of plan.workers) retired.add(worker.app);
+  const closures = [];
+  for (const worker of plan.workers) closures.push(await fleet.closeRetired(plan, { workerId: worker.id }));
+  assert.equal(closures.every(item => item.cell.status === 'retired'), true);
+  for (const worker of plan.workers)
+    assert.equal((await fleet.closeRetired(plan, { workerId: worker.id })).replayed, true);
   const client = new FlujoClient({ origin, workspace: `swarm-${plan.workers[0].app}` });
   const remaining = await client.workspaces();
   assert.equal(plan.workers.some(worker => remaining.includes(`swarm-${worker.app}`)), false);
   accepted = true;
   process.stdout.write(`${JSON.stringify({ accepted: true, flujoOrigin: origin,
     workers, conversations: workers * perWorker, workspaceAbsent: true,
+    cellsRetired: closures.length,
     modelCalls, replayed: true, effectCounts: {
       provision: effects.filter(effect => effect.kind === 'provision' && effect.state === 'succeeded').length,
       flowCall: effects.filter(effect => effect.kind === 'flow_call' && effect.state === 'succeeded').length,
