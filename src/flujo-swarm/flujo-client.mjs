@@ -91,7 +91,11 @@ export class FlujoClient {
   }
 
   /** Stop the workspace's MCP servers first: on Windows their open files block the delete. */
-  async deleteWorkspace(name, { verificationDelayMs = 2000 } = {}) {
+  async deleteWorkspace(name, { verificationWindowMs = 15_000, pollIntervalMs = 500 } = {}) {
+    if (!Number.isSafeInteger(verificationWindowMs) || verificationWindowMs < 1 ||
+      !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 1) {
+      throw new TypeError('Workspace deletion verification timings must be positive integers.');
+    }
     for (const server of await this.servers().catch(() => [])) {
       await this.api('PUT', `/api/mcp/servers/${encodeURIComponent(server.name)}`, { name: server.name, disabled: true }, { workspace: name });
     }
@@ -100,10 +104,16 @@ export class FlujoClient {
       last = await this.api('DELETE', '/api/workspaces', { name }, { workspace: null });
       if (last.status === 200) {
         // A successful deletion response can race an active background writer.
-        // Only repeated exact-name absence is a cleanup receipt.
-        const absent = !(await this.workspaces()).includes(name);
-        await sleep(verificationDelayMs);
-        if (absent && !(await this.workspaces()).includes(name)) return last.body;
+        // Require continuous exact-name absence across a bounded observation window.
+        const deadline = Date.now() + verificationWindowMs;
+        let absent = true;
+        while (true) {
+          if ((await this.workspaces()).includes(name)) { absent = false; break; }
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          await sleep(Math.min(pollIntervalMs, remaining));
+        }
+        if (absent) return last.body;
       }
       await sleep(1500);
     }
