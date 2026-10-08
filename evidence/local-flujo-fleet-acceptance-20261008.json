@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "factoryRevision": "2fe107b79cb31a522dcacc3a0e1da42723d55497",
+  "flujoRevision": "128e2b4b83043b2f9c75ce0369a029eb2b133cfc",
+  "flujoPullRequest": "https://github.com/mario-andreschak/FLUJO/pull/958",
+  "runtime": {
+    "factoryNode": "24.19.0",
+    "flujo": "current-main development server",
+    "dataRoot": "isolated system temp directory",
+    "model": "local synthetic OpenAI-compatible loopback server",
+    "paidInference": false
+  },
+  "plan": {
+    "workers": 10,
+    "conversationsPerWorker": 30,
+    "workerConcurrency": 2,
+    "conversationConcurrency": 20
+  },
+  "result": {
+    "accepted": true,
+    "conversations": 300,
+    "modelCalls": 300,
+    "replayed": true,
+    "workspaceAbsent": true,
+    "successfulProvisionEffects": 10,
+    "successfulFlowCallEffects": 300,
+    "remainingFlujoWorkspaces": ["default-workspace"]
+  },
+  "limits": [
+    "The smoke removed its temporary SQLite ledger on success; this record captures the emitted final summary and observed workspace list.",
+    "The run used a synthetic model and did not assess answer quality or paid model throughput.",
+    "The FLUJO lifecycle fix is in an open pull request and is not yet in upstream main."
+  ]
+}

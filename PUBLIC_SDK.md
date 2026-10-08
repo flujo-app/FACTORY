@@ -131,15 +131,18 @@ completed one FACTORY conversation, but exposed FLUJO workspace recreation
 after a successful delete response. FACTORY now watches exact-name absence
 for 15 seconds and leaves retirement `unknown` if the workspace returns.
 Fresh isolated FLUJO runs also hit Windows `EPERM` while renaming a staged
-shipped MCP package into a new workspace. Thus live fleet acceptance remains
-open on unpatched FLUJO. With the ongoing-goal runtime deletion fix in
+shipped MCP package into a new workspace under the Documents data root. The
+system temp data root avoided that provisioning failure. With the ongoing-goal
+and MCP teardown fixes in
 [FLUJO PR #958](https://github.com/mario-andreschak/FLUJO/pull/958), an isolated
-current-main development server completed a live unpaid run with 10 workspaces,
-100 synthetic-model conversations, exact replay, and confirmed retirement of
-all ten workspaces. A second live run completed 300 synthetic-model
-conversations and replay, but retirement of worker 0 remained `unknown` after
-its `mcp-servers` directory returned. The 300-conversation scale target is
-therefore verified for dispatch and replay, not complete lifecycle cleanup.
+current-main development server completed live unpaid runs with 10 workspaces
+and 100, then 300 synthetic-model conversations. Both runs confirmed exact
+replay and retirement of all ten workspaces. The
+[300-conversation acceptance record](evidence/local-flujo-fleet-acceptance-20261008.json)
+pins the tested revisions and result. These checks establish local synthetic
+dispatch, replay, and workspace cleanup; they do not measure paid model
+inference, independent answer quality, or cloud machine isolation. The FLUJO
+fix remains an open PR until merged.
 To reproduce without paid
 inference, start an isolated local FLUJO server and run
 `FACTORY_FLUJO_ORIGIN=http://127.0.0.1:<port> npm run smoke:local-flujo`
