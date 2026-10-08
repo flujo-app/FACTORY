@@ -127,6 +127,9 @@ for its next safe boundary; the receipt alone does not prove the model consumed
 it. FACTORY stores the content digest and acknowledgement, not the message body.
 The fleet instance must still hold the active task lease. Uncertain submission
 stays in the ledger for reconciliation and is never blindly sent again.
+The fleet renews its task leases during provisioning and conversation calls.
+The optional constructor settings `{leaseTtlMs, renewEveryMs}` default to ten
+minutes and one minute; keep the renewal interval below half the lease TTL.
 
 The FLUJO HTTP client and specialist profile in `src/flujo-swarm` are source
 extractions from the

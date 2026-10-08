@@ -76,6 +76,36 @@ test('uncertain steering remains a held effect and prevents conversation closure
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('local fleet renews leases while provisioning and running long FLUJO calls', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-renew-'));
+  try {
+    let entered;
+    const runningCall = new Promise(resolve => { entered = resolve; });
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { await new Promise(resolve => setTimeout(resolve, 280));
+        return { worker: input.app, state: 'ready' }; },
+      async call() { entered(); await new Promise(resolve => setTimeout(resolve, 300));
+        return { body: 'answer', contentType: 'text/plain' }; },
+      async message(_worker, input) { return { messageId: input.messageId, state: 'queued' }; },
+      async retire() { throw new Error('unused'); },
+    }, { leaseTtlMs: 200, renewEveryMs: 20 });
+    const plan = { mission: 'Long FLUJO conversation', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [{ id: 'lead', app: 'worker-lead', budgetCents: 0, purpose: 'Lead',
+        provisionInput: { app: 'worker-lead' }, conversations: [{ id: 'job-one',
+          input: { conversationId: 'conversation-one', request: { flowName: 'Work', prompt: 'Start' } },
+          outputPath: path.join(directory, 'output.txt') }] }] };
+    const resultPromise = fleet.run(plan);
+    await runningCall;
+    await new Promise(resolve => setTimeout(resolve, 230));
+    assert.equal((await fleet.message({ jobId: 'job-one',
+      messageId: '13a6e3bb-c5e7-4c7d-a521-e6a7a6c9e1eb', content: 'Keep going' })).effect.state, 'succeeded');
+    const result = await resultPromise;
+    assert.deepEqual(result.launches.map(item => item.status), ['completed']);
+    assert.deepEqual(result.conversations.map(item => item.status), ['completed']);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('local fleet provisions recursively, closes exact conversations and replays from one ledger', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-fleet-'));
   try {

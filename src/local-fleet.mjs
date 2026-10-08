@@ -78,18 +78,38 @@ async function boundedMap(values, concurrency, operation) {
 
 /** Local FLUJO fleet planning over one FACTORY controller, without a second worker registry. */
 export class FactoryLocalFleet {
-  constructor(database, adapter) {
+  constructor(database, adapter, { leaseTtlMs = 600000, renewEveryMs = 60000 } = {}) {
     if (adapter?.capabilities?.adapter !== 'flujo-workspace') {
       throw new TypeError('FactoryLocalFleet requires the local FLUJO workspace adapter');
+    }
+    if (!Number.isSafeInteger(leaseTtlMs) || leaseTtlMs < 2
+      || !Number.isSafeInteger(renewEveryMs) || renewEveryMs < 1 || renewEveryMs >= leaseTtlMs / 2) {
+      throw new TypeError('Lease renewal interval must be positive and less than half the lease TTL');
     }
     this.database = resolve(database);
     this.engine = new FactorySwarmEngine(this.database, adapter);
     this.activeConversations = new Map();
+    this.leaseTtlMs = leaseTtlMs;
+    this.renewEveryMs = renewEveryMs;
   }
 
   #control(operation) {
     const control = new FactoryControl(this.database);
     try { return operation(control); } finally { control.close(); }
+  }
+
+  async #withLeaseRenewal(lease, operation) {
+    let renewalError = null;
+    const timer = setInterval(() => {
+      try { Object.assign(lease, this.#control(control => control.renew(lease, this.leaseTtlMs))); }
+      catch (error) { renewalError = error; clearInterval(timer); }
+    }, this.renewEveryMs);
+    timer.unref?.();
+    try {
+      const result = await operation(() => { if (renewalError) throw renewalError; });
+      if (renewalError) throw renewalError;
+      return result;
+    } finally { clearInterval(timer); }
   }
 
   prepare(plan) {
@@ -134,21 +154,24 @@ export class FactoryLocalFleet {
             || cell.purpose !== worker.purpose) throw new FactoryError('WORKER', 'Worker binding changed');
           return null;
         }
-        return control.claimTask(taskId, worker.parentId ?? 'root', 600000);
+        return control.claimTask(taskId, worker.parentId ?? 'root', this.leaseTtlMs);
       });
       if (lease === null) return { workerId: worker.id, status: 'ready', replayed: true };
-      const result = await this.engine.provisionWorker({ lease, cellId: worker.id, app: worker.app,
-        parentId: worker.parentId ?? 'root', role: 'developer', budgetCents: worker.budgetCents,
-        purpose: worker.purpose, input: worker.provisionInput });
-      if (result.effect.state !== 'succeeded') return { workerId: worker.id, status: 'held' };
-      const closed = this.#control(control => {
-        const task = control.task(taskId);
-        return control.completeOperationalTask(taskId, { closureId: `complete-${taskId}`,
-          expectedAttempt: task.epoch, expectedOwner: task.owner, expectedStatus: task.status,
-          expectedTaskControlEpoch: task.control_epoch, expectedFactoryEpoch: control.control().epoch,
-          completionEffectKeys: [result.effect.key] });
+      return await this.#withLeaseRenewal(lease, async checkRenewal => {
+        const result = await this.engine.provisionWorker({ lease, cellId: worker.id, app: worker.app,
+          parentId: worker.parentId ?? 'root', role: 'developer', budgetCents: worker.budgetCents,
+          purpose: worker.purpose, input: worker.provisionInput });
+        if (result.effect.state !== 'succeeded') return { workerId: worker.id, status: 'held' };
+        checkRenewal();
+        const closed = this.#control(control => {
+          const task = control.task(taskId);
+          return control.completeOperationalTask(taskId, { closureId: `complete-${taskId}`,
+            expectedAttempt: task.epoch, expectedOwner: task.owner, expectedStatus: task.status,
+            expectedTaskControlEpoch: task.control_epoch, expectedFactoryEpoch: control.control().epoch,
+            completionEffectKeys: [result.effect.key] });
+        });
+        return { workerId: worker.id, status: closed.status, replayed: !result.dispatched };
       });
-      return { workerId: worker.id, status: closed.status, replayed: !result.dispatched };
     } catch (error) {
       return { workerId: worker.id, status: 'held', code: error.code ?? 'UNCONFIRMED' };
     }
@@ -167,18 +190,21 @@ export class FactoryLocalFleet {
             || effect.receipt?.outputSha256 !== sha256) throw new FactoryError('OUTPUT', 'Recorded conversation output changed.');
           return null;
         }
-        return control.claimTask(taskId, worker.id, 600000);
+        return control.claimTask(taskId, worker.id, this.leaseTtlMs);
       });
       if (lease === null) return { conversationId: job.input.conversationId, status: 'completed', replayed: true };
       if (this.activeConversations.has(job.id)) throw new FactoryError('BUSY', 'Conversation is already active in this fleet');
       this.activeConversations.set(job.id, { lease, worker: worker.app, conversationId: job.input.conversationId });
-      const result = await this.engine.callWorker({ lease, worker: worker.app, input: job.input,
-        outputPath: job.outputPath });
-      if (result.effect.state !== 'succeeded') return { conversationId: job.input.conversationId, status: 'held' };
-      const closed = this.engine.completeConversation({ taskId, worker: worker.app,
-        conversationId: job.input.conversationId });
-      return { conversationId: job.input.conversationId, status: closed.status, replayed: !result.dispatched,
-        effectKey: conversationEffectKey(worker.app, job.input.conversationId) };
+      return await this.#withLeaseRenewal(lease, async checkRenewal => {
+        const result = await this.engine.callWorker({ lease, worker: worker.app, input: job.input,
+          outputPath: job.outputPath });
+        if (result.effect.state !== 'succeeded') return { conversationId: job.input.conversationId, status: 'held' };
+        checkRenewal();
+        const closed = this.engine.completeConversation({ taskId, worker: worker.app,
+          conversationId: job.input.conversationId });
+        return { conversationId: job.input.conversationId, status: closed.status, replayed: !result.dispatched,
+          effectKey: conversationEffectKey(worker.app, job.input.conversationId) };
+      });
     } catch (error) {
       return { conversationId: job.input.conversationId, status: 'held', code: error.code ?? 'UNCONFIRMED' };
     } finally {
