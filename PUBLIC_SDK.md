@@ -201,11 +201,14 @@ identity, event, freshness and read-only contract.
 The SDK also exports the local fleet scheduler and conversation templates above.
 Observatory consumes this read-only feed as a separate host. FACTORY does not
 provide Observatory's UI or its private provider-detail projection.
-The checked-in Brain Online `factorySnapshotSchema` currently recognizes four
-effect kinds (`provision`, `flow_call`, `retire`, `delivery`), while FACTORY can
-also present `worker_wake`, `worker_sleep`, `message`, and `flow_cancel`, with a
-terminal `cancelled` effect state. That consumer contract
-needs a matching update before it can parse snapshots containing those effects.
+The active Observatory consumer branches still recognize only four effect
+kinds (`provision`, `flow_call`, `retire`, `delivery`). FACTORY also presents
+`worker_wake`, `worker_sleep`, `message`, and `flow_cancel`, with a terminal
+`cancelled` state and worker scope. The allowlist updates are in
+[Brain PR #7](https://github.com/flujo-app/brain/pull/7) and
+[Brain Online PR #41](https://github.com/flujo-app/brain-online/pull/41).
+Both are stacked on their existing Observatory branches and remain pending
+until merged; private effect receipts stay out of the read-only feed.
 
 ## MCP
 
