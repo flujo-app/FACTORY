@@ -8,7 +8,13 @@ agents in one transaction; a failed agent admission leaves no partial swarm.
 `FactorySwarmEngine` can dispatch work through an explicitly configured local
 FLUJO or managed cloud adapter. Agents can also use the SDK or MCP directly.
 
-Requires Node.js 24 or newer. The new fleet APIs are on the development main
+The public SDK package supports Node.js 22.17 or newer on the 22 line, or
+Node.js 24 or newer. Its installed package, focused fleet/presentation tests,
+and CLI smoke passed on both versions in the
+[dual-runtime public gate](https://github.com/flujo-app/FACTORY/actions/runs/37859951050).
+Some repository-internal capacity, growth and native-cell CLIs still require
+Node 24; the public package does not promise those private commands on Node 22.
+The new fleet APIs are on the development main
 branch: `npm install github:flujo-app/FACTORY#main`. A local checkout can be
 installed with `npm install .`. The older `v0.2.0` tag contains only the local
 coordination SDK. Run the project-local CLI with `npx factory`.
@@ -392,9 +398,10 @@ rejects redirects and invalid topology, and returns the versioned snapshot
 envelope. This is the bridge for showing FACTORY cells and tasks alongside
 FLUJO-WORLD's separate automation map. [FLUJO PR #973](https://github.com/mario-andreschak/FLUJO/pull/973)
 implements a server-side reader of this same HTTP contract for its Wave
-Observatory FACTORY view; it does not import the Node 24 SDK client, because
-FLUJO also supports Node 22.17. That PR is not yet adopted or connected to a
-live FACTORY source.
+Observatory FACTORY view. It currently implements that narrow reader directly;
+the shared SDK client has now passed Node 22.17 and can replace it in a later
+integration revision. The PR is not yet adopted or connected to a live FACTORY
+source.
 
 ```js
 import { createObservatoryClient } from 'flujo-factory';
