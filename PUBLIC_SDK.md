@@ -20,6 +20,10 @@ three cells through the installed SDK and exposed `FactoryLocalFleet.closeRetire
 A pinned public Git install at `7c23d03` exported `buildSaviaCasePlan` and
 constructed ten team leads with an exact 103-cent logical allocation under
 Node 24; see the same evidence record. This check did not call FLUJO or a model.
+A fresh pinned Git install at `d086f9a` constructed the ten-lead plan with its
+case ID and exposed `observeSaviaCaseTopology` under Node 24. This confirms the
+current role-observation API is in the installable public package; the install
+check did not observe a live FLUJO run.
 A fresh pinned Git install at `3579051` also exported and constructed
 `FactoryManagedFleet` under Node 24 with an inert synthetic adapter. It did not
 deploy a cloud worker.
