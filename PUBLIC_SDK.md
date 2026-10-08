@@ -120,6 +120,11 @@ the adapter's `down` receipt, but does not close a logical cell:
 exists. Uncertain cloud results remain held and are not automatically retried.
 ManagedCloud's cached `list` inventory is not live health or physical absence
 evidence.
+The [real-module integration check](evidence/managed-fleet-real-module-20261008.json)
+ran this paid fleet through the vendored `ManagedCloud` application service and
+its private journal, with synthetic local source, image and cloud bridge
+fixtures. It covered provision, flow call, replay and retirement; it did not
+create a provider resource or establish final billing.
 
 ```js
 import { FactoryManagedFleet, SpendingLedger, createManagedCloudAdapter } from 'flujo-factory';

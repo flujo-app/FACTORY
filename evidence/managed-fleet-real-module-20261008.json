@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-08",
+  "managedCloudSource": {
+    "package": "flujo-cloud",
+    "vendoredModule": "deploy/managed-cloud/lib/managed.mjs",
+    "sha256": "9f52fe362a96449f16a0fd5671efe7460481d684a9cd3d68e31eb451a761e471",
+    "matchesLocalSource": true
+  },
+  "runtime": "Node.js 24.19.0",
+  "test": "test/managed-fleet-real-module.test.mjs",
+  "result": {
+    "passed": true,
+    "managedProvisionCalls": 1,
+    "managedFlowCalls": 1,
+    "managedRetirementCalls": 1,
+    "completedFactoryConversations": 1,
+    "paidReservationAfterRetirement": "retired-meter-pending",
+    "replayWithoutNewManagedCalls": true
+  },
+  "scope": "FACTORY paid fleet through the actual vendored ManagedCloud application service, private deployment journal and worker credential lifecycle. Source discovery, FLUJO HTTP responses, worker image resolution, Fly account and cloud bridge were synthetic local fixtures. No provider resource, paid inference, live health inspection or final bill was verified."
+}
