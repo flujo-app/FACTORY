@@ -426,7 +426,7 @@ Set these inputs before the complete test commands below.
 From this directory, with a suitable default Node:
 
 ```powershell
-node --test
+node scripts/run-tests.mjs
 node scripts/pilot.mjs .\evidence\local-pilot-01
 ```
 
@@ -441,7 +441,7 @@ $factoryNode = 'C:\Users\Moe\.cache\codex-runtimes\codex-primary-runtime\depende
 $env:FACTORY_PYTHON = 'C:\Users\Moe\AppData\Local\Programs\Python\Python313\python.exe'
 $env:FACTORY_HUB_SITE = 'C:\Users\Moe\Documents\ChatGPT\FACTORY\.factory\model-local-20261003-r2\venv\Lib\site-packages'
 $env:FACTORY_PRIVATE_MODULE = 'C:\Users\Moe\Documents\GitHub\flujo-cloud\lib\private-files.mjs'
-& $factoryNode --test
+& $factoryNode scripts/run-tests.mjs
 & $factoryNode scripts/pilot.mjs .\evidence\local-pilot-01
 ```
 
