@@ -144,8 +144,9 @@ child-first retirement, `fleet.closeRetired(plan,{workerId,flyPath,managedDirect
 can close that cell using the original ManagedCloud private journal, the exact
 FACTORY task/effect/paid-hold binding, and a fresh read-only Fly app inventory
 from the explicitly selected CLI and organization. It rejects a visible app,
-changed generation, unresolved effect or missing provider evidence. The paid
-hold remains pending metering and final billing after logical cell closure.
+changed generation, unresolved effect or missing provider evidence. Closure
+accepts an already settled bill and never changes the paid reservation; an
+unsettled hold remains pending metering and final billing.
 Uncertain cloud results remain held and are not automatically retried.
 ManagedCloud's cached `list` inventory is not live health or physical absence
 evidence.

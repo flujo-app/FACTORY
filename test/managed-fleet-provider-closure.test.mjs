@@ -81,6 +81,7 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
         outputPath: path.join(directory, 'output.txt') }] }] };
   assert.equal((await fleet.run(plan)).conversations[0].status, 'completed');
   assert.equal((await fleet.retire(plan)).workers[0].status, 'retired');
+  paid.settle(fleet.paidReservationId(app), { finalCents: 12, evidenceDigest: 'd'.repeat(64) });
   const options = { workerId: app, flyPath: process.execPath, managedDirectory,
     org: 'personal', workspace: 'test-cloud' };
   const originalJournal = JSON.parse(await readFile(journalPath, 'utf8'));
@@ -103,5 +104,5 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
   control = new FactoryControl(database);
   assert.equal(control.db.prepare('SELECT status FROM cells WHERE id=?').get(app).status, 'retired');
   control.close();
-  assert.equal(paid.row(fleet.paidReservationId(app)).state, 'retired-meter-pending');
+  assert.equal(paid.row(fleet.paidReservationId(app)).state, 'settled');
 });

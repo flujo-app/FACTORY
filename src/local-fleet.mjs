@@ -582,8 +582,11 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
           cell: control.retireProvisionedCell(worker.id, request) };
       }
       const retirement = control.effect(request.retirementKey);
+      const paid = this.paidAdmission.row(this.paidReservationId(worker.app));
       if (retirement.state !== 'succeeded' || retirement.scope_id !== worker.app
-        || this.paidAdmission.row(this.paidReservationId(worker.app)).state !== 'retired-meter-pending') {
+        || paid.provider !== this.paidProvider || paid.ceiling_cents !== worker.paidCeilingCents
+        || !/^[a-f0-9]{64}$/.test(paid.retirement_digest ?? '')
+        || !['retired-meter-pending', 'settled'].includes(paid.state)) {
         throw new FactoryError('WORKER', 'Exact managed retirement and paid hold must be confirmed before cell closure');
       }
       const proof = await observeProvisionedCellRetirement(control, worker.id, request,
