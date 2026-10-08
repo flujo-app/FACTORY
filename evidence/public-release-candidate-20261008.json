@@ -23,5 +23,14 @@
     "failed": 0,
     "durationMs": 164220
   },
+  "packageScriptRefresh": {
+    "sourceCommit": "7da7ed8fcd90dfb5e1f11d56ee703c090ff791b8",
+    "tarballSha1": "5f57fbba12d5554db8f3486d2be1e9faaf011770",
+    "entryCount": 57,
+    "installedInternalCliHelp": "passed",
+    "installedOfflinePilot": "passed",
+    "pilotProviderCalls": 0,
+    "scope": "Fresh local tarball install under Node 24; the pilot used deterministic local code fixtures, real subprocesses, SQLite and Git."
+  },
   "scope": "Packed from the local clean source revision, installed into an isolated local consumer, and executed under Node 24. The npm launcher itself used Node 22 and reported an engine warning. No npm publication, live FLUJO role run, cloud provider resource, or final billing was exercised."
 }
