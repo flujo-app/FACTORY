@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { FactoryControl, FactoryError, digest } from './control.mjs';
 import { FactorySwarmEngine, conversationEffectKey } from './swarm-engine.mjs';
-import { observeLocalCellRetirement, observeProvisionedCellRetirement } from './provider-retirement.mjs';
+import { observeLocalCellRetirement, observeProvisionedCellRetirement,
+  observeManagedRetirementReconciliation, consumeManagedRetirementReconciliation } from './provider-retirement.mjs';
 import { SpendingLedger } from './spending.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -538,8 +539,52 @@ export class FactoryManagedFleet extends FactoryLocalFleet {
     throw new TypeError('ManagedCloud cannot verify conversation cancellation');
   }
 
-  async reconcileRetired() {
-    throw new TypeError('Managed worker retirement requires independent provider evidence');
+  async reconcileRetired(plan, { workerId, flyPath, managedDirectory, org, workspace } = {}) {
+    validatePlan(plan);
+    const worker = plan.workers.find(item => item.id === workerId);
+    if (!worker) throw new TypeError('The worker is absent from this fleet plan');
+    if (this.activeRuns || this.retiring) throw new FactoryError('BUSY', 'Fleet work is active');
+    this.retiring = true;
+    let control;
+    try {
+      this.#bindPaidPlan(plan);
+      control = new FactoryControl(this.database);
+      if (control.task(`launch-${worker.id}`).status !== 'completed'
+        || worker.conversations.some(job => !['completed', 'cancelled'].includes(control.task(`run-${job.id}`).status))) {
+        throw new FactoryError('WORKER', 'Worker tasks must be terminal before retirement reconciliation');
+      }
+      const cell = control.db.prepare('SELECT * FROM cells WHERE id=?').get(worker.id);
+      if (!cell || cell.status !== 'ready' || cell.parent_id !== (worker.parentId ?? 'root')
+        || cell.allocation !== worker.budgetCents || cell.purpose !== worker.purpose) {
+        throw new FactoryError('WORKER', 'Worker cell binding changed');
+      }
+      const key = `retire-${worker.app}`, effect = control.effect(key);
+      if (effect.kind !== 'retire' || effect.scope !== 'cleanup' || effect.scope_id !== worker.app)
+        throw new FactoryError('WORKER', 'Retirement effect binding changed');
+      const paid = this.paidAdmission.row(this.paidReservationId(worker.app));
+      if (paid.provider !== this.paidProvider || paid.ceiling_cents !== worker.paidCeilingCents
+        || !['started','retired-meter-pending','settled'].includes(paid.state)) {
+        throw new FactoryError('WORKER', 'Managed paid reservation binding changed');
+      }
+      if (effect.state === 'succeeded') {
+        if (paid.state === 'started') throw new FactoryError('WORKER', 'Paid retirement remains unreconciled');
+        return { workerId, reconciled: false, effect };
+      }
+      if (!['running','unknown'].includes(effect.state))
+        throw new FactoryError('WORKER', 'An uncertain retirement effect is required');
+      const request = { closureId: `reconcile-managed-${worker.id}`,
+        expectedParent: cell.parent_id, expectedStatus: 'ready',
+        expectedAllocation: cell.allocation, expectedSpent: cell.spent,
+        expectedFactoryEpoch: control.control().epoch,
+        provisionKey: `provision-${worker.id}`, retirementKey: key };
+      const options = { flyPath, managedDirectory, org, workspace };
+      const proof = await observeManagedRetirementReconciliation(control, worker.id, request, options);
+      const receipt = consumeManagedRetirementReconciliation(proof, control, worker.id, request);
+      if (paid.state === 'started') this.paidAdmission.retire(this.paidReservationId(worker.app),
+        { evidenceDigest: receipt.evidenceDigest });
+      return { workerId, reconciled: true, effect: control.settleEffect(key, 'succeeded',
+        { app: worker.app, worker: worker.app, state: 'destroyed', reconciled: true }) };
+    } finally { try { control?.close(); } finally { this.retiring = false; } }
   }
 
   async closeRetired(plan, { workerId, flyPath, managedDirectory, org, workspace } = {}) {

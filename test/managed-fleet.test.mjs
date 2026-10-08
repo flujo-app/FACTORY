@@ -49,8 +49,9 @@ test('managed fleet schedules, replays and retires through FACTORY durable effec
     () => fleet.cancel({ jobId: 'managed-a-job' }),
     () => fleet.reconcileCompleted(work, { jobId: 'managed-a-job' }),
     () => fleet.reconcileCancelled(work, { jobId: 'managed-a-job' }),
-    () => fleet.reconcileRetired(work, { workerId: 'managed-a' }),
   ]) await assert.rejects(operation, TypeError);
+  await assert.rejects(() => fleet.reconcileRetired(work, { workerId: 'managed-a' }),
+    { code: 'WORKER' });
   assert.deepEqual(cloud.counts, { up: 0, call: 0, down: 0 });
   const result = await fleet.run(work, { workerConcurrency: 2, conversationConcurrency: 2 });
   assert.equal(result.launches.every(item => item.status === 'completed'), true);

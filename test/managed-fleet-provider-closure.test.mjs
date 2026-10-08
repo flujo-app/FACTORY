@@ -7,7 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { FactoryControl, FactoryManagedFleet, SpendingLedger, createManagedCloudAdapter } from '../src/public-sdk.mjs';
 
-test('managed fleet closes a paid worker cell only after trusted live provider absence', async t => {
+for (const uncertainDown of [false, true]) test(
+  uncertainDown ? 'managed fleet reconciles an unknown cloud teardown before cell closure'
+    : 'managed fleet closes a paid worker cell only after trusted live provider absence', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-managed-closure-'));
   const managedDirectory = path.join(directory, 'managed');
   const workers = path.join(managedDirectory, 'workers');
@@ -69,6 +71,7 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
       await writePrivate(metadataPath, { ...metadata, phase: 'destroyed', retirement: 'cloud-confirmed' });
       await writePrivate(journalPath, { ...journal, state: 'destroyed', stage: 'destroyed',
         updatedAt: new Date().toISOString() });
+      if (uncertainDown) throw new Error('Provider acknowledgement was lost after confirmed teardown');
       return { app, worker: app, state: 'destroyed', localOnly: false };
     },
   };
@@ -82,17 +85,19 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
       conversations: [{ id: 'job', input: { conversationId: 'conversation', request: { flowName: 'team' } },
         outputPath: path.join(directory, 'output.txt') }] }] };
   assert.equal((await fleet.run(plan)).conversations[0].status, 'completed');
-  assert.equal((await fleet.retire(plan)).workers[0].status, 'retired');
-  paid.settle(fleet.paidReservationId(app), { finalCents: 12, evidenceDigest: 'd'.repeat(64) });
+  assert.equal((await fleet.retire(plan)).workers[0].status, uncertainDown ? 'held' : 'retired');
+  if (!uncertainDown) paid.settle(fleet.paidReservationId(app),
+    { finalCents: 12, evidenceDigest: 'd'.repeat(64) });
   const options = { workerId: app, flyPath: process.execPath, managedDirectory,
     org: 'personal', workspace: 'test-cloud' };
   const originalJournal = JSON.parse(await readFile(journalPath, 'utf8'));
   await writePrivate(journalPath, { ...originalJournal, machineId: 'another-machine' });
-  await assert.rejects(() => fleet.closeRetired(plan, options),
+  const inspect = () => uncertainDown ? fleet.reconcileRetired(plan, options) : fleet.closeRetired(plan, options);
+  await assert.rejects(inspect,
     { code: 'PROVIDER_RETIREMENT_REQUEST_BINDING' });
   await assert.rejects(() => readFile(calls, 'utf8'), { code: 'ENOENT' });
   await writePrivate(journalPath, originalJournal);
-  await assert.rejects(() => fleet.closeRetired(plan, options),
+  await assert.rejects(inspect,
     { code: 'PROVIDER_RETIREMENT_PRESENT' });
   let control = new FactoryControl(database);
   assert.equal(control.db.prepare('SELECT status FROM cells WHERE id=?').get(app).status, 'ready');
@@ -102,6 +107,13 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
   paid = new SpendingLedger(paidPath);
   const restarted = new FactoryManagedFleet(database, adapter,
     { paidAdmission: paid, provider: 'fly' });
+  if (uncertainDown) {
+    const reconciliation = await restarted.reconcileRetired(plan, options);
+    assert.equal(reconciliation.reconciled, true);
+    assert.equal(reconciliation.effect.state, 'succeeded');
+    assert.equal((await restarted.reconcileRetired(plan, options)).reconciled, false);
+    assert.equal(paid.row(restarted.paidReservationId(app)).state, 'retired-meter-pending');
+  }
   const result = await restarted.closeRetired(plan, options);
   assert.equal(result.status, 'retired');
   assert.equal(result.cell.resourceEvidence.resourceScope,
@@ -110,5 +122,6 @@ process.stdout.write(readFileSync(${JSON.stringify(inventory)},'utf8'));process.
   control = new FactoryControl(database);
   assert.equal(control.db.prepare('SELECT status FROM cells WHERE id=?').get(app).status, 'retired');
   control.close();
-  assert.equal(paid.row(fleet.paidReservationId(app)).state, 'settled');
+  assert.equal(paid.row(fleet.paidReservationId(app)).state,
+    uncertainDown ? 'retired-meter-pending' : 'settled');
 });

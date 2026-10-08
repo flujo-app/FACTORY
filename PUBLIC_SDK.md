@@ -149,12 +149,18 @@ accepts an already settled bill and never changes the paid reservation; an
 unsettled hold remains pending metering and final billing. A new fleet instance
 with a reopened controller and paid ledger can complete or replay the closure
 without repeating the managed `down` operation.
-Uncertain cloud results remain held and are not automatically retried.
+An uncertain managed `down` remains held without a second provider call.
+If ManagedCloud's private journal already records cloud-confirmed teardown,
+`fleet.reconcileRetired(plan,{workerId,flyPath,managedDirectory,org,workspace})`
+can use the same fresh provider absence inspection to settle the original
+retirement effect and paid hold, including after a restart. It then permits
+`closeRetired`. A missing or incomplete journal remains held for operator
+recovery.
 ManagedCloud's cached `list` inventory is not live health or physical absence
 evidence.
 `FactoryManagedFleet` rejects inherited live message, cancellation and
-conversation/uncertain-retirement reconciliation calls explicitly because this
-adapter cannot provide the corresponding FLUJO or provider evidence.
+conversation reconciliation calls explicitly because this adapter cannot
+provide the corresponding FLUJO evidence.
 The [real-module integration check](evidence/managed-fleet-real-module-20261008.json)
 ran this paid fleet through the vendored `ManagedCloud` application service and
 its private journal, with synthetic local source, image and cloud bridge

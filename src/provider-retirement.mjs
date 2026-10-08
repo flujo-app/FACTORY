@@ -50,7 +50,7 @@ function eventIdentity(control, type, subject) {
   return { ...rows[0], details: JSON.parse(rows[0].details) };
 }
 function effectIdentity(effect) { return Object.fromEntries(EFFECT_KEYS.map(key => [key,effect[key]])); }
-function controllerIdentity(control, cellId, request) {
+function controllerIdentity(control, cellId, request, retirementStates = ['succeeded']) {
   const factory = control.control(), cell = control.db.prepare('SELECT * FROM cells WHERE id=?').get(cellId);
   requireValue(cellId !== 'root' && ID.test(cellId ?? '') && cell && factory.epoch === request.expectedFactoryEpoch
     && cell.parent_id === request.expectedParent && cell.status === request.expectedStatus
@@ -59,14 +59,15 @@ function controllerIdentity(control, cellId, request) {
   const provision = control.effect(request.provisionKey), retirement = control.effect(request.retirementKey);
   requireValue(provision.kind === 'provision' && provision.scope === 'task' && provision.state === 'succeeded'
     && provision.owner === cell.parent_id && retirement.kind === 'retire' && retirement.scope === 'cleanup'
-    && retirement.owner === 'root' && retirement.state === 'succeeded', 'PROVIDER_RETIREMENT_BINDING');
+    && retirement.owner === 'root' && retirementStates.includes(retirement.state), 'PROVIDER_RETIREMENT_BINDING');
   const bindings = control.db.prepare('SELECT target,effect_key FROM effect_bindings WHERE effect_key=? ORDER BY target').all(provision.key);
   requireValue(bindings.length === 2 && bindings.some(row => row.target === 'cell:'+cellId)
     && bindings.filter(row => row.target.startsWith('app:')).length === 1, 'PROVIDER_RETIREMENT_BINDING');
   const app = bindings.find(row => row.target.startsWith('app:')).target.slice(4);
-  requireValue(APP.test(app) && retirement.scope_id === app && retirement.receipt?.app === app
-    && retirement.receipt?.state === 'destroyed'
-    && (retirement.receipt.worker === undefined || retirement.receipt.worker === app)
+  requireValue(APP.test(app) && retirement.scope_id === app
+    && (retirement.state !== 'succeeded' || retirement.receipt?.app === app
+      && retirement.receipt?.state === 'destroyed'
+      && (retirement.receipt.worker === undefined || retirement.receipt.worker === app))
     && provision.receipt?.app === app && provision.receipt?.state === 'ready', 'PROVIDER_RETIREMENT_BINDING');
   const provisionEvent = eventIdentity(control,'effect_accepted',provision.key);
   const retirementEvent = eventIdentity(control,'owned_retirement_accepted',retirement.key);
@@ -186,14 +187,14 @@ function scopedAbsentInventory(stdout, app, org) {
 }
 
 /** Built-in trusted-local inspection; no supplied callback, service, serialized proof or provider mutation. */
-async function observe(control, cellId, input, options) {
+async function observe(control, cellId, input, options, retirementStates = ['succeeded']) {
   const request = capturedInput(input);
   requireValue(plain(options) && Object.keys(options).sort().join(',') === 'flyPath,managedDirectory,org,workspace'
     && absolute(options.flyPath) && absolute(options.managedDirectory)
     && /^[a-z0-9][a-z0-9-]{0,63}$/.test(options.org ?? '')
     && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(options.workspace ?? ''), 'PROVIDER_RETIREMENT_INPUT');
   const configured = Object.freeze({ ...options });
-  const startedAt = Date.now(), identity = controllerIdentity(control,cellId,request);
+  const startedAt = Date.now(), identity = controllerIdentity(control,cellId,request,retirementStates);
   const managed = managedIdentity(configured.managedDirectory,identity.app,configured), pin = managedPin(managed);
   originalGeneration(control,identity,managed,cellId);
   const runner = readOnlyFlyRunner(configured.flyPath,{endAt:startedAt+10_000,org:configured.org,allowedApps:[identity.app]});
@@ -204,13 +205,14 @@ async function observe(control, cellId, input, options) {
   const observedMonotonic = performance.now();
   requireValue(observedAt >= startedAt && observedAt-startedAt <= 10_000, 'PROVIDER_RETIREMENT_STALE');
   requireValue(equal(pin,managedPin(managedIdentity(configured.managedDirectory,identity.app,configured)))
-    && equal(identity,controllerIdentity(control,cellId,request)), 'PROVIDER_RETIREMENT_STALE');
+    && equal(identity,controllerIdentity(control,cellId,request,retirementStates)), 'PROVIDER_RETIREMENT_STALE');
   const receipt = Object.freeze({ resourceScope:RESOURCE_SCOPE,inventoryScope:INVENTORY_SCOPE,
     observedAt:new Date(observedAt).toISOString(), app:identity.app,
     evidenceDigest:sha(canonical({identity,managed:pin,provider,observedAt})),
     deploymentSha256:pin.metadata.sha256,journalSha256:pin.journal.sha256,providerInventorySha256:provider.inventorySha256 });
   const proof = Object.freeze(Object.create(null));
-  proofs.set(proof,{control,cellId,request,identity,pin,configured,observedAt,observedMonotonic,receipt});
+  proofs.set(proof,{kind:retirementStates.includes('succeeded')?'managed-cell':'managed-reconciliation',
+    control,cellId,request,identity,pin,configured,retirementStates,observedAt,observedMonotonic,receipt});
   return proof;
 }
 
@@ -220,6 +222,12 @@ function sanitized(error) {
 /** Explicit trusted operator configuration controls the CLI executable and private managed directory. */
 export async function observeProvisionedCellRetirement(control, cellId, input, options) {
   try { return await observe(control,cellId,input,options); } catch (error) { sanitized(error); }
+}
+
+/** Read-only recovery of a previously attempted cloud teardown with a retained unknown result. */
+export async function observeManagedRetirementReconciliation(control, cellId, input, options) {
+  try { return await observe(control,cellId,input,options,['running','unknown']); }
+  catch (error) { sanitized(error); }
 }
 
 /** Direct read-only FLUJO absence proof for a provisioned local workspace. */
@@ -279,6 +287,7 @@ export function consumeProviderRetirementProof(proof, control, cellId, input) {
       proofs.delete(proof);
       return record.receipt;
     }
+    requireValue(record.kind === 'managed-cell', 'PROVIDER_RETIREMENT_PROOF');
     requireValue(equal(record.identity,controllerIdentity(control,cellId,record.request))
       && equal(record.pin,managedPin(managedIdentity(record.configured.managedDirectory,record.identity.app,record.configured))),
     'PROVIDER_RETIREMENT_STALE');
@@ -286,6 +295,23 @@ export function consumeProviderRetirementProof(proof, control, cellId, input) {
     const validatedMonotonic = performance.now();
     requireValue(validatedAt >= now && validatedAt-record.observedAt <= TTL_MS && validatedMonotonic >= monotonic
       && validatedMonotonic-record.observedMonotonic <= TTL_MS, 'PROVIDER_RETIREMENT_STALE');
+    proofs.delete(proof);
+    return record.receipt;
+  } catch (error) { sanitized(error); }
+}
+
+/** Consume only the original unknown teardown observation, before settling its effect. */
+export function consumeManagedRetirementReconciliation(proof, control, cellId, input) {
+  try {
+    const record = proofs.get(proof);
+    if (!record || record.kind !== 'managed-reconciliation' || record.control !== control
+      || record.cellId !== cellId || !equal(record.request,input)) fail('PROVIDER_RETIREMENT_PROOF');
+    const now = Date.now(), monotonic = performance.now();
+    requireValue(now >= record.observedAt && now-record.observedAt <= TTL_MS
+      && monotonic >= record.observedMonotonic && monotonic-record.observedMonotonic <= TTL_MS
+      && equal(record.identity,controllerIdentity(control,cellId,record.request,record.retirementStates))
+      && equal(record.pin,managedPin(managedIdentity(record.configured.managedDirectory,
+        record.identity.app,record.configured))), 'PROVIDER_RETIREMENT_STALE');
     proofs.delete(proof);
     return record.receipt;
   } catch (error) { sanitized(error); }
