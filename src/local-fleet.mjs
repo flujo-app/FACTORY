@@ -92,6 +92,7 @@ export class FactoryLocalFleet {
     this.activeLaunches = new Map();
     this.scheduledConversations = new Set();
     this.activeRuns = 0;
+    this.retiring = false;
     this.workerSlots = { limit: 0, active: 0, waiters: [] };
     this.conversationSlots = { limit: 0, active: 0, waiters: [] };
     this.leaseTtlMs = leaseTtlMs;
@@ -302,6 +303,7 @@ export class FactoryLocalFleet {
 
   async run(plan, { workerConcurrency = 4, conversationConcurrency = 30 } = {}) {
     const { depth } = validatePlan(plan);
+    if (this.retiring) throw new FactoryError('BUSY', 'Fleet retirement is in progress');
     if (![workerConcurrency,conversationConcurrency].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 100)) {
       throw new TypeError('Fleet concurrency must be from 1 to 100');
     }
@@ -338,4 +340,52 @@ export class FactoryLocalFleet {
 
   /** Admit an expanded append-only plan while earlier jobs continue in this instance. */
   async scale(plan, options) { return this.run(plan, options); }
+
+  /** Retire completed local workers, children first, using their recorded identities. */
+  async retire(plan, { workerConcurrency = 4 } = {}) {
+    const { depth } = validatePlan(plan);
+    if (!Number.isSafeInteger(workerConcurrency) || workerConcurrency < 1 || workerConcurrency > 100)
+      throw new TypeError('Fleet concurrency must be from 1 to 100');
+    if (this.activeRuns || this.retiring)
+      throw new FactoryError('BUSY', 'Wait for active fleet work or retirement to finish');
+    this.retiring = true;
+    try {
+      this.#control(control => {
+        for (const worker of plan.workers) {
+          if (control.task(`launch-${worker.id}`).status !== 'completed')
+            throw new FactoryError('WORKER', 'Worker launch must be completed before retirement');
+          for (const job of worker.conversations) {
+            if (!['completed','cancelled'].includes(control.task(`run-${job.id}`).status))
+              throw new FactoryError('WORKER', 'Conversation must be terminal before worker retirement');
+          }
+        }
+      });
+      const retired = new Set(), results = [];
+      for (const level of [...new Set(depth.values())].sort((a,b) => b-a)) {
+        const group = plan.workers.filter(worker => depth.get(worker.id) === level);
+        results.push(...await boundedMap(group, workerConcurrency, async worker => {
+          if (plan.workers.some(child => child.parentId === worker.id && !retired.has(child.id)))
+            return { workerId: worker.id, status: 'held', code: 'CHILD_HELD' };
+          try {
+            const result = await this.engine.retireWorker({ app: worker.app });
+            if (result.effect.state === 'succeeded') retired.add(worker.id);
+            return { workerId: worker.id, status: result.effect.state === 'succeeded' ? 'retired' : 'held',
+              replayed: !result.dispatched };
+          } catch (error) {
+            return { workerId: worker.id, status: 'held', code: error.code ?? 'UNCONFIRMED' };
+          }
+        }));
+      }
+      return { workers: results };
+    } finally { this.retiring = false; }
+  }
+
+  /** Settle a held retirement only from the adapter's read-only absence evidence. */
+  async reconcileRetired(plan, { workerId }) {
+    validatePlan(plan);
+    const worker = plan.workers.find(item => item.id === workerId);
+    if (!worker) throw new TypeError('The worker is absent from this fleet plan');
+    if (this.activeRuns || this.retiring) throw new FactoryError('BUSY', 'Fleet work is active');
+    return this.engine.reconcileRetiredWorker({ app: worker.app });
+  }
 }

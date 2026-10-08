@@ -1074,6 +1074,7 @@ export class FactoryControl {
         }
         if (task.specification.taskType === 'conversation') {
           const operation = conversationContract(task.specification);
+          if (kind === 'flow_call') this.ownedWorker(operation.app);
           if (!['flow_call','message','flow_cancel'].includes(kind) || lease.cellId !== operation.cellId
             || request?.worker !== operation.app || request?.cellId !== operation.cellId
             || request?.conversationId !== operation.conversationId
@@ -1133,6 +1134,10 @@ export class FactoryControl {
       const control=this.control();
       const binding=this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('app:'+app);
       if(!binding || this.effect(binding.effect_key).kind!=='provision') fail('RESERVATION','Retirement requires this controller\'s recorded provisioning intent.');
+      const cellBinding=this.db.prepare("SELECT target FROM effect_bindings WHERE effect_key=? AND target LIKE 'cell:%'").get(binding.effect_key);
+      if(!cellBinding) fail('PROVISION_BINDING','Worker cell binding is missing.');
+      if(this.db.prepare("SELECT key FROM effects WHERE owner=? AND kind IN ('flow_call','message','flow_cancel') AND state IN ('accepted','running','unknown') LIMIT 1")
+        .get(cellBinding.target.slice(5))) fail('UNRECONCILED','Worker-owned effects must settle before retirement.');
       if(this.openEffects('worker',app).length)fail('UNRECONCILED','Original worker power intent must be reconciled before retirement.');
       const requestDigest=digest({app,provisionKey:binding.effect_key});
       const previous=this.db.prepare('SELECT * FROM effects WHERE key=?').get(key);

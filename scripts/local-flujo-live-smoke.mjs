@@ -101,11 +101,9 @@ try {
   const control = new FactoryControl(fleet.database);
   const effects = control.status().effects.map(effect => ({ kind: effect.kind, state: effect.state }));
   control.close();
-  for (const worker of plan.workers) {
-    const retirement = await fleet.engine.retireWorker({ app: worker.app });
-    assert.equal(retirement.effect.state, 'succeeded');
-    retired.add(worker.app);
-  }
+  const retirement = await fleet.retire(plan, { workerConcurrency });
+  assert.equal(retirement.workers.every(worker => worker.status === 'retired'), true);
+  for (const worker of plan.workers) retired.add(worker.app);
   const client = new FlujoClient({ origin, workspace: `swarm-${plan.workers[0].app}` });
   const remaining = await client.workspaces();
   assert.equal(plan.workers.some(worker => remaining.includes(`swarm-${worker.app}`)), false);

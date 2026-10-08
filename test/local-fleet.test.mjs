@@ -346,3 +346,67 @@ test('one FACTORY local plan coordinates ten workers and one hundred retained ca
     assert.equal(conversations, 100);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('fleet retires children first and fences retirement during a running call', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-retire-'));
+  try {
+    let started, finish;
+    const entered = new Promise(resolve => { started = resolve; });
+    const release = new Promise(resolve => { finish = resolve; });
+    const retirements = [];
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { return { app: input.app, worker: input.app, state: 'ready' }; },
+      async call(_worker, input) {
+        if (input.conversationId === 'child-conversation') { started(); await release; }
+        return { body: input.conversationId, contentType: 'text/plain' };
+      },
+      async retire(app) { retirements.push(app); return { app, worker: app, state: 'destroyed' }; },
+    });
+    const plan = { mission: 'Retire a local hierarchy', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [
+        { id: 'parent', app: 'worker-parent', budgetCents: 0, purpose: 'Parent',
+          provisionInput: { app: 'worker-parent' }, conversations: [] },
+        { id: 'child', parentId: 'parent', app: 'worker-child', budgetCents: 0, purpose: 'Child',
+          provisionInput: { app: 'worker-child' }, conversations: [{ id: 'child-job',
+            input: { conversationId: 'child-conversation', request: { flowName: 'Work', prompt: 'Run' } },
+            outputPath: path.join(directory, 'child.txt') }] },
+      ] };
+    const running = fleet.run(plan);
+    await entered;
+    await assert.rejects(fleet.retire(plan), { code: 'BUSY' });
+    await assert.rejects(fleet.engine.retireWorker({ app: 'worker-child' }), { code: 'UNRECONCILED' });
+    finish();
+    assert.equal((await running).conversations[0].status, 'completed');
+    const retired = await fleet.retire(plan);
+    assert.deepEqual(retired.workers.map(worker => [worker.workerId,worker.status]),
+      [['child','retired'],['parent','retired']]);
+    assert.deepEqual(retirements, ['worker-child','worker-parent']);
+    assert.equal((await fleet.retire(plan)).workers.every(worker => worker.replayed), true);
+    assert.deepEqual(retirements, ['worker-child','worker-parent']);
+    assert.equal((await fleet.run(plan)).skippedConversations, 1);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('fleet reconciles one unknown local retirement from exact absence evidence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-retire-reconcile-'));
+  try {
+    let retireCalls = 0, observations = 0;
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { return { app: input.app, worker: input.app, state: 'ready' }; },
+      async call() { throw new Error('unused'); },
+      async retire() { retireCalls++; throw new Error('response lost'); },
+      async observeRetired(app) { observations++; return { app, worker: app, state: 'destroyed' }; },
+    });
+    const plan = { mission: 'Reconcile retirement', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [{ id: 'lead', app: 'worker-lead', budgetCents: 0, purpose: 'Lead',
+        provisionInput: { app: 'worker-lead' }, conversations: [] }] };
+    assert.equal((await fleet.run(plan)).launches[0].status, 'completed');
+    assert.equal((await fleet.retire(plan)).workers[0].status, 'held');
+    assert.equal((await fleet.reconcileRetired(plan, { workerId: 'lead' })).effect.state, 'succeeded');
+    assert.equal((await fleet.retire(plan)).workers[0].status, 'retired');
+    assert.equal(retireCalls, 1);
+    assert.equal(observations, 1);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

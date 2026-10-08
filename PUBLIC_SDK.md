@@ -92,6 +92,14 @@ specifications. A job still running in this fleet instance is reported as
 handle. Concurrent runs on one fleet instance share worker and conversation
 slots, so use the same concurrency options until they finish. Child workers
 wait for their parent launch. The controller remains the one worker registry.
+After all plan conversations reach `completed` or `cancelled`, call
+`fleet.retire(plan)` to retire workers from leaves toward the root through
+recorded cleanup effects. A concurrent run or unresolved conversation or
+steering effect holds retirement. Repeating a successful retirement observes
+its original effect without another provider call. For an unknown local retirement, call
+`fleet.reconcileRetired(plan,{workerId})` after FLUJO has settled; this requires
+the adapter's read-only absence evidence. Retirement still does not close
+the Factory cell or claim provider accounting closure.
 
 `createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
 Provisioning takes `{app, flowSpec}` or `{app, flowSpecs}` and requires a new
