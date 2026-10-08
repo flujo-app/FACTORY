@@ -1,7 +1,22 @@
 {
-  "name": "flujo-factory-pilot",
-  "version": "0.1.0",
-  "private": true,
+  "name": "flujo-factory",
+  "version": "0.2.0",
+  "description": "Durable local Factory swarm coordination SDK, CLI, and MCP server",
+  "files": [
+    "src/",
+    "bin/factory-public.mjs",
+    "bin/factory-mcp.mjs",
+    "scripts/watch-pilot.mjs",
+    "README.md",
+    "PUBLIC_SDK.md"
+  ],
+  "exports": {
+    ".": "./src/public-sdk.mjs"
+  },
+  "bin": {
+    "factory": "./bin/factory-public.mjs",
+    "factory-mcp": "./bin/factory-mcp.mjs"
+  },
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -12,6 +27,6 @@
     "factory": "node bin/factory.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0"
+    "@modelcontextprotocol/sdk": "1.32.1"
   }
 }

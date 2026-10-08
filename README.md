@@ -1,5 +1,7 @@
 # FLUJO factory pilot
 
+For the installable local SDK, CLI, and MCP server, see [Public Factory interfaces](PUBLIC_SDK.md).
+
 The factory's first mission is to improve FLUJO, optimizing the time from an
 accepted requirement to independently accepted delivery within quality and cost
 constraints. This directory contains the first runnable **local coordination and
