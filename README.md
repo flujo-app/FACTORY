@@ -1,6 +1,7 @@
 # FLUJO factory pilot
 
 For the installable local SDK, CLI, and MCP server, see [Public Factory interfaces](PUBLIC_SDK.md).
+For current cross-product adoption and release gates, see [Integration status](INTEGRATION_STATUS.md).
 Factory is available under the [MIT License](LICENSE).
 
 The factory's first mission is to improve FLUJO, optimizing the time from an
