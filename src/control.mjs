@@ -965,6 +965,16 @@ export class FactoryControl {
       return {fresh:true,effect:this.effect(key)};
   }
   effect(key) { const row=this.db.prepare('SELECT * FROM effects WHERE key=?').get(id(key)); if (!row) fail('EFFECT','Effect not found.'); return {...row,receipt:row.receipt?JSON.parse(row.receipt):null}; }
+  ownedWorker(app) {
+    if(typeof app!=='string' || !/^[a-z][a-z0-9-]{2,62}$/.test(app)) fail('INVALID','A recorded app identity is required.');
+    const binding=this.db.prepare('SELECT effect_key FROM effect_bindings WHERE target=?').get('app:'+app);
+    if(!binding) fail('WORKER','Worker has no FACTORY provisioning intent.');
+    const effect=this.effect(binding.effect_key);
+    if(effect.kind!=='provision' || effect.state!=='succeeded') fail('WORKER','Worker provisioning is unconfirmed.');
+    const retirement=this.db.prepare("SELECT state FROM effects WHERE scope='cleanup' AND scope_id=? AND kind='retire' ORDER BY created DESC LIMIT 1").get(app);
+    if(retirement) fail('WORKER','Worker retirement has been admitted.');
+    return {app,provisionKey:binding.effect_key,receipt:effect.receipt};
+  }
   modelStepCompletion(key) { return modelStepCompletion(this,key); }
   requiresOriginalModelStep(taskId) { return modelStepRequiredForTask(this,taskId); }
   assertNativeMissionCompletion(key) { assertModelStepParentTerminal(this,key); }

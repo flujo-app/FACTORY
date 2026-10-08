@@ -2,10 +2,10 @@
 
 Licensed under [MIT](LICENSE), including commercial use.
 
-Factory is a durable **local coordinator**. A swarm here means a mission, named
-agent cells, budget allocations, and claimable tasks in one SQLite database.
-Creating a swarm does not start agent processes, call an AI provider, or deploy
-cloud infrastructure. Agents can be your own programs using this SDK or MCP.
+Factory keeps a durable swarm ledger: mission, agent cells, budget allocations,
+tasks, and external effects. `createSwarm` only initializes that ledger.
+`FactorySwarmEngine` can dispatch work through an explicitly configured local
+FLUJO or managed cloud adapter. Agents can also use the SDK or MCP directly.
 
 Requires Node.js 24 or newer. Install version 0.2.0 into your project with
 `npm install github:flujo-app/FACTORY#v0.2.0` or from a local checkout with
@@ -27,6 +27,8 @@ The `claim` response contains a private lease token. Keep it inside the agent
 runtime. `factory agent` adds one cell; `factory resume` reopens admission.
 An empty swarm reserves room for 15 later agents by default. Set `maxCells`
 when creating the swarm to choose another ceiling.
+Use `growthMode: 'budget-only'` in the JavaScript SDK to omit cell-count and
+depth ceilings while preserving each parent's logical budget allocation.
 On Windows, put JSON in a file and pass `@config.json` as the final argument;
 this avoids `cmd.exe` quote conversion. Use `-` to read JSON from stdin.
 
@@ -43,6 +45,35 @@ console.log(factory.status());
 
 The lower-level `FactoryControl` is also exported for the full local controller
 API. Each SDK call closes its database connection before returning.
+
+## FLUJO worker dispatch
+
+`FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
+package. The engine accepts a configured adapter and a claimed `FactoryControl`
+task lease. `provisionWorker` reserves a child cell and records a provider
+provisioning effect before calling the adapter. `callWorker` records one flow-call
+effect under a key derived from the worker and explicit conversation ID.
+`runConversations` sends distinct claimed tasks through a bounded concurrent
+queue, preserving each task and conversation ID for recovery.
+`retireWorker` records an owned cleanup effect.
+Repeated keys return the retained effect without another external call. An
+uncertain provider outcome remains `unknown` and requires reconciliation.
+Worker retirement alone does not close the Factory cell; that requires the
+controller's separate provider-evidence closure path.
+
+`createFlujoWorkspaceAdapter({origin, token})` drives local FLUJO workspaces.
+Provisioning takes `{app, flowSpec}` and requires a new `swarm-<app>` workspace;
+it compiles the supplied flow spec before marking the worker ready. Calls take
+`{conversationId, request:{flowName,prompt}}`. A workspace shares the FLUJO
+machine with other workspaces, so it is not a separate sandbox. The adapter
+does not install the recovered fleet template or grant agents delegation tools.
+
+The FLUJO HTTP client in `src/flujo-swarm` is a source extraction from the
+MIT-licensed Seagulled package, revision `70f1a7f115203e723fdc18e5a2cd5b9d391db363`,
+which in turn records its source extraction from `flujo-app/swarm-teams`.
+
+This is the first public cloud dispatch surface. It does not yet include the
+recursive worker scheduler, conversation templates, or the Observatory host.
 
 ## MCP
 

@@ -65,6 +65,23 @@ test('empty swarm can enroll agents after creation', async t => {
   assert.equal(factory.status().cells.length, 2);
 });
 
+test('public SDK exposes budget-only growth without a cell or depth ceiling', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-public-growth-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const factory = new Factory(join(dir, 'swarm.sqlite'));
+  assert.equal(factory.createSwarm({ mission: 'Deep FLUJO swarm', budgetCents: 0,
+    growthMode: 'budget-only' }).control.policy.growthMode, 'budget-only');
+  let parentId = 'root';
+  for (let index = 0; index < 32; index++) {
+    const id = `agent-${index}`;
+    factory.addAgent({ id, parentId, budgetCents: 0, purpose: 'Delegated work' });
+    parentId = id;
+  }
+  assert.equal(factory.status().cells.length, 33);
+  assert.throws(() => new Factory(join(dir, 'invalid.sqlite')).createSwarm({ mission: 'Invalid',
+    growthMode: 'budget-only', maxCells: 100 }), /cannot include numeric/);
+});
+
 test('CLI reads a JSON file without shell quoting', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-public-file-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

@@ -13,12 +13,20 @@ export class Factory {
     try { return operation(control); } finally { control.close(); }
   }
 
-  createSwarm({ mission, budgetCents = 0, agents = [], maxCells = Math.max(16, agents.length + 1), maxDepth = 2 } = {}) {
+  createSwarm({ mission, budgetCents = 0, agents = [], maxCells, maxDepth, growthMode } = {}) {
     if (!Array.isArray(agents)) throw new TypeError('agents must be an array');
     if (typeof mission !== 'string' || !mission.trim()) throw new TypeError('mission is required');
     if (!Number.isSafeInteger(budgetCents) || budgetCents < 0) throw new TypeError('budgetCents must be a nonnegative integer');
-    if (!Number.isSafeInteger(maxCells) || maxCells < agents.length + 1) throw new TypeError('maxCells must include the root and every agent');
-    if (!Number.isSafeInteger(maxDepth) || maxDepth < 1) throw new TypeError('maxDepth must be positive');
+    if (growthMode !== undefined && growthMode !== 'budget-only') throw new TypeError('growthMode must be budget-only');
+    if (growthMode === 'budget-only' && (maxCells !== undefined || maxDepth !== undefined)) {
+      throw new TypeError('budget-only growth cannot include numeric cell or depth ceilings');
+    }
+    if (growthMode === undefined) {
+      maxCells ??= Math.max(16, agents.length + 1);
+      maxDepth ??= 2;
+      if (!Number.isSafeInteger(maxCells) || maxCells < agents.length + 1) throw new TypeError('maxCells must include the root and every agent');
+      if (!Number.isSafeInteger(maxDepth) || maxDepth < 1) throw new TypeError('maxDepth must be positive');
+    }
     const ids = new Set();
     let allocated = 0;
     for (const agent of agents) {
@@ -35,7 +43,8 @@ export class Factory {
       ids.add(agent.id);
     }
     return this.#withControl(control => {
-      control.initialize({ mission, budgetCents, maxCells, maxDepth });
+      control.initialize(growthMode === 'budget-only' ? { mission, budgetCents, growthMode }
+        : { mission, budgetCents, maxCells, maxDepth });
       for (const agent of agents) {
         control.reserveCell({ cellId: agent.id, parentId: agent.parentId ?? 'root', role: agent.role ?? 'developer', budgetCents: agent.budgetCents ?? 0, purpose: agent.purpose ?? mission });
         control.enrollCell(agent.id);
@@ -67,3 +76,6 @@ export class Factory {
 }
 
 export { FactoryControl } from './control.mjs';
+export { FactorySwarmEngine } from './swarm-engine.mjs';
+export { createManagedCloudAdapter } from './adapters/managed-cloud.mjs';
+export { createFlujoWorkspaceAdapter } from './adapters/flujo-workspace.mjs';
