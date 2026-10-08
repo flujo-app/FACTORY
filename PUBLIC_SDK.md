@@ -165,6 +165,12 @@ deadline. Without it, the FLUJO client uses its normal run timeout. Keep any
 does not start a provider call by itself. The nine specialist subflows per team
 remain a topology target until run records prove that they launched and finished;
 the plan records ten lead conversations in FACTORY.
+After a run, `observeSaviaCaseTopology(plan, {origin, token})` reads each lead
+and its FLUJO descendant listing. It reports `topologyObserved: true` only when
+all ten leads and exactly nine direct children per lead are persisted as
+completed, with no truncated descendant page. This is a point-in-time topology
+check. It does not prove that the nine children used distinct specialist roles,
+that their work met case quality criteria, or that provider billing is final.
 
 ```js
 import { FactoryLocalFleet, createFlujoWorkspaceAdapter } from 'flujo-factory';
