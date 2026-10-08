@@ -3,7 +3,42 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { FactoryControl, FactoryLocalFleet, conversationMessageKey } from '../src/public-sdk.mjs';
+import { FactoryControl, FactoryLocalFleet, conversationMessageKey, conversationCancelKey } from '../src/public-sdk.mjs';
+
+test('local fleet retains one cancellation request while original FLUJO call resolves', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-cancel-'));
+  try {
+    let started, finish, requests = 0;
+    const entered = new Promise(resolve => { started = resolve; });
+    const released = new Promise(resolve => { finish = resolve; });
+    const fleet = new FactoryLocalFleet(path.join(directory, 'control.sqlite'), {
+      capabilities: { adapter: 'flujo-workspace' },
+      async provision(input) { return { worker: input.app, state: 'ready' }; },
+      async call() { started(); await released; throw new Error('FLUJO stopped'); },
+      async cancel() { requests++; return { state: 'requested' }; },
+      async retire() { throw new Error('unused'); },
+    });
+    const plan = { mission: 'Stop FLUJO conversation', budgetCents: 0, projectId: 'swarm', baseline: 'source',
+      workers: [{ id: 'lead', app: 'worker-lead', budgetCents: 0, purpose: 'Lead',
+        provisionInput: { app: 'worker-lead' }, conversations: [{ id: 'job-one',
+          input: { conversationId: 'conversation-one', request: { flowName: 'Work', prompt: 'Start' } },
+          outputPath: path.join(directory, 'output.txt') }] }] };
+    const running = fleet.run(plan);
+    await entered;
+    const first = await fleet.cancel({ jobId: 'job-one' });
+    const repeat = await fleet.cancel({ jobId: 'job-one' });
+    assert.equal(first.effect.key, conversationCancelKey('worker-lead', 'conversation-one'));
+    assert.equal(first.effect.receipt.state, 'requested');
+    assert.equal(repeat.dispatched, false);
+    assert.equal(requests, 1);
+    finish();
+    assert.equal((await running).conversations[0].status, 'held');
+    const control = new FactoryControl(fleet.database);
+    assert.equal(control.effect(first.effect.key).state, 'succeeded');
+    assert.equal(control.task('run-job-one').status, 'running');
+    control.close();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test('local fleet records mid-run FLUJO steering once and closes after acknowledgement', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-local-steer-'));
@@ -54,6 +89,7 @@ test('uncertain steering remains a held effect and prevents conversation closure
       async provision(input) { return { worker: input.app, state: 'ready' }; },
       async call() { started(); await released; return { body: 'answer', contentType: 'text/plain' }; },
       async message() { submissions++; throw new Error('connection lost after submission'); },
+      async cancel() { return { state: 'requested' }; },
       async retire() { throw new Error('unused'); },
     });
     const plan = { mission: 'Retain uncertain steering', budgetCents: 0, projectId: 'swarm', baseline: 'source',
@@ -67,6 +103,9 @@ test('uncertain steering remains a held effect and prevents conversation closure
     assert.equal((await fleet.message(intent)).effect.state, 'unknown');
     assert.equal((await fleet.message(intent)).dispatched, false);
     assert.equal(submissions, 1);
+    assert.equal((await fleet.cancel({ jobId: 'job-one' })).effect.receipt.state, 'requested');
+    await assert.rejects(fleet.message({ ...intent, messageId: '4ca31387-0b80-4807-aefe-f4d18d26dcbe' }),
+      { code: 'UNRECONCILED' });
     finish();
     assert.equal((await running).conversations[0].status, 'held');
     const control = new FactoryControl(fleet.database);

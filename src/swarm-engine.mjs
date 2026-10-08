@@ -23,6 +23,10 @@ export function conversationMessageKey(worker, conversationId, messageId) {
   return `message-${digest({ worker, conversationId, messageId })}`;
 }
 
+export function conversationCancelKey(worker, conversationId) {
+  return `cancel-${digest({ worker, conversationId })}`;
+}
+
 /** FACTORY-owned dispatch surface for an explicitly configured FLUJO worker adapter. */
 export class FactorySwarmEngine {
   constructor(database, adapter) {
@@ -127,6 +131,29 @@ export class FactorySwarmEngine {
         const receipt = await this.adapter.message(worker, { conversationId, messageId, content });
         if (receipt?.messageId !== messageId || receipt?.state !== 'queued')
           throw new Error('Steering acknowledgement is unconfirmed.');
+        return receipt;
+      });
+    });
+  }
+
+  /** Request FLUJO stop an active run; task closure still needs terminal evidence. */
+  async cancelWorkerConversation({ lease, worker, conversationId }) {
+    if (typeof this.adapter.cancel !== 'function') throw new TypeError('Worker adapter cannot cancel conversations');
+    const key = conversationCancelKey(worker, conversationId);
+    return this.#control(control => {
+      control.authority(lease);
+      const owned = control.ownedWorker(worker);
+      const request = { worker, cellId: lease.cellId, conversationId,
+        provisionKey: owned.provisionKey, reason: 'operator-request' };
+      const previous = completedEffect(control, lease, key, 'flow_cancel', request);
+      if (previous) {
+        if (previous.receipt?.state !== 'requested')
+          throw new FactoryError('CANCEL', 'Recorded cancellation acknowledgement is inconsistent.');
+        return { dispatched: false, effect: previous };
+      }
+      return executeEffect(control, lease, { key, kind: 'flow_cancel', request }, async () => {
+        const receipt = await this.adapter.cancel(worker, { conversationId });
+        if (receipt?.state !== 'requested') throw new Error('Cancellation request was not confirmed.');
         return receipt;
       });
     });

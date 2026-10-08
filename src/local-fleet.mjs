@@ -219,6 +219,13 @@ export class FactoryLocalFleet {
     return this.engine.messageWorker({ ...active, messageId, content });
   }
 
+  /** Request cancellation of a running FLUJO conversation without claiming task closure. */
+  async cancel({ jobId }) {
+    const active = this.activeConversations.get(jobId);
+    if (!active) throw new FactoryError('NOT_RUNNING', 'Conversation is not active in this fleet instance');
+    return this.engine.cancelWorkerConversation(active);
+  }
+
   async run(plan, { workerConcurrency = 4, conversationConcurrency = 30 } = {}) {
     const { depth } = validatePlan(plan);
     if (![workerConcurrency,conversationConcurrency].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 100)) {

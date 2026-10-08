@@ -970,7 +970,7 @@ export class FactoryControl {
   }
   admitEffect(lease, input) { return this.transaction(() => this.#admitEffect(lease, input)); }
   #admitEffect(lease, { key, kind, request, taskId=null }, modelStepManifestAuthorized=false) {
-    id(key); if (!['provision','flow_call','message','retire','delivery'].includes(kind)) fail('INVALID','Unknown effect kind.');
+    id(key); if (!['provision','flow_call','message','flow_cancel','retire','delivery'].includes(kind)) fail('INVALID','Unknown effect kind.');
     const hash=digest(request);
       const owner=this.authority(lease);
       const previous=this.db.prepare('SELECT * FROM effects WHERE key=?').get(key);
@@ -989,8 +989,8 @@ export class FactoryControl {
       if(kind==='retire' && this.openEffects('worker',request?.app).length)fail('UNRECONCILED','Worker power must be reconciled before retirement.');
       if (lease.scope === 'task') {
         const task = this.task(lease.scopeId);
-        if (kind === 'message' && task.specification.taskType !== 'conversation')
-          fail('CONVERSATION_BINDING', 'Steering requires a typed conversation task.');
+        if (['message','flow_cancel'].includes(kind) && task.specification.taskType !== 'conversation')
+          fail('CONVERSATION_BINDING', 'Conversation control requires a typed conversation task.');
         if (task.specification.originalInference && !modelStepManifestAuthorized) fail('MODEL_STEP_MANIFEST_REQUIRED','Original model-step parents require authenticated manifest admission.');
         if(kind==='flow_call' && task.specification.nativeMission) {
           this.#nativeMissionTarget(task);
@@ -1007,7 +1007,7 @@ export class FactoryControl {
         }
         if (task.specification.taskType === 'conversation') {
           const operation = conversationContract(task.specification);
-          if (!['flow_call','message'].includes(kind) || lease.cellId !== operation.cellId
+          if (!['flow_call','message','flow_cancel'].includes(kind) || lease.cellId !== operation.cellId
             || request?.worker !== operation.app || request?.cellId !== operation.cellId
             || request?.conversationId !== operation.conversationId
             || request?.provisionKey !== operation.provisionKey
@@ -1015,18 +1015,22 @@ export class FactoryControl {
             || (kind === 'message' && (typeof request?.messageId !== 'string'
               || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.messageId)
               || typeof request?.contentDigest !== 'string' || !/^[a-f0-9]{64}$/.test(request.contentDigest)
-              || key !== `message-${digest({worker:request.worker,conversationId:request.conversationId,messageId:request.messageId})}`))) {
+              || key !== `message-${digest({worker:request.worker,conversationId:request.conversationId,messageId:request.messageId})}`))
+            || (kind === 'flow_cancel' && (key !== `cancel-${digest({worker:request.worker,conversationId:request.conversationId})}`
+              || request?.reason !== 'operator-request'))) {
             fail('CONVERSATION_BINDING', 'Effect must match the immutable conversation operation.');
           }
         }
       }
       const open = lease.scope==='task'?this.openTaskEffects(lease.scopeId):this.openEffects(lease.scope,lease.scopeId);
       if (kind === 'message') {
-        if (open.some(effect => effect.kind !== 'flow_call')
-          || open.length !== 1 || open[0].state !== 'running'
-          || !this.db.prepare("SELECT key FROM effects WHERE task_id=? AND kind='flow_call' AND state='running'").get(lease.scopeId)) {
-          fail('UNRECONCILED','Conversation message requires one running Flow call and no other open message.');
-        }
+        if (this.db.prepare("SELECT key FROM effects WHERE task_id=? AND kind='flow_cancel'").get(lease.scopeId)
+          || open.length !== 1 || open[0].kind !== 'flow_call' || open[0].state !== 'running')
+          fail('UNRECONCILED','Steering requires one running Flow call and no cancellation intent.');
+      } else if (kind === 'flow_cancel') {
+        if (open.filter(effect => effect.kind === 'flow_call' && effect.state === 'running').length !== 1
+          || open.some(effect => effect.kind !== 'flow_call' && !(effect.kind === 'message' && effect.state === 'unknown')))
+          fail('UNRECONCILED','Cancellation requires a running Flow call and settled or uncertain steering.');
       } else if (open.length) fail('UNRECONCILED','Previous external effect must settle before a conflicting effect.');
       if(kind==='provision') {
         const cell=this.db.prepare("SELECT * FROM cells WHERE id=? AND status='reserved'").get(id(request?.cellId));

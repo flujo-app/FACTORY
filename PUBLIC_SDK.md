@@ -130,6 +130,11 @@ stays in the ledger for reconciliation and is never blindly sent again.
 The fleet renews its task leases during provisioning and conversation calls.
 The optional constructor settings `{leaseTtlMs, renewEveryMs}` default to ten
 minutes and one minute; keep the renewal interval below half the lease TTL.
+`fleet.cancel({jobId})` records one stop intent and asks FLUJO to cancel the
+active conversation. A `requested` receipt confirms the request was processed,
+not that the run reached a terminal cancelled state. If the original call then
+ends without a confirmed output, FACTORY retains the task as `held` for
+reconciliation; replay never sends a second stop request.
 
 The FLUJO HTTP client and specialist profile in `src/flujo-swarm` are source
 extractions from the
@@ -150,7 +155,7 @@ Observatory consumes this read-only feed as a separate host. FACTORY does not
 provide Observatory's UI or its private provider-detail projection.
 The checked-in Brain Online `factorySnapshotSchema` currently recognizes four
 effect kinds (`provision`, `flow_call`, `retire`, `delivery`), while FACTORY can
-also present `worker_wake`, `worker_sleep`, and `message`. That consumer contract
+also present `worker_wake`, `worker_sleep`, `message`, and `flow_cancel`. That consumer contract
 needs a matching update before it can parse snapshots containing those effects.
 
 ## MCP

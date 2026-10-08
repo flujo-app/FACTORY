@@ -53,6 +53,18 @@ test('workspace steering keeps the exact caller message identity', async () => {
   assert.deepEqual(observed, [{ conversationId: 'conversation-one', content: 'Use the revised plan', id: messageId }]);
 });
 
+test('workspace cancellation requires a matching active FLUJO conversation', async () => {
+  let status = 'running', submissions = 0;
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: () => ({
+    async conversation(id) { return { status: 200, body: { id, status } }; },
+    async cancel() { submissions++; return { status: 200, body: { success: true } }; },
+  }) });
+  assert.deepEqual(await adapter.cancel('worker-one', { conversationId: 'conversation-one' }), { state: 'requested' });
+  status = 'completed';
+  await assert.rejects(adapter.cancel('worker-one', { conversationId: 'conversation-one' }), /active conversation/);
+  assert.equal(submissions, 1);
+});
+
 test('workspace adapter installs a paired agent and team flow before readiness', async () => {
   const installed = [];
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({

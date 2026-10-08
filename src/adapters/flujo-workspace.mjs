@@ -86,6 +86,19 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = set
         || response?.status !== 'queued') throw new Error('FLUJO did not confirm queued steering.');
       return { messageId, state: 'queued' };
     },
+    async cancel(app, { conversationId } = {}) {
+      if (typeof conversationId !== 'string' || !CONVERSATION.test(conversationId))
+        throw new TypeError('A conversation ID is required');
+      const client = clientFor(app);
+      const before = await client.conversation(conversationId);
+      if (before?.status !== 200 || before?.body?.id !== conversationId
+        || !['running','queued','pending','awaiting','awaiting_tool_approval','paused_debug'].includes(before.body.status))
+        throw new Error('FLUJO active conversation identity was not confirmed before cancellation.');
+      const response = await client.cancel(conversationId);
+      if (![200,202].includes(response?.status) || response?.body?.success !== true)
+        throw new Error('FLUJO did not acknowledge cancellation request.');
+      return { state: 'requested' };
+    },
     async retire(app) {
       const client = clientFor(app);
       await client.deleteWorkspace(client.workspace);
