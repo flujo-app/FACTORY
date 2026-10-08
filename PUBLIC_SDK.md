@@ -118,11 +118,20 @@ conversation task means its original output was retained, not that its answer
 passed independent review.
 
 On 2026-10-08, the generic team and SAVIA specialist pair both compiled on an
-isolated FLUJO 3.46.1 development server. Each test workspace was deleted and
-its absence confirmed. No inference ran in those checks. A separate older,
-shared FLUJO checkout returned HTTP 500 on workspace creation; no test
-workspace remained there. The 10-worker/100-conversation and 300-conversation
-checks use injected adapters, so live fleet throughput is still unverified.
+isolated FLUJO 3.46.1 development server. A later live synthetic-model run
+completed one FACTORY conversation, but exposed FLUJO workspace recreation
+after a successful delete response. FACTORY now watches exact-name absence
+for 15 seconds and leaves retirement `unknown` if the workspace returns.
+Fresh isolated FLUJO runs also hit Windows `EPERM` while renaming a staged
+shipped MCP package into a new workspace. Thus live fleet acceptance remains
+open. The 10-worker/100-conversation and 300-conversation checks use injected
+adapters and do not establish live throughput. To reproduce without paid
+inference, start an isolated local FLUJO server and run
+`FACTORY_FLUJO_ORIGIN=http://127.0.0.1:<port> npm run smoke:local-flujo`
+(set the environment variable with `$env:` in PowerShell). The smoke accepts
+`FACTORY_SMOKE_WORKERS` up to 10 and
+`FACTORY_SMOKE_CONVERSATIONS_PER_WORKER` up to 30; it retains its SQLite ledger
+on failure and reports unresolved effects.
 Calls take
 `{conversationId, request:{flowName,prompt}}`. A workspace shares the FLUJO
 machine with other workspaces, so it is not a separate sandbox. The adapter
