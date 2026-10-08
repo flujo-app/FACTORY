@@ -390,8 +390,11 @@ the local feed without placing the bearer in browser code. The client pins the
 expected factory ID, accepts only an explicit `127.0.0.1` snapshot endpoint,
 rejects redirects and invalid topology, and returns the versioned snapshot
 envelope. This is the bridge for showing FACTORY cells and tasks alongside
-FLUJO-WORLD's separate automation map; the Wave Observatory UI does not yet
-consume it.
+FLUJO-WORLD's separate automation map. [FLUJO PR #973](https://github.com/mario-andreschak/FLUJO/pull/973)
+implements a server-side reader of this same HTTP contract for its Wave
+Observatory FACTORY view; it does not import the Node 24 SDK client, because
+FLUJO also supports Node 22.17. That PR is not yet adopted or connected to a
+live FACTORY source.
 
 ```js
 import { createObservatoryClient } from 'flujo-factory';
