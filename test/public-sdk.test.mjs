@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Factory, FactoryControl, liteWorkerCommand } from '../src/public-sdk.mjs';
+import { Factory, FactoryControl, liteWorkerCommand, startLiteWorker } from '../src/public-sdk.mjs';
 
 const cli = fileURLToPath(new URL('../bin/factory-public.mjs', import.meta.url));
 const mcp = process.env.FACTORY_TEST_MCP ?? fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
@@ -30,6 +30,23 @@ test('lite workers launch native CLIs with only the Factory MCP configuration', 
   assert.ok(claude.args.includes('--strict-mcp-config'));
   assert.deepEqual(Object.keys(JSON.parse(claude.args[claude.args.indexOf('--mcp-config') + 1]).mcpServers), ['factory']);
   assert.throws(() => liteWorkerCommand({ provider: 'flujo', database: 'board.sqlite' }), /provider/);
+});
+
+test('public SDK starts a lite worker through the same launcher as the CLI', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-lite-sdk-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const database = join(dir, 'board.sqlite');
+  const factory = new Factory(database);
+  const child = { pid: 1234 };
+  let launched;
+  const result = factory.startLiteWorker({ provider: 'claude', prompt: 'Work on the board', cwd: dir,
+    stdio: 'pipe', spawnImpl(command, args, options) { launched = { command, args, options }; return child; } });
+  assert.equal(result, child);
+  assert.equal(launched.command, 'claude');
+  assert.equal(launched.options.cwd, dir);
+  assert.equal(launched.options.stdio, 'pipe');
+  assert.equal(JSON.parse(launched.args[launched.args.indexOf('--mcp-config') + 1]).mcpServers.factory.args[1], database);
+  assert.equal(typeof startLiteWorker, 'function');
 });
 
 test('public SDK and CLI coordinate a local swarm without a provider', async t => {

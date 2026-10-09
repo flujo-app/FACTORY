@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { FactoryControl } from './control.mjs';
+import { startLiteWorker } from './lite-worker.mjs';
 
 /** A local, durable coordinator. No provider calls or worker processes are started. */
 export class Factory {
@@ -69,6 +70,7 @@ export class Factory {
   status() { return this.#withControl(control => control.status()); }
   pause() { return this.#withControl(control => control.pause()); }
   resume() { return this.#withControl(control => control.resume()); }
+  startLiteWorker(options = {}) { return startLiteWorker({ ...options, database: this.database }); }
 }
 
 export { FactoryControl } from './control.mjs';
@@ -82,4 +84,4 @@ export { buildSaviaCasePlan } from './flujo-swarm/template/savia-case-plan.mjs';
 export { observeSaviaCaseTopology } from './flujo-swarm/template/savia-topology.mjs';
 export { createPresentationServer, startPresentationServer } from './presentation.mjs';
 export { createObservatoryClient } from './observatory-client.mjs';
-export { liteWorkerCommand } from './lite-worker.mjs';
+export { liteWorkerCommand, startLiteWorker } from './lite-worker.mjs';
