@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { FactoryControl } from './control.mjs';
 import { startLiteWorker } from './lite-worker.mjs';
+import { FactoryTemplateCatalog } from './template-catalog.mjs';
 
 /** A local, durable coordinator. No provider calls or worker processes are started. */
 export class Factory {
@@ -67,6 +68,15 @@ export class Factory {
     return this.#withControl(control => control.claimTask(taskId, agentId, ttlMs));
   }
 
+  listTemplates() { return this.#withControl(control => new FactoryTemplateCatalog(control).list()); }
+  getTemplate(name = 'generic') { return this.#withControl(control => new FactoryTemplateCatalog(control).get(name)); }
+  createTemplate(input) { return this.#withControl(control => new FactoryTemplateCatalog(control).create(input)); }
+  updateTemplate(name, input) { return this.#withControl(control => new FactoryTemplateCatalog(control).update(name, input)); }
+  deleteTemplate(name, options) { return this.#withControl(control => new FactoryTemplateCatalog(control).delete(name, options)); }
+  buildTemplate(name = 'generic', options = {}) {
+    return this.#withControl(control => new FactoryTemplateCatalog(control).build(name, options));
+  }
+
   status() { return this.#withControl(control => control.status()); }
   pause() { return this.#withControl(control => control.pause()); }
   resume() { return this.#withControl(control => control.resume()); }
@@ -74,6 +84,7 @@ export class Factory {
 }
 
 export { FactoryControl } from './control.mjs';
+export { FactoryTemplateCatalog } from './template-catalog.mjs';
 export { SpendingLedger } from './spending.mjs';
 export { FactorySwarmEngine, conversationEffectKey, conversationMessageKey, conversationCancelKey } from './swarm-engine.mjs';
 export { FactoryLocalFleet, FactoryManagedFleet, managedFleetReservationId } from './local-fleet.mjs';
