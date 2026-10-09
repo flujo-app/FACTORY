@@ -15,6 +15,7 @@
     "src/",
     "bin/factory-public.mjs",
     "bin/factory-mcp.mjs",
+    "bin/factory-lite.mjs",
     "bin/factory.mjs",
     "scripts/watch-pilot.mjs",
     "scripts/pilot.mjs",
@@ -34,7 +35,8 @@
   },
   "bin": {
     "factory": "./bin/factory-public.mjs",
-    "factory-mcp": "./bin/factory-mcp.mjs"
+    "factory-mcp": "./bin/factory-mcp.mjs",
+    "factory-lite": "./bin/factory-lite.mjs"
   },
   "type": "module",
   "engines": {

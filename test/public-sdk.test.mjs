@@ -7,10 +7,30 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Factory, FactoryControl } from '../src/public-sdk.mjs';
+import { Factory, FactoryControl, liteWorkerCommand } from '../src/public-sdk.mjs';
 
 const cli = fileURLToPath(new URL('../bin/factory-public.mjs', import.meta.url));
 const mcp = process.env.FACTORY_TEST_MCP ?? fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
+
+test('lite workers launch native CLIs with only the Factory MCP configuration', () => {
+  for (const provider of ['codex', 'claude']) {
+    const spec = liteWorkerCommand({ provider, database: 'board.sqlite', prompt: 'Work on the board' });
+    assert.equal(spec.command, provider);
+    assert.equal(spec.args.at(-1), 'Work on the board');
+    assert.ok(spec.args.join(' ').includes('factory-mcp.mjs'));
+    assert.ok(spec.args.join(' ').includes('board.sqlite'));
+  }
+  const codex = liteWorkerCommand({ provider: 'codex', database: 'board.sqlite' });
+  assert.ok(codex.args.includes('danger-full-access'));
+  assert.ok(codex.args.includes('never'));
+  assert.equal(codex.args.filter(value => value === '--config').length, 1);
+  assert.ok(codex.env.CODEX_HOME.endsWith(join('.factory', 'lite-codex')));
+  const claude = liteWorkerCommand({ provider: 'claude', database: 'board.sqlite' });
+  assert.ok(claude.args.includes('--dangerously-skip-permissions'));
+  assert.ok(claude.args.includes('--strict-mcp-config'));
+  assert.deepEqual(Object.keys(JSON.parse(claude.args[claude.args.indexOf('--mcp-config') + 1]).mcpServers), ['factory']);
+  assert.throws(() => liteWorkerCommand({ provider: 'flujo', database: 'board.sqlite' }), /provider/);
+});
 
 test('public SDK and CLI coordinate a local swarm without a provider', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-public-'));

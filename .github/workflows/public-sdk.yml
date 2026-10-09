@@ -38,7 +38,7 @@ jobs:
           import { pathToFileURL } from 'node:url';
           const consumer = process.env.FACTORY_CONSUMER;
           const sdk = await import(pathToFileURL(join(consumer, 'node_modules', 'flujo-factory', 'src', 'public-sdk.mjs')));
-          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology', 'createObservatoryClient']) {
+          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology', 'createObservatoryClient', 'liteWorkerCommand']) {
             assert.equal(typeof sdk[name], 'function', `${name} is missing`);
           }
           const require = createRequire(join(consumer, 'index.mjs'));
@@ -50,4 +50,5 @@ jobs:
           assert.equal(factory.status().cells.length, 2);
           NODE
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-public.mjs" --help
+          node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-lite.mjs" --help
           FACTORY_TEST_MCP="$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-mcp.mjs" node --test --test-name-pattern="public MCP stdio" test/public-sdk.test.mjs

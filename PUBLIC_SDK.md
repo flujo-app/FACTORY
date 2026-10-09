@@ -67,6 +67,26 @@ same evidence record.
 
 ## CLI
 
+### Lite workers
+
+`factory-lite` opens a regular interactive Codex or Claude CLI session in the
+current directory. It does not provision a FLUJO worker or use the FLUJO
+conversation harness. The CLI retains its built-in tools and unrestricted file
+and command access. The only MCP server supplied for that session is FACTORY's
+local board/swarm server, connected to the specified durable database.
+
+```sh
+factory-lite codex /absolute/path/board.sqlite "Work on the Factory board"
+factory-lite claude /absolute/path/board.sqlite "Work on the Factory board"
+```
+
+Create the swarm first with `factory create` or the SDK. Lite Codex uses a
+dedicated persistent CLI home at `~/.factory/lite-codex`, so its first launch
+may require a separate Codex login. Claude uses its normal login and loads only
+the explicit FACTORY MCP config. The optional prompt can be
+omitted to start an interactive session without initial instructions.
+
+
 Use an absolute database path for a durable swarm:
 
 ```sh
