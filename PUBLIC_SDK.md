@@ -65,6 +65,47 @@ initialized ledger passed under Node 24 with zero provider calls; see the
 same evidence record.
 `flujo-factory` is not yet published to the npm registry.
 
+## Default generic native team and template CRUD
+
+FACTORY owns the reusable setup; applications supply their goal, environment descriptions,
+upstream pins and runtime bindings. The built-in `generic` template produces the existing
+native `swarm_agent` / `swarm_team` pair with one shared subflow concurrency gate. It uses
+observed connected tools, concise shared-board coordination, independent review and useful
+product delivery. Specialized SAVIA roles remain an explicit opt-in.
+
+```js
+const factory = new Factory('/private/control.sqlite');
+const defaults = factory.getTemplate('generic');
+factory.updateTemplate('generic', {
+  expectedRevision: defaults.revision,
+  environment: { workspace: '/workspace', board: 'https://github.com/org/project/issues/1' },
+  goalContext: 'Reuse the installed upstream systems and ship a usable product slice',
+});
+const flowSpecs = factory.buildTemplate('generic', {
+  model: 'installed-model-id',
+  availableServers: ['filesystem', 'bash'],
+  availableTools: { filesystem: ['read_file', 'write_file'], bash: ['run'] },
+});
+```
+
+`listTemplates()`, `getTemplate(name)`, `createTemplate({name, ...settings})`,
+`updateTemplate(name, {expectedRevision, ...settings})` and
+`deleteTemplate(name, {expectedRevision})` persist in the same local Factory database.
+Settings are `description`, `goalContext`, `environment` (string-valued descriptions) and
+`limits` (`agentTurns`, `leadTurns`, `concurrency`). Revisions protect concurrent writers
+and survive deletion/recreation. Deleting a persisted `generic` override resets it to the
+built-in default. Put credentials in private runtime configuration, never template settings.
+
+The CLI exposes `template-list` and JSON-input `template-read`, `template-create`,
+`template-update`, `template-delete`, `template-build`; the MCP server exposes corresponding
+`factory_template_*` tools. CRUD and building specifications start no workers.
+
+Provisioning through `createFlujoWorkspaceAdapter` with `modelConfig` and no explicit
+flows selects the generic native team automatically. Explicit `flowSpec`, `flowSpecs` or
+`teamTemplate` continues to take precedence. To install a catalog template, pass the
+built `flowSpecs` through the adapter's existing provisioning interface; the catalog's
+local overrides are not implicitly shared with a remote adapter.
+
 ## CLI
 
 ### Lite workers

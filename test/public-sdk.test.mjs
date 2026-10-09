@@ -84,6 +84,22 @@ test('public MCP stdio server creates and reads a local swarm', async t => {
   assert.equal(created.isError, undefined);
   const status = await client.callTool({ name: 'factory_status', arguments: {} });
   assert.equal(JSON.parse(status.content[0].text).cells.length, 2);
+  const templates = await client.callTool({name:'factory_template_list',arguments:{}});
+  assert.equal(templates.isError, undefined);
+  assert.ok(JSON.parse(templates.content[0].text).templates.some(template => template.name === 'generic'));
+  const custom = await client.callTool({name:'factory_template_create',arguments:{name:'product',goalContext:'Ship a usable intake'}});
+  assert.equal(custom.isError, undefined);
+  const record = JSON.parse(custom.content[0].text);
+  const changed = await client.callTool({name:'factory_template_update',arguments:{name:'product',expectedRevision:record.revision,description:'Reusable product team'}});
+  assert.equal(changed.isError, undefined);
+  const stale = await client.callTool({name:'factory_template_delete',arguments:{name:'product',expectedRevision:record.revision}});
+  assert.equal(stale.isError, true);
+  const built = await client.callTool({name:'factory_template_build',arguments:{name:'product',model:'installed-model'}});
+  assert.equal(built.isError, undefined);
+  assert.equal(JSON.parse(built.content[0].text).flowSpecs.length, 2);
+  const removed = await client.callTool({name:'factory_template_delete',arguments:{name:'product',expectedRevision:JSON.parse(changed.content[0].text).revision}});
+  assert.equal(removed.isError, undefined);
+
 });
 
 test('invalid swarm allocation fails before creating a database', async t => {
@@ -158,4 +174,22 @@ test('CLI reads a JSON file without shell quoting', async t => {
   const result = spawnSync(process.execPath, [cli, 'create', database, '@' + input], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).cells.length, 2);
+});
+
+test('CLI manages templates using JSON files before swarm initialization', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-template-cli-'));
+  t.after(() => rm(dir, {recursive:true,force:true}));
+  const database = join(dir,'templates.sqlite');
+  function run(command,input) {
+    const result=spawnSync(process.execPath,[cli,command,database,...(input ? [JSON.stringify(input)] : [])],{encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    return JSON.parse(result.stdout);
+  }
+  assert.ok(run('template-list').some(record=>record.name==='generic'));
+  const created=run('template-create',{name:'cli-product',goalContext:'Build intake'});
+  assert.equal(run('template-read',{name:'cli-product'}).revision,created.revision);
+  assert.equal(run('template-build',{name:'cli-product',model:'installed-model'}).length,2);
+  const changed=run('template-update',{name:'cli-product',expectedRevision:created.revision,description:'Updated'});
+  run('template-delete',{name:'cli-product',expectedRevision:changed.revision});
+  assert.equal(run('template-list').some(record=>record.name==='cli-product'),false);
 });

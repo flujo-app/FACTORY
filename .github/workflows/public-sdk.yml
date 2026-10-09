@@ -23,39 +23,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
-      - run: node --test test/public-sdk.test.mjs test/savia-case-plan.test.mjs test/savia-topology.test.mjs test/managed-fleet.test.mjs test/managed-fleet-real-module.test.mjs test/managed-fleet-provider-closure.test.mjs test/provider-cell-retirement.test.mjs test/presentation.test.mjs test/presentation-modal.test.mjs test/presentation-closure.test.mjs test/observatory-client.test.mjs
+      - run: node --test test/public-sdk.test.mjs test/template-catalog.test.mjs test/factory-team-template.test.mjs test/flujo-workspace.test.mjs test/savia-case-plan.test.mjs test/savia-topology.test.mjs test/managed-fleet.test.mjs test/managed-fleet-real-module.test.mjs test/managed-fleet-provider-closure.test.mjs test/provider-cell-retirement.test.mjs test/presentation.test.mjs test/presentation-modal.test.mjs test/presentation-closure.test.mjs test/observatory-client.test.mjs
       - name: Install and exercise the packed public package
         shell: bash
         run: |
           tarball=$(npm pack --pack-destination "$RUNNER_TEMP" --json | node -e "let raw='';process.stdin.on('data',chunk=>raw+=chunk).on('end',()=>process.stdout.write(JSON.parse(raw)[0].filename))")
           mkdir "$RUNNER_TEMP/consumer"
           npm install --prefix "$RUNNER_TEMP/consumer" "$RUNNER_TEMP/$tarball" --ignore-scripts --no-audit --no-fund
-          FACTORY_CONSUMER="$RUNNER_TEMP/consumer" node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { existsSync } from 'node:fs';
-          import { createRequire } from 'node:module';
-          import { join } from 'node:path';
-          import { pathToFileURL } from 'node:url';
-          const consumer = process.env.FACTORY_CONSUMER;
-          const sdk = await import(pathToFileURL(join(consumer, 'node_modules', 'flujo-factory', 'src', 'public-sdk.mjs')));
-          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology', 'createObservatoryClient', 'liteWorkerCommand', 'startLiteWorker']) {
-            assert.equal(typeof sdk[name], 'function', `${name} is missing`);
-          }
-          const require = createRequire(join(consumer, 'index.mjs'));
-          const observatory = await import(pathToFileURL(require.resolve('flujo-factory/observatory')));
-          assert.equal(typeof observatory.createObservatoryClient, 'function');
-          assert.equal(existsSync(join(consumer, 'node_modules', 'flujo-factory', 'src', 'observatory-client.d.mts')), true);
-          const factory = new sdk.Factory(join(consumer, 'control.sqlite'));
-          factory.createSwarm({ mission: 'package smoke', budgetCents: 0, agents: [{ id: 'agent-a' }] });
-          assert.equal(factory.status().cells.length, 2);
-          const child = { pid: 7 };
-          let launched;
-          assert.equal(factory.startLiteWorker({ provider: 'claude', spawnImpl(command, args, options) {
-            launched = { command, args, options }; return child;
-          } }), child);
-          assert.equal(launched.command, 'claude');
-          assert.equal(JSON.parse(launched.args[launched.args.indexOf('--mcp-config') + 1]).mcpServers.factory.args[1], factory.database);
-          NODE
+          FACTORY_CONSUMER="$RUNNER_TEMP/consumer" node scripts/verify-public-sdk.mjs
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-public.mjs" --help
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-lite.mjs" --help
           FACTORY_TEST_MCP="$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-mcp.mjs" node --test --test-name-pattern="public MCP stdio" test/public-sdk.test.mjs

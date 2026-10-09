@@ -26,11 +26,13 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = def
   const adapter = Object.freeze({
     capabilities: Object.freeze({ adapter: 'flujo-workspace', machineIsolation: false,
       recursiveProvisioning: false, providerSpendObserved: false }),
-    async provision({ app, flowSpec, flowSpecs, teamTemplate, modelConfig } = {}) {
+    async provision({ app, flowSpec, flowSpecs, teamTemplate, modelConfig, goalContext, environment } = {}) {
       const client = clientFor(app);
       const requestedSpecs = flowSpecs ?? (flowSpec === undefined ? null : [flowSpec]);
+      const explicitSpecs = flowSpec !== undefined || flowSpecs !== undefined;
+      const defaultTemplate = !explicitSpecs && teamTemplate === undefined && modelConfig !== undefined;
       if (teamTemplate !== undefined && (flowSpec !== undefined || flowSpecs !== undefined)
-        || teamTemplate === undefined && (!Array.isArray(requestedSpecs)
+        || !defaultTemplate && teamTemplate === undefined && (!Array.isArray(requestedSpecs)
           || requestedSpecs.length < 1 || requestedSpecs.length > 32
           || new Set(requestedSpecs.map(spec => spec?.name)).size !== requestedSpecs.length
           || requestedSpecs.some(spec => !spec || typeof spec !== 'object' || Array.isArray(spec)
@@ -46,22 +48,27 @@ export function createFlujoWorkspaceAdapter({ origin, token, clientFactory = def
       if (teamTemplate && modelConfig && teamTemplate.model !== modelConfig.id) {
         throw new TypeError('Team template and model configuration must name the same model');
       }
+      const template = teamTemplate ?? (defaultTemplate ? { model: modelConfig.id, goalContext, environment } : null);
+      if (template) buildFactoryTeamSpecs({ ...template,
+        availableServers: template.specialists?.binding?.requiredAgentServers ?? [], availableTools: {} });
       // A fresh FACTORY intent must never adopt or overwrite a preexisting workspace.
       if ((await client.workspaces()).includes(client.workspace)) throw new Error('Workspace identity is already occupied.');
       await client.ensureWorkspace();
       if (modelConfig) await client.upsertModel(modelConfig);
       let specs = requestedSpecs;
-      if (teamTemplate) {
-        const supported = new Set(['filesystem', 'bash', 'browser', 'flujo']);
-        const servers = (await client.servers()).filter(server => !server.disabled && supported.has(server.name));
+      if (template) {
+        const servers = (await client.servers()).filter(server => !server.disabled && server.name !== 'fleet');
         const availableServers = [...new Set(servers.map(server => server.name))];
         const availableTools = {};
         for (const name of availableServers) {
           const observed = await client.serverTools(name);
           if (observed?.error || !Array.isArray(observed?.tools)) throw new Error('Connected FLUJO tool inventory is unavailable.');
-          availableTools[name] = observed.tools.map(tool => tool?.name).filter(name => typeof name === 'string');
+          const names = observed.tools.map(tool => tool?.name);
+          if (names.some(tool => typeof tool !== 'string' || !tool.trim()) || new Set(names).size !== names.length)
+            throw new Error('Connected FLUJO tool inventory has invalid names.');
+          availableTools[name] = names;
         }
-        specs = buildFactoryTeamSpecs({ ...teamTemplate, availableServers, availableTools });
+        specs = buildFactoryTeamSpecs({ ...template, availableServers, availableTools });
       }
       for (const spec of specs) {
         const flow = await client.saveFlowSpec(spec);

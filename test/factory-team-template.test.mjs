@@ -21,3 +21,28 @@ test('missing required specialist tools and invalid concurrency refuse before in
   assert.throws(() => buildFactoryTeamSpecs({ model: 'installed-model', availableServers: [],
     limits: { concurrency: 10 } }), /concurrency/);
 });
+
+test('generic team keeps observed connected tools and one aggregate native gate', () => {
+  const inventory = {
+    filesystem: ['read_file', 'write_file', 'search'],
+    bash: ['run', 'start'],
+    browser: ['browser_open', 'browser_snapshot', 'browser_new_capability'],
+    flujo: ['read_flow', 'update_flow', 'create_flow', 'future_authoring_tool'],
+    github: ['get_issue', 'create_pull_request'],
+  };
+  const [agent, team] = buildFactoryTeamSpecs({ model: 'installed-model',
+    availableServers: Object.keys(inventory), availableTools: inventory,
+    limits: { concurrency: 3 }, goalContext: 'Ship one usable product change.',
+    environment: { repo: '/workspace/repo', board: 'https://example.test/issues/1' } });
+  for (const process of [agent.nodes.find(node => node.key === 'agent'), team.nodes.find(node => node.key === 'lead')]) {
+    assert.deepEqual(process.servers, Object.entries(inventory).map(([name, tools]) => ({ name, tools })));
+  }
+  assert.equal(team.nodes.filter(node => node.type === 'subflow').length, 1);
+  assert.equal(team.nodes.find(node => node.type === 'subflow').concurrencyLimit, 3);
+  assert.match(team.nodes[0].prompt, /usable product change/);
+  assert.match(agent.nodes[0].prompt, /workspace\/repo/);
+  assert.throws(() => buildFactoryTeamSpecs({ model: 'installed-model',
+    environment: { token: 42 } }), /environment/);
+  assert.throws(() => buildFactoryTeamSpecs({ model: 'installed-model',
+    availableTools: { github: ['get_issue', 'get_issue'] } }), /Invalid observed tool names/);
+});

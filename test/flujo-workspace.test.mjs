@@ -116,6 +116,37 @@ test('workspace adapter installs a paired agent and team flow before readiness',
   await assert.rejects(adapter.provision({ app: 'worker-three', flowSpecs: [{ name: 'same' }, { name: 'same' }] }), TypeError);
 });
 
+test('model-only provisioning installs a generic observed-tool team', async () => {
+  const installed = [];
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({
+    workspace: settings.workspace, async workspaces() { return []; }, async ensureWorkspace() {},
+    async upsertModel(model) { installed.push(`model:${model.id}`); },
+    async servers() { return ['bash', 'browser', 'filesystem', 'flujo', 'github', 'fleet'].map(name => ({ name, disabled: false })); },
+    async serverTools(name) { return { tools: [{ name: `observed_${name}` }] }; },
+    async saveFlowSpec(spec) { installed.push(spec); return { id: spec.name, name: spec.name }; },
+  }) });
+  assert.equal((await adapter.provision({ app: 'worker-generic', modelConfig: { id: 'installed-model' },
+    goalContext: 'Deliver a working feature.', environment: { repo: '/work/repo' } })).state, 'ready');
+  assert.equal(installed[0], 'model:installed-model');
+  assert.deepEqual(installed.slice(1).map(spec => spec.name), ['swarm_agent', 'swarm_team']);
+  assert.deepEqual(installed[1].nodes.find(node => node.key === 'agent').servers,
+    ['bash', 'browser', 'filesystem', 'flujo', 'github'].map(name => ({ name, tools: [`observed_${name}`] })));
+  assert.match(installed[2].nodes[0].prompt, /working feature/);
+});
+
+test('invalid generic template and explicit null specs do not create a workspace', async () => {
+  let created = 0;
+  const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({
+    workspace: settings.workspace, async workspaces() { return []; },
+    async ensureWorkspace() { created++; },
+  }) });
+  await assert.rejects(adapter.provision({ app: 'worker-generic', modelConfig: { id: 'installed-model' },
+    environment: { secret: 42 } }), /environment/);
+  await assert.rejects(adapter.provision({ app: 'worker-generic', modelConfig: { id: 'installed-model' },
+    flowSpecs: null }), /Distinct flow specs/);
+  assert.equal(created, 0);
+});
+
 test('workspace template uses observed tools and rejects an unavailable required server', async () => {
   const installed = [];
   const adapter = createFlujoWorkspaceAdapter({ origin: 'http://127.0.0.1:4200', clientFactory: settings => ({
@@ -169,4 +200,14 @@ test('copied FLUJO client sends workspace and fixed conversation identity over H
   const submission = observed.find(item => item.path === '/v1/chat/completions');
   assert.equal(submission.header, 'swarm-worker-http');
   assert.equal(submission.body.metadata.conversationId, 'conversation-http');
+});
+
+test('default template rejects credential fields before workspace mutation', async () => {
+  let created=0;
+  const adapter=createFlujoWorkspaceAdapter({origin:'http://127.0.0.1:4200',clientFactory:settings=>({
+    workspace:settings.workspace,async workspaces(){return [];},async ensureWorkspace(){created++;}
+  })});
+  await assert.rejects(adapter.provision({app:'secret-worker',modelConfig:{id:'installed-model'},
+    environment:{API_KEY:'synthetic-secret'}}),/credential fields/);
+  assert.equal(created,0);
 });
