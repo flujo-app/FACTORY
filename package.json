@@ -27,7 +27,10 @@
   ],
   "exports": {
     ".": "./src/public-sdk.mjs",
-    "./observatory": "./src/observatory-client.mjs"
+    "./observatory": {
+      "types": "./src/observatory-client.d.mts",
+      "default": "./src/observatory-client.mjs"
+    }
   },
   "bin": {
     "factory": "./bin/factory-public.mjs",
