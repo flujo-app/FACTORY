@@ -401,11 +401,11 @@ The `flujo-factory/observatory` package entry has TypeScript declarations for
 the fields the reader validates. Hosts should narrow additional projection
 fields before using them. This is the bridge for showing FACTORY cells and tasks alongside
 FLUJO-WORLD's separate automation map. [FLUJO PR #973](https://github.com/mario-andreschak/FLUJO/pull/973)
-implements a server-side reader of this same HTTP contract for its Wave
-Observatory FACTORY view. It currently implements that narrow reader directly;
-the shared SDK client has now passed Node 22.17 and can replace it in a later
-integration revision. The PR is not yet adopted or connected to a live FACTORY
-source.
+merged into `main` and implements a server-side reader of this same HTTP
+contract for its Wave Observatory FACTORY view. It currently implements that
+narrow reader directly; the shared SDK client passed its public package gate on
+Node 22.17 and 24 and can replace it in a later integration revision. The view
+has not yet been connected to a live FACTORY source.
 
 ```js
 import { createObservatoryClient } from 'flujo-factory/observatory';
