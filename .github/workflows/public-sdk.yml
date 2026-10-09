@@ -38,7 +38,7 @@ jobs:
           import { pathToFileURL } from 'node:url';
           const consumer = process.env.FACTORY_CONSUMER;
           const sdk = await import(pathToFileURL(join(consumer, 'node_modules', 'flujo-factory', 'src', 'public-sdk.mjs')));
-          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology', 'createObservatoryClient', 'liteWorkerCommand']) {
+          for (const name of ['Factory', 'FactoryManagedFleet', 'buildSaviaCasePlan', 'observeSaviaCaseTopology', 'createObservatoryClient', 'liteWorkerCommand', 'startLiteWorker']) {
             assert.equal(typeof sdk[name], 'function', `${name} is missing`);
           }
           const require = createRequire(join(consumer, 'index.mjs'));
@@ -48,6 +48,13 @@ jobs:
           const factory = new sdk.Factory(join(consumer, 'control.sqlite'));
           factory.createSwarm({ mission: 'package smoke', budgetCents: 0, agents: [{ id: 'agent-a' }] });
           assert.equal(factory.status().cells.length, 2);
+          const child = { pid: 7 };
+          let launched;
+          assert.equal(factory.startLiteWorker({ provider: 'claude', spawnImpl(command, args, options) {
+            launched = { command, args, options }; return child;
+          } }), child);
+          assert.equal(launched.command, 'claude');
+          assert.equal(JSON.parse(launched.args[launched.args.indexOf('--mcp-config') + 1]).mcpServers.factory.args[1], factory.database);
           NODE
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-public.mjs" --help
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-lite.mjs" --help

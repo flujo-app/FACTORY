@@ -115,10 +115,17 @@ const factory = new Factory('/tmp/my-factory.sqlite');
 factory.createSwarm({ mission: 'Build an app', budgetCents: 0,
   agents: [{ id: 'builder', role: 'developer' }, { id: 'reviewer', role: 'verifier' }] });
 console.log(factory.status());
+const worker = factory.startLiteWorker({ provider: 'codex', prompt: 'Work on the Factory board' });
+worker.on('exit', code => console.log('lite worker exited:', code));
 ```
 
 The lower-level `FactoryControl` is also exported for the full local controller
-API. Each SDK call closes its database connection before returning.
+API. Each ledger SDK call closes its database connection before returning.
+`startLiteWorker` returns a Node `ChildProcess`; it runs in the caller's current
+directory by default and inherits the terminal. Pass `cwd` or `stdio` to change
+those process options. The standalone `startLiteWorker({provider,database,...})`
+and `liteWorkerCommand({provider,database,...})` are also exported; the latter
+only builds the process specification.
 
 ## FLUJO worker dispatch
 
