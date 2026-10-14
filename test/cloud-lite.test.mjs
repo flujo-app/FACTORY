@@ -86,6 +86,31 @@ test('slow trace durability keeps coordinator health available and sends only th
   } finally { release(); await pending?.catch(() => {}); await coordinator.close(); }
 });
 
+test('a concurrent observer retains controller receipts and resumes its separate trace cursor', async () => {
+  const directory = fresh();
+  const controller = new FactoryCloudLiteFleet({ directory });
+  controller.state = { plan: plan(), machines: [{ id: 'owned-machine' }], operations: {} }; controller.save();
+  const observer = new FactoryCloudLiteFleet({ directory });
+  observer.request = async path => {
+    if (path === '/operator/status') {
+      controller.state.operations.upgrade = { state: 'succeeded', result: { machineId: 'owned-machine' } }; controller.save();
+      return { agents: [], refreshRequested: false };
+    }
+    assert.equal(path, '/operator/events?after=0');
+    return { events: [{ seq: 19, kind: 'turn/started' }] };
+  };
+  await observer.observe();
+  assert.equal(JSON.parse(readFileSync(controller.journalPath, 'utf8')).operations.upgrade.state, 'succeeded');
+  const resumed = new FactoryCloudLiteFleet({ directory });
+  resumed.request = async path => {
+    if (path === '/operator/status') return { agents: [], refreshRequested: false };
+    assert.equal(path, '/operator/events?after=19'); return { events: [] };
+  };
+  await resumed.observe();
+  assert.equal(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').length, 1);
+  assert.equal(JSON.parse(readFileSync(controller.journalPath, 'utf8')).operations.upgrade.state, 'succeeded');
+});
+
 test('agent progress cannot overwrite the SDK-registered native session identity', () => {
   const p = plan(); const credentials = Object.fromEntries(agentInventory(p).map(x => [x.id,secret()]));
   const board = new CloudLiteBoard(join(fresh(),'board.sqlite'),{plan:p,credentials});

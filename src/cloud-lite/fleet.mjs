@@ -201,15 +201,27 @@ export class FactoryCloudLiteFleet {
     return this.snapshot();
   }
   async observe() {
+    // A watcher may run beside a deployment/recovery controller. Its cursor and
+    // observations must never replace that controller's provisioning receipts.
+    const observationPath = join(this.directory, 'observation.json');
+    const retained = existsSync(observationPath) ? JSON.parse(readFileSync(observationPath, 'utf8')) : null;
+    if (retained && retained.runId !== this.state.plan.runId) throw new Error('Observation journal belongs to another fleet.');
     const snapshot = await this.request('/operator/status');
     if (snapshot.refreshRequested) { const auth = await this.auth.refresh(); this.knownSecrets?.push(auth.accessToken); await this.request('/operator/auth', auth); }
-    const report = await this.request(`/operator/events?after=${this.state.traceCursor ?? 0}`);
+    let traceCursor = retained?.traceCursor ?? this.state.traceCursor ?? 0;
+    const report = await this.request(`/operator/events?after=${traceCursor}`);
     if (report.events.length) {
       const fs = await import('node:fs');
       fs.appendFileSync(join(this.directory, 'traces.jsonl'), report.events.map(event => JSON.stringify(event)).join('\n') + '\n', { mode: 0o600 });
-      this.state.traceCursor = report.events.at(-1).seq;
+      traceCursor = report.events.at(-1).seq;
     }
-    this.state.observation = snapshot; this.save(); return snapshot;
+    const temporary = `${observationPath}.${secret()}.next`;
+    const fd = openSync(temporary, 'wx', 0o600);
+    try { writeFileSync(fd, JSON.stringify({ runId: this.state.plan.runId, traceCursor, observation: snapshot })); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(temporary, observationPath);
+    this.state = JSON.parse(readFileSync(this.journalPath, 'utf8'));
+    this.state.traceCursor = traceCursor; this.state.observation = snapshot;
+    return snapshot;
   }
   snapshot() { return structuredClone(this.state); }
   async command(agent, { id, action = 'message', message } = {}) {
