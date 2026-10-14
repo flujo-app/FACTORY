@@ -283,14 +283,14 @@ test('local synthetic hourly arrivals and a separate burst show bounded collecti
   // about 235.92 rows/pass; a separate 15.728s window contained an 880-row
   // burst. Virtual passes model the hour mean and one isolated burst; this is
   // not a live collection capacity qualification.
-  const hourRows = 133183;
+  const initialBacklog = 133183;
   const meanRowsPerPass = 235.92;
   const fixtureRowsPerPass = 236;
   const virtualPassSeconds = 15.728;
   const pageBudget = 5;
   const rowsPerPage = 100;
   const passCapacity = pageBudget * rowsPerPage;
-  const archive = Array.from({ length: 5000 }, (_, index) => ({ seq: index + 1, kind: 'fixture' }));
+  const archive = Array.from({ length: initialBacklog }, (_, index) => ({ seq: index + 1, kind: 'fixture' }));
   const directory = fresh();
   let fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
   let pass = 0;
@@ -310,10 +310,9 @@ test('local synthetic hourly arrivals and a separate burst show bounded collecti
   };
   const first = await fleet.observe({ maxPages: pageBudget });
   assert.equal(first.traceCollection.eventsCollected, passCapacity);
-  assert.equal(first.traceCollection.remainingLag, 4500);
-  assert.equal(first.traceCollection.traceWatermark, 5000);
-  assert.equal(first.traceCollection.observedWatermark, 5000);
-  assert.equal(hourRows, 133183);
+  assert.equal(first.traceCollection.remainingLag, initialBacklog - passCapacity);
+  assert.equal(first.traceCollection.traceWatermark, initialBacklog);
+  assert.equal(first.traceCollection.observedWatermark, initialBacklog);
   assert.ok(Math.abs(meanRowsPerPass / virtualPassSeconds - 15) < 0.00000001);
   assert.ok(passCapacity / virtualPassSeconds > meanRowsPerPass / virtualPassSeconds);
 
@@ -334,12 +333,12 @@ test('local synthetic hourly arrivals and a separate burst show bounded collecti
       return { events: archive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
     };
     const result = await fleet.observe({ maxPages: pageBudget });
-    assert.equal(result.traceCollection.traceWatermark, 5000);
+    assert.equal(result.traceCollection.traceWatermark, initialBacklog);
     assert.equal(result.traceCollection.complete, false);
     assert.equal(result.traceCollection.eventsCollected, passCapacity);
     outstanding.push(archive.length - result.traceCollection.traceCursor);
   }
-  assert.deepEqual(outstanding, [4736, 4472, 4208, 3944, 3680]);
+  assert.deepEqual(outstanding, [132919, 132655, 132391, 132127, 131863]);
   assert.equal(pass, 5);
   assert.equal(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').length, 2500);
 

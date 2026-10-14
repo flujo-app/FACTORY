@@ -193,7 +193,7 @@ export async function runCloudLiteMachine(config) {
               await traces.get(agentId).flush();
               if (revokedStopCommands.has(command.id)) return;
               const acknowledgement = await request('/commands', { acknowledge: command.id }, agent.token);
-              if (!acknowledgement.acknowledged) {
+              if (!acknowledgement.acknowledged || revokedStopCommands.has(command.id)) {
                 revokedStopCommands.add(command.id);
                 return;
               }
