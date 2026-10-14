@@ -51,19 +51,27 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
       if (request.url === '/operator/command' && actor.role === 'operator' && request.method === 'POST') {
         if (!body.id || !board.inventory().some(x => x.id === body.recipient)) throw new Error('Select a known agent and stable command id.');
         if (!['message','stop'].includes(body.action) || body.action === 'message' && typeof body.message !== 'string') throw new Error('Select a stop or text message command.');
+        const original = board.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(body.id);
+        if (original && original.recipient !== body.recipient) throw new Error('Command id belongs to a different recipient.');
         let expectedThreadId = body.expectedThreadId; let expectedTurnId = body.expectedTurnId;
         if (body.action === 'stop' && (expectedThreadId === undefined || expectedTurnId === undefined)) {
-          const native = board.inventory().find(value => value.id === body.recipient)?.nativeRuntime;
-          if (!native) throw new Error('Legacy stop command cannot be bound without a registered native thread.');
-          if (expectedThreadId !== undefined && expectedThreadId !== native.threadId
-            || expectedTurnId !== undefined && expectedTurnId !== (native.turnId ?? null)) throw new Error('Supplied stop target differs from the current native thread/turn.');
-          expectedThreadId = native.threadId; expectedTurnId = native.turnId ?? null;
+          const previous = original && JSON.parse(original.body);
+          if (previous?.action === 'stop' && expectedThreadId === undefined && expectedTurnId === undefined) {
+            // A stable legacy retry keeps its original binding even after the
+            // runtime has observed a later thread or turn.
+            expectedThreadId = previous.expectedThreadId; expectedTurnId = previous.expectedTurnId;
+          } else {
+            const native = board.inventory().find(value => value.id === body.recipient)?.nativeRuntime;
+            if (!native) throw new Error('Legacy stop command cannot be bound without a registered native thread.');
+            if (expectedThreadId !== undefined && expectedThreadId !== native.threadId
+              || expectedTurnId !== undefined && expectedTurnId !== (native.turnId ?? null)) throw new Error('Supplied stop target differs from the current native thread/turn.');
+            expectedThreadId = native.threadId; expectedTurnId = native.turnId ?? null;
+          }
         }
         if (body.action === 'stop' && (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedThreadId ?? '')
           || expectedTurnId !== null && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedTurnId ?? ''))) {
           throw new Error('Stop commands must bind the exact expected native thread and turn.');
         }
-        const original = board.db.prepare('SELECT body FROM cloud_lite_commands WHERE id=?').get(body.id);
         const serialized = JSON.stringify({ action: body.action, message: body.message,
           ...(body.action === 'stop' ? { expectedThreadId, expectedTurnId } : {}) });
         if (original && original.body !== serialized) throw new Error('Command id belongs to different bytes.');
@@ -91,13 +99,14 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
       }
       if (request.url === '/commands' && actor.role !== 'operator') {
         if (body.acknowledge) {
-          const command = board.db.prepare('SELECT body FROM cloud_lite_commands WHERE id=? AND recipient=?').get(body.acknowledge, actor.id);
+          const command = board.db.prepare('SELECT body,acknowledged FROM cloud_lite_commands WHERE id=? AND recipient=?').get(body.acknowledge, actor.id);
           const cancelled = board.db.prepare('SELECT 1 FROM cloud_lite_command_cancellations WHERE command_id=?').get(body.acknowledge);
           if (!command || cancelled) return send(200, { acknowledged: false, cancelled: true });
           if (JSON.parse(command.body).action === 'stop'
             && !board.db.prepare('SELECT 1 FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id=?').get(actor.id, body.acknowledge)) {
             return send(200, { acknowledged: false, cancelled: false, receiptAccepted: false });
           }
+          if (command.acknowledged !== null) return send(200, { acknowledged: true, cancelled: false, receiptAccepted: true });
           const result = board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE id=? AND recipient=? AND acknowledged IS NULL').run(Date.now(), body.acknowledge, actor.id);
           return send(200, { acknowledged: result.changes === 1, cancelled: false, receiptAccepted: true });
         }
