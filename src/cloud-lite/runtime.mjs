@@ -189,6 +189,9 @@ export async function runCloudLiteMachine(config) {
                 expectedThreadId: command.expectedThreadId, expectedTurnId: command.expectedTurnId,
               });
               if (revokedStopCommands.has(command.id)) return;
+              traces.get(agentId).record('supervisor.command', { id: command.id, action: 'stop' });
+              await traces.get(agentId).flush();
+              if (revokedStopCommands.has(command.id)) return;
               const acknowledgement = await request('/commands', { acknowledge: command.id }, agent.token);
               if (!acknowledgement.acknowledged) {
                 revokedStopCommands.add(command.id);
@@ -196,8 +199,6 @@ export async function runCloudLiteMachine(config) {
               }
               stoppedThreads.add(threadId);
               states.set(threadId, { status: 'stopped', completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
-              traces.get(agentId).record('supervisor.command', { id: command.id, action: 'stop' });
-              await traces.get(agentId).flush();
             })().catch(() => {
               rootTrace.record('operator.stop.failed', { agent: agentId, commandId: command.id, category: 'native_stop_unconfirmed' });
               void rootTrace.flush().catch(() => {});

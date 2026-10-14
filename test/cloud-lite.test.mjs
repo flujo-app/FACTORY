@@ -179,6 +179,35 @@ test('observer drains only a bounded fixed watermark and resumes from its durabl
   assert.equal(requests.at(-1), '/operator/events?after=205&through=210');
 });
 
+test('observer lag measures source sequence distance, not missing SQL row count', async () => {
+  const directory = fresh();
+  let fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  const archive = [
+    ...Array.from({ length: 100 }, (_, index) => ({ seq: index + 1, kind: 'fixture' })),
+    { seq: 1000, kind: 'after-sequence-gap' },
+  ];
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: 1000, agents: [], refreshRequested: false };
+    const query = new URL(path, 'http://localhost').searchParams;
+    const after = Number(query.get('after')); const through = Number(query.get('through'));
+    return { events: archive.filter(event => event.seq > after && event.seq <= through).slice(0, 100) };
+  };
+  const first = await fleet.observe({ maxPages: 1 });
+  assert.equal(first.traceCollection.traceCursor, 100);
+  assert.equal(first.traceCollection.eventsCollected, 100);
+  assert.equal(first.traceCollection.remainingLag, 900);
+  fleet = new FactoryCloudLiteFleet({ directory });
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: 1000, agents: [], refreshRequested: false };
+    return { events: [{ seq: 1000, kind: 'after-sequence-gap' }] };
+  };
+  const resumed = await fleet.observe({ maxPages: 1 });
+  assert.equal(resumed.traceCollection.traceCursor, 1000);
+  assert.equal(resumed.traceCollection.eventsCollected, 1);
+  assert.equal(resumed.traceCollection.complete, true);
+  assert.equal(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').length, 101);
+});
+
 test('observer reconciles a durable page append after a cursor-write interruption without duplicates', async () => {
   const directory = fresh();
   const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
@@ -348,6 +377,31 @@ test('local synthetic hourly arrivals and a separate burst show bounded collecti
   assert.equal(overload.traceCollection.traceWatermark, 2116);
   assert.equal(overload.traceCollection.eventsCollected, passCapacity);
   assert.equal(overload.traceCollection.observedLag, 616);
+
+  // Combine the 880-row burst with the observed maximum event body. Four such
+  // rows fit below the 512 KiB page cap; the fifth must wait for another page.
+  const byteDir = fresh();
+  let byteFleet = new FactoryCloudLiteFleet({ directory: byteDir });
+  byteFleet.state = { plan: plan(), machines: [], operations: {} }; byteFleet.save();
+  const maxBody = 'x'.repeat(129258);
+  const byteArchive = Array.from({ length: 880 }, (_, index) => ({ seq: index + 1, kind: 'burst-max-body', body: maxBody }));
+  byteFleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: byteArchive.at(-1).seq, agents: [], refreshRequested: false };
+    const query = new URL(path, 'http://localhost').searchParams;
+    const after = Number(query.get('after')); const through = Number(query.get('through'));
+    const page = []; let bytes = 0;
+    for (const event of byteArchive.filter(item => item.seq > after && item.seq <= through).slice(0, rowsPerPage)) {
+      const size = Buffer.byteLength(JSON.stringify(event));
+      if (bytes + size > 512 * 1024) break;
+      page.push(event); bytes += size;
+    }
+    return { events: page };
+  };
+  const byteBounded = await byteFleet.observe({ maxPages: pageBudget });
+  assert.equal(byteBounded.traceCollection.pages, pageBudget);
+  assert.equal(byteBounded.traceCollection.eventsCollected, 20);
+  assert.equal(byteBounded.traceCollection.complete, false);
+  assert.equal(byteBounded.traceCollection.remainingLag, 860);
 });
 
 test('observer handles requested auth refresh before malformed archive metadata', async () => {
@@ -579,6 +633,8 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     } }] }, credentials[actor.id]);
     assert.equal(nextReceipt.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt.commandId, nextStopId);
+    const acknowledgedStop = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
+    assert.deepEqual(await acknowledgedStop.json(), { acknowledged: true, cancelled: false, receiptAccepted: true });
     const message = await post('/operator/command', { id: 'message-only', recipient: actor.id, action: 'message', message: 'continue' });
     assert.equal(message.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
@@ -821,17 +877,20 @@ test('a new stop supersedes older work but replaying that stop preserves a later
   };
   try {
     await request('/operator/command', { id: 'old-work', recipient: 'm0-a0', action: 'message', message: 'Review PR' });
+    await request('/operator/command', { id: 'old-work-2', recipient: 'm0-a0', action: 'message', message: 'Check linked issue' });
     const stop = { id: 'stop-work', recipient: 'm0-a0', action: 'stop',
       expectedThreadId: '01a13928-1da9-76a1-0a6e-af0c060ec3a4', expectedTurnId: '01a13929-1da9-76a1-0a6e-af0c060ec3a4' };
     await request('/operator/command', stop);
     let inbox = await request('/commands', {}, credentials['m0-a0']); assert.deepEqual(inbox.commands.map(command => command.id), ['stop-work']);
     assert.equal(inbox.commands[0].expectedThreadId, stop.expectedThreadId); assert.equal(inbox.commands[0].expectedTurnId, stop.expectedTurnId);
     assert.equal(coordinator.board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get('old-work').superseded_by, 'stop-work');
+    assert.equal(coordinator.board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get('old-work-2').superseded_by, 'stop-work');
     const unprovenAck = await request('/commands', { acknowledge: 'stop-work' }, credentials['m0-a0']);
     assert.deepEqual(unprovenAck, { acknowledged: false, cancelled: false, receiptAccepted: false });
     await request('/operator/command', { id: 'new-work', recipient: 'm0-a0', action: 'message', message: 'Resume review' });
+    await request('/operator/command', { id: 'new-work-2', recipient: 'm0-a0', action: 'message', message: 'Inspect latest comment' });
     await request('/operator/command', stop);
-    inbox = await request('/commands', {}, credentials['m0-a0']); assert.deepEqual(inbox.commands.map(command => command.id), ['new-work']);
+    inbox = await request('/commands', {}, credentials['m0-a0']); assert.deepEqual(inbox.commands.map(command => command.id), ['new-work', 'new-work-2']);
     assert.equal(coordinator.board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get('stop-work').superseded_by, 'new-work');
   } finally { await coordinator.close(); }
 });

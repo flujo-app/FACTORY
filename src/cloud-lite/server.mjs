@@ -74,13 +74,15 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
           // Retrying an existing stable id never cancels newer work.
           if (!original) {
             const cancelled = Date.now();
+            const newAction = JSON.parse(serialized).action;
             const prior = board.db.prepare('SELECT id,body,acknowledged FROM cloud_lite_commands WHERE recipient=?').all(body.recipient);
             for (const command of prior) {
-              if (command.acknowledged !== null && JSON.parse(command.body).action !== 'stop') continue;
+              const priorAction = JSON.parse(command.body).action;
+              if (newAction === 'stop' ? command.acknowledged !== null : priorAction !== 'stop') continue;
               board.db.prepare('INSERT OR IGNORE INTO cloud_lite_command_cancellations VALUES(?,?,?)').run(command.id, body.id, cancelled);
             }
             board.db.prepare('DELETE FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id IN (SELECT command_id FROM cloud_lite_command_cancellations WHERE superseded_by=?)').run(body.recipient, body.id);
-            board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE recipient=? AND acknowledged IS NULL').run(cancelled, body.recipient);
+            board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE id IN (SELECT command_id FROM cloud_lite_command_cancellations WHERE superseded_by=?) AND acknowledged IS NULL').run(cancelled, body.id);
           }
           board.db.prepare('INSERT OR IGNORE INTO cloud_lite_commands VALUES(?,?,?,NULL)').run(body.id, body.recipient, serialized);
           board.db.exec('COMMIT');
@@ -99,7 +101,7 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
           const result = board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE id=? AND recipient=? AND acknowledged IS NULL').run(Date.now(), body.acknowledge, actor.id);
           return send(200, { acknowledged: result.changes === 1, cancelled: false, receiptAccepted: true });
         }
-        return send(200, { commands: board.db.prepare('SELECT id,body FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL').all(actor.id).map(x => ({ id: x.id, ...JSON.parse(x.body) })),
+        return send(200, { commands: board.db.prepare('SELECT id,body FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL ORDER BY rowid').all(actor.id).map(x => ({ id: x.id, ...JSON.parse(x.body) })),
           inboxVersion: board.db.prepare('SELECT count(*) AS count FROM messages WHERE recipient=?').get(actor.id).count });
       }
       if (request.url === '/trace' && actor.role !== 'operator' && request.method === 'POST') return send(200, board.trace(actor, body.events));
