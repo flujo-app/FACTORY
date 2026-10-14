@@ -317,17 +317,50 @@ test('native lifecycle status is separate from agent checkpoint and strips failu
     board.trace(actor, [{ seq: 3, kind: 'turn/completed', body: { threadId, turn: { id: turnId, status: 'failed', error: {
       code: -32000, message: 'never persist this private provider error',
     } } } }]);
+    board.trace(actor, [{ seq: 4, kind: 'thread/status/changed', body: { threadId, status: { type: 'idle' } } }]);
     board.trace(actor, [{ seq: 2, kind: 'turn/started', body: { threadId, turn: { id: turnId, status: 'inProgress' } } }]);
     const agent = board.snapshot().agents.find(value => value.id === actor.id);
     assert.equal(agent.status, 'reviewing');
     assert.equal(agent.session, threadId);
-    assert.deepEqual(agent.nativeRuntime, { threadId, eventSequence: 3, threadLifecycle: 'started', threadStatus: 'active', turnId,
+    assert.deepEqual(agent.nativeRuntime, { threadId, eventSequence: 4, threadLifecycle: 'started', threadStatus: 'idle', turnId,
       turnStatus: 'failed', failure: { category: 'turn_failed', errorCode: -32000 }, updated: agent.nativeRuntime.updated });
     assert.doesNotMatch(JSON.stringify(agent.nativeRuntime), /private provider error/);
-    board.trace(actor, [{ seq: 4, kind: 'turn/started', body: { threadId: '01a1390d-1da9-76a1-0a6e-af0c060ec3a5', turn: { id: turnId } } }]);
-    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.eventSequence, 3);
+    board.trace(actor, [{ seq: 5, kind: 'turn/started', body: { threadId: '01a1390d-1da9-76a1-0a6e-af0c060ec3a5', turn: { id: turnId } } }]);
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.eventSequence, 4);
     board.registerSession(actor.id, '01a1390f-1da9-76a1-0a6e-af0c060ec3a4');
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime, null);
+  } finally { board.close(); }
+});
+
+test('native turn projection keeps the active turn across a late prior completion and records terminal-only identity', () => {
+  const p = plan(); const credentials = Object.fromEntries(agentInventory(p).map(x => [x.id, secret()]));
+  const board = new CloudLiteBoard(join(fresh(), 'board.sqlite'), { plan: p, credentials });
+  try {
+    const actor = board.authenticate(credentials['m0-a2']);
+    const threadId = '01a13911-1da9-76a1-0a6e-af0c060ec3a4';
+    const turnA = '01a13912-1da9-76a1-0a6e-af0c060ec3a4';
+    const turnB = '01a13913-1da9-76a1-0a6e-af0c060ec3a4';
+    board.registerSession(actor.id, threadId);
+    board.trace(actor, [{ seq: 1, kind: 'native.turn.started', body: { threadId, turn: { id: turnA } } }]);
+    board.trace(actor, [{ seq: 2, kind: 'native.turn.started', body: { threadId, turn: { id: turnB } } }]);
+    board.trace(actor, [{ seq: 3, kind: 'native.turn.completed', body: { threadId, turn: { id: turnA, status: 'failed', error: { code: -32000 } } } }]);
+    let native = board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime;
+    assert.equal(native.eventSequence, 2); assert.equal(native.turnId, turnB); assert.equal(native.turnStatus, 'inProgress');
+    assert.equal(native.failure, undefined);
+    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=3').get(actor.id).n, 1);
+    board.trace(actor, [{ seq: 4, kind: 'native.turn.completed', body: { threadId, turn: { id: turnB, status: 'completed' } } }]);
+    native = board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime;
+    assert.equal(native.eventSequence, 4); assert.equal(native.turnId, turnB); assert.equal(native.turnStatus, 'completed');
+
+    const terminalActor = board.authenticate(credentials['m0-a3']);
+    const terminalThread = '01a13914-1da9-76a1-0a6e-af0c060ec3a4';
+    const terminalTurn = '01a13915-1da9-76a1-0a6e-af0c060ec3a4';
+    board.registerSession(terminalActor.id, terminalThread);
+    board.trace(terminalActor, [{ seq: 1, kind: 'native.turn.completed', body: { threadId: terminalThread,
+      turn: { id: terminalTurn, status: 'failed', error: { code: -32000 } } } }]);
+    const terminal = board.snapshot().agents.find(value => value.id === terminalActor.id).nativeRuntime;
+    assert.equal(terminal.turnId, terminalTurn); assert.equal(terminal.turnStatus, 'failed');
+    assert.deepEqual(terminal.failure, { category: 'turn_failed', errorCode: -32000 });
   } finally { board.close(); }
 });
 

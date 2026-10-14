@@ -1,6 +1,17 @@
 import { FactoryControl } from '../control.mjs';
 import { agentInventory, canMessage, hash, redact } from './protocol.mjs';
 
+function decodeNativeFailure(value) {
+  let failure = value;
+  for (let attempt = 0; typeof failure === 'string' && attempt < 2; attempt++) {
+    try { failure = JSON.parse(failure); } catch { return null; }
+  }
+  if (!failure || typeof failure !== 'object' || Array.isArray(failure)
+    || !['turn_failed','turn_interrupted'].includes(failure.category)) return null;
+  return { category: failure.category,
+    ...(Number.isSafeInteger(failure.errorCode) && Math.abs(failure.errorCode) <= 1000000 ? { errorCode: failure.errorCode } : {}) };
+}
+
 export class CloudLiteBoard {
   constructor(database, { plan, credentials, operatorToken } = {}) {
     this.control = new FactoryControl(database);
@@ -102,11 +113,14 @@ export class CloudLiteBoard {
     const old = this.db.prepare('SELECT * FROM cloud_lite_native_runtime WHERE agent_id=?').get(actor.id);
     if (old && old.thread_id === threadId && old.event_seq >= eventSequence) return { recorded: false, stale: true };
     const sameThread = old?.thread_id === threadId;
+    if (event === 'turn.completed' && sameThread && old.turn_id && old.turn_status === 'inProgress'
+      && turnId && turnId !== old.turn_id) return { recorded: false, staleTurn: true };
     const nextLifecycle = event === 'thread.started' ? 'started' : event === 'thread.resumed' ? 'resumed' : sameThread ? old.thread_lifecycle : 'observed';
     const nextThreadStatus = threadStatus ?? (sameThread ? old.thread_status : null);
-    const nextTurnId = event === 'turn.started' ? turnId ?? null : sameThread ? old.turn_id : null;
+    const nextTurnId = event === 'turn.started' ? turnId ?? null : event === 'turn.completed' && turnId ? turnId : sameThread ? old.turn_id : null;
     const nextTurnStatus = event === 'turn.started' ? turnStatus ?? 'inProgress' : turnStatus ?? (sameThread ? old.turn_status : null);
-    const nextFailure = event === 'turn.started' ? null : safeFailure ?? (sameThread && event !== 'turn.completed' ? old.failure : null);
+    const priorFailure = sameThread ? decodeNativeFailure(old.failure) : null;
+    const nextFailure = event === 'turn.started' ? null : event === 'turn.completed' ? safeFailure : safeFailure ?? priorFailure;
     this.db.prepare(`INSERT INTO cloud_lite_native_runtime(agent_id,thread_id,event_seq,thread_lifecycle,thread_status,turn_id,turn_status,failure,updated)
       VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET thread_id=excluded.thread_id,event_seq=excluded.event_seq,
       thread_lifecycle=excluded.thread_lifecycle,thread_status=excluded.thread_status,turn_id=excluded.turn_id,
