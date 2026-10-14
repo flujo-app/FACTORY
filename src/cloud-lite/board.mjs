@@ -132,7 +132,8 @@ export class CloudLiteBoard {
     const nextTurnStatus = event === 'turn.started' ? turnStatus ?? 'inProgress' : turnStatus ?? (sameThread ? old.turn_status : null);
     const priorFailure = sameThread ? decodeNativeFailure(old.failure) : null;
     const nextFailure = event === 'turn.started' ? null : event === 'turn.completed' ? safeFailure : safeFailure ?? priorFailure;
-    if (event === 'thread.started' || event === 'thread.resumed' || event === 'turn.started') {
+    if (event === 'thread.started' || event === 'thread.resumed' || event === 'turn.started'
+      || event === 'thread.status' && threadStatus === 'active') {
       this.db.prepare('DELETE FROM cloud_lite_native_stop_receipts WHERE agent_id=?').run(actor.id);
     }
     this.db.prepare(`INSERT INTO cloud_lite_native_runtime(agent_id,thread_id,event_seq,thread_lifecycle,thread_status,turn_id,turn_status,failure,updated)
@@ -227,6 +228,9 @@ export class CloudLiteBoard {
     if (!issued || issued.recipient !== actor.id || command?.action !== 'stop'
       || command.expectedThreadId !== expectedThreadId || command.expectedTurnId !== expectedTurnId) {
       throw new Error('Native stop receipt does not match an issued stop command for this agent and target.');
+    }
+    if (this.db.prepare('SELECT 1 FROM cloud_lite_command_cancellations WHERE command_id=?').get(commandId)) {
+      throw new Error('Native stop receipt belongs to a superseded command.');
     }
     const native = this.db.prepare('SELECT * FROM cloud_lite_native_runtime WHERE agent_id=?').get(actor.id);
     if (!native || native.thread_id !== threadId || native.thread_status !== threadStatus || native.turn_status === 'inProgress') throw new Error('Native stop receipt is stale or the thread remains active.');

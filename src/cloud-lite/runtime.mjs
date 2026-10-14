@@ -79,7 +79,8 @@ export async function runCloudLiteMachine(config) {
     const threadId = value.params?.threadId ?? value.params?.thread?.id;
     const agent = threadAgents.get(threadId) ?? rootId;
     traces.get(agent).record(value.method, value.params ?? {});
-    if (value.method === 'thread/started' || value.method === 'thread/resumed') stopControllers.get(threadId)?.invalidateReceipts();
+    if (value.method === 'thread/started' || value.method === 'thread/resumed'
+      || value.method === 'thread/status/changed' && value.params?.status?.type === 'active') stopControllers.get(threadId)?.invalidateReceipts();
     const turn = value.params?.turn ?? {};
     const turnId = turn.id ?? turns.get(threadId);
     if (value.method === 'turn/started') {

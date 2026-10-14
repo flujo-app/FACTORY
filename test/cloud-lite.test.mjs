@@ -470,6 +470,14 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     assert.equal(agent.status, 'pending');
     assert.deepEqual(agent.nativeRuntime.operatorStopReceipt,
       { commandId, threadId, turnId, threadStatus: 'idle', turnStatus: 'interrupted', eventSequence: 5, updated: agent.nativeRuntime.operatorStopReceipt.updated });
+    const nextStopId = 'quiesce-run-b-m0-a2';
+    const nextStop = await post('/operator/command', { id: nextStopId, recipient: actor.id, action: 'stop', expectedThreadId: threadId, expectedTurnId: turnId });
+    assert.equal(nextStop.status, 200);
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
+    const cancelledReceipt = await post('/trace', { events: [{ seq: 6, kind: 'native.operator.stop.completed', body: {
+      commandId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
+    } }] }, credentials[actor.id]);
+    assert.equal(cancelledReceipt.status, 400);
     const message = await post('/operator/command', { id: 'message-only', recipient: actor.id, action: 'message', message: 'continue' });
     assert.equal(message.status, 200);
     const forged = await post('/trace', { events: [{ seq: 6, kind: 'native.operator.stop.completed', body: {
