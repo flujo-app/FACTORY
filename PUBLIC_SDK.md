@@ -243,8 +243,21 @@ older queued messages, with separate cancellation receipts; retrying its id
 preserves later explicit messages. `collect()` quiesces the pool, copies all
 worker data, makes consistent SQLite backups, and downloads archives with
 verified SHA-256 digests and file manifests. Each Machine retains its collection
-job receipt; observation timeouts do not launch another copy. A failed or missing
+job receipt; incomplete JSONL tails are preserved separately as raw bytes.
+Observation timeouts do not launch another copy. A failed or missing
 job requires inspection before an explicit new `attempt` identity is selected.
+Transfers report captured bytes, accept `transferTimeoutMs`, and retain partial
+downloads. Repeating the same capture attempt observes its original remote job
+and uses a fresh destination for an incomplete download.
+`includeGitObjects: false` omits cloned Git object stores while retaining current
+source files, Git metadata, native histories, traces and test evidence. Select a
+new capture `attempt` when changing this setting; full Git history is included
+by default.
+Identical files with matching permissions share snapshot hard links, so repeated
+worktree assets occupy one archive entry while every original path is retained.
+`machineIds` selects original owned Machines for recovery of an incomplete
+collection. Previously verified archives are retained; the returned `complete`
+flag is true only when all original Machines have collected receipts.
 Dependency caches, `.next` output and `auth.json` are omitted. Archives remain
 private because native histories and worktrees can contain confidential source.
 `retire()` verifies the original Machine and volume inventory before destroying

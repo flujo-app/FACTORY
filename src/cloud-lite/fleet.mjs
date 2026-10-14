@@ -7,6 +7,7 @@ import { loadFlujoCloudInfrastructure } from './upstream.mjs';
 import { fileURLToPath } from 'node:url';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { statSync } from 'node:fs';
 
 /** Only this native host owns managed refresh; remote harnesses receive external access tokens. */
 export class CodexSubscriptionBroker {
@@ -266,18 +267,22 @@ export class FactoryCloudLiteFleet {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
-  async collect({ attempt = 'default', concurrency = 3 } = {}) {
+  async collect({ attempt = 'default', concurrency = 3, transferTimeoutMs = 7200000, includeGitObjects = true, machineIds } = {}) {
     if (!/^[a-z0-9-]{3,32}$/.test(attempt)) throw new Error('Select a stable collection attempt identity.');
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 10) throw new Error('Select 1 to 10 simultaneous Machine collections.');
+    if (!Number.isSafeInteger(transferTimeoutMs) || transferTimeoutMs < 30000) throw new Error('Select a transfer timeout of at least 30 seconds.');
+    if (typeof includeGitObjects !== 'boolean') throw new Error('Select whether to include Git object stores.');
+    const selected = machineIds === undefined ? this.state.machines : this.state.machines.filter(machine => machineIds.includes(machine.id));
+    if (machineIds !== undefined && (!Array.isArray(machineIds) || !machineIds.length || new Set(machineIds).size !== machineIds.length || selected.length !== machineIds.length)) throw new Error('Select original journal-owned Machine identities.');
     await this.quiesce({ attempt: `collection-${attempt}` });
     const artifacts = join(this.directory, 'artifacts'); mkdirSync(artifacts, { recursive: true, mode: 0o700 });
     const collector = readFileSync(fileURLToPath(new URL('./collect.mjs', import.meta.url))).toString('base64');
-    const receipts = []; const failures = []; let next = 0;
+    const receipts = [...(this.state.artifacts ?? [])].filter(receipt => !selected.some(machine => machine.id === receipt.machineId)); const failures = []; let next = 0;
     const capture = async machine => {
       this.event('artifacts.started', { machineId: machine.id });
       const job = `/data/factory/collection-${this.state.plan.runId}-${attempt}.json`;
-      const worker = `import {writeFileSync,renameSync} from 'node:fs'; const save=value=>{writeFileSync('${job}.next',JSON.stringify(value),{mode:384});renameSync('${job}.next','${job}');}; try {const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,${collector}'); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}'});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
-      const launch = `const fs=require('node:fs'); const job='${job}'; if(fs.existsSync(job)){console.log(fs.readFileSync(job,'utf8'));}else{fs.writeFileSync(job,JSON.stringify({state:'preparing'}),{flag:'wx',mode:384});const out=fs.openSync(job+'.log','a',384);const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',Buffer.from('${Buffer.from(worker).toString('base64')}','base64').toString()],{detached:true,stdio:['ignore',out,out]});fs.writeFileSync(job,JSON.stringify({state:'running',pid:child.pid}),{mode:384});child.unref();fs.closeSync(out);console.log(fs.readFileSync(job,'utf8'));}`;
+      const worker = `import {writeFileSync,renameSync} from 'node:fs'; const save=value=>{writeFileSync('${job}.next',JSON.stringify({...value,includeGitObjects:${includeGitObjects}}),{mode:384});renameSync('${job}.next','${job}');}; try {const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,${collector}'); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}',includeGitObjects:${includeGitObjects}});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
+      const launch = `const fs=require('node:fs'); const job='${job}'; if(fs.existsSync(job)){console.log(fs.readFileSync(job,'utf8'));}else{fs.writeFileSync(job,JSON.stringify({state:'preparing',includeGitObjects:${includeGitObjects}}),{flag:'wx',mode:384});const out=fs.openSync(job+'.log','a',384);const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',Buffer.from('${Buffer.from(worker).toString('base64')}','base64').toString()],{detached:true,stdio:['ignore',out,out]});fs.writeFileSync(job,JSON.stringify({state:'running',pid:child.pid,includeGitObjects:${includeGitObjects}}),{mode:384});child.unref();fs.closeSync(out);console.log(fs.readFileSync(job,'utf8'));}`;
       // Dispatch only a durable detached job; Fly exec's observation timeout
       // must never be interpreted as permission to start another copy.
       try { await this.fly(['machine','exec',machine.id,`node -e "eval(Buffer.from('${Buffer.from(launch).toString('base64')}','base64').toString())"`,'--app',this.state.plan.app,'--timeout','30']); }
@@ -293,6 +298,7 @@ export class FactoryCloudLiteFleet {
           await new Promise(resolve => setTimeout(resolve, 30000)); continue;
         }
         const state = JSON.parse(raw.trim().split('\n').findLast(line => line.startsWith('{')));
+        if ((state.includeGitObjects ?? true) !== includeGitObjects) throw new Error('Original collection content differs; select a new explicit capture attempt.');
         if (state.state === 'completed') { receipt = state; break; }
         if (state.state !== 'running') throw new Error(`Original collection job is ${state.state}; inspect ${job} before selecting another attempt.`);
         this.event('artifacts.pending',{machineId:machine.id,job,pid:state.pid});
@@ -300,20 +306,30 @@ export class FactoryCloudLiteFleet {
       }
       this.event('artifacts.snapshot', { machineId: machine.id, ...receipt });
       const remote = receipt.archive;
-      const destination = join(artifacts, `${machine.id}-${attempt}.tgz`);
-      if (!existsSync(destination)) await this.fly(['ssh', 'sftp', 'get', remote, destination, '--app', this.state.plan.app, '--machine', machine.id, '--quiet'], { timeoutMs: 600000 });
+      let destination = join(artifacts, `${machine.id}-${attempt}.tgz`);
+      if (existsSync(destination) && statSync(destination).size !== receipt.bytes) {
+        this.state.partialDownloads = [...(this.state.partialDownloads ?? []), { machineId: machine.id, file: destination, bytes: statSync(destination).size, expectedBytes: receipt.bytes }];
+        this.save(); destination = join(artifacts, `${machine.id}-${attempt}-${secret()}.tgz`);
+      }
+      if (!existsSync(destination)) {
+        this.event('artifacts.transfer_started', { machineId: machine.id, file: destination, expectedBytes: receipt.bytes });
+        const progress = setInterval(() => this.event('artifacts.transfer_progress', { machineId: machine.id, bytes: existsSync(destination) ? statSync(destination).size : 0, expectedBytes: receipt.bytes }), 30000);
+        try { await this.fly(['ssh', 'sftp', 'get', remote, destination, '--app', this.state.plan.app, '--machine', machine.id, '--quiet'], { timeoutMs: transferTimeoutMs }); }
+        finally { clearInterval(progress); }
+      }
       const digest = createHash('sha256'); for await (const bytes of createReadStream(destination)) digest.update(bytes);
       if (digest.digest('hex') !== receipt.sha256) throw new Error('Downloaded evidence differs from the original Machine archive.');
       receipts.push({ ...receipt, machineId: machine.id, file: destination });
       this.state.artifacts = receipts; this.save(); this.event('artifacts.collected', receipts.at(-1));
     };
-    await Promise.all(Array.from({ length: Math.min(concurrency, this.state.machines.length) }, async () => {
-      for (;;) { const machine = this.state.machines[next++]; if (!machine) return;
-        try { await capture(machine); } catch (error) { failures.push({ machineId: machine.id, error: error.message }); }
+    await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, async () => {
+      for (;;) { const machine = selected[next++]; if (!machine) return;
+        try { await capture(machine); } catch (error) { const failure = { machineId: machine.id, error: error.message }; failures.push(failure); this.event('artifacts.failed', failure); }
       }
     }));
     if (failures.length) throw new Error(`Evidence collection incomplete: ${JSON.stringify(failures)}. Keep the original jobs and volumes.`);
-    this.state.artifactsCollectedAt = new Date().toISOString(); this.save(); return { directory: artifacts };
+    const complete = this.state.machines.every(machine => receipts.some(receipt => receipt.machineId === machine.id));
+    if (complete) this.state.artifactsCollectedAt = new Date().toISOString(); this.save(); return { directory: artifacts, complete, collected: receipts.length, expected: this.state.machines.length };
   }
   async stop() {
     for (const machine of [...this.state.machines].reverse()) await this.stage(`${machine.id}.stop`, async () => {

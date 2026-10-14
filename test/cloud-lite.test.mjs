@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CloudLiteBoard } from '../src/cloud-lite/board.mjs';
-import { validateCloudLitePlan, agentInventory, machineConfig, redact, secret } from '../src/cloud-lite/protocol.mjs';
+import { validateCloudLitePlan, agentInventory, machineConfig, redact, secret, hash } from '../src/cloud-lite/protocol.mjs';
 import { FactoryCloudLiteFleet } from '../src/cloud-lite/fleet.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { CloudLiteTrace } from '../src/cloud-lite/trace.mjs';
@@ -131,21 +131,35 @@ test('authenticated HTTP board binds sender independently of client input', asyn
 test('evidence collection includes independent evidence roots and consistent WAL database content', async () => {
   const root = fresh(); const evidence = join(root, 'm8-evidence'); mkdirSync(evidence);
   writeFileSync(join(evidence, 'result.json'), '{"tests":54}');
+  writeFileSync(join(evidence, 'duplicate-a'), 'identical-owned-evidence'); writeFileSync(join(evidence, 'duplicate-b'), 'identical-owned-evidence');
   writeFileSync(join(evidence, 'trace.jsonl'), '{"seq":1}\n{"seq":');
   mkdirSync(join(root, 'node_modules')); writeFileSync(join(root, 'node_modules', 'cache'), 'disposable');
+  mkdirSync(join(root, 'repository', '.git', 'objects'), { recursive: true });
+  writeFileSync(join(root, 'repository', '.git', 'HEAD'), 'public-source-revision'); writeFileSync(join(root, 'repository', '.git', 'objects', 'upstream-object'), 'cloned-history');
   writeFileSync(join(root, 'auth.json'), 'private-credential');
   const database = new DatabaseSync(join(root, 'board.sqlite'));
   database.exec('PRAGMA journal_mode=WAL; CREATE TABLE evidence(result TEXT); INSERT INTO evidence VALUES(\'passed\');');
   try {
     const destination = join(root, '.factory-export-test');
-    const receipt = await collectCloudLiteSnapshot({ root, runId: 'lite-test', destination });
+    const receipt = await collectCloudLiteSnapshot({ root, runId: 'lite-test', destination, includeGitObjects: false });
     assert.equal(receipt.sqliteBackups, 1); assert.equal(existsSync(receipt.archive), true);
+    assert.ok(receipt.hardLinkedFiles > 0);
+    assert.equal(statSync(join(destination, 'snapshot', 'm8-evidence', 'duplicate-a')).ino, statSync(join(destination, 'snapshot', 'm8-evidence', 'duplicate-b')).ino);
     assert.equal(readFileSync(join(destination, 'snapshot', 'm8-evidence', 'trace.jsonl'), 'utf8'), '{"seq":1}\n');
+    const manifest = JSON.parse(readFileSync(join(destination, 'manifest.json')));
+    const fragment = manifest.files.find(file => file.preservedFrom === join('m8-evidence', 'trace.jsonl'));
+    assert.equal(readFileSync(join(destination, 'snapshot', fragment.path), 'utf8'), '{"seq":');
     const retained = new DatabaseSync(join(destination, 'snapshot', 'board.sqlite'), { readOnly: true });
     try { assert.equal(retained.prepare('SELECT result FROM evidence').get().result, 'passed'); } finally { retained.close(); }
     assert.equal(existsSync(join(destination, 'snapshot', 'node_modules')), false);
     assert.equal(existsSync(join(destination, 'snapshot', 'auth.json')), false);
+    assert.equal(existsSync(join(destination, 'snapshot', 'repository', '.git', 'objects')), false);
+    assert.equal(readFileSync(join(destination, 'snapshot', 'repository', '.git', 'HEAD'), 'utf8'), 'public-source-revision');
     assert.equal(readFileSync(join(destination, 'snapshot', 'm8-evidence', 'result.json'), 'utf8'), '{"tests":54}');
+    const firstArchive = readFileSync(receipt.archive);
+    const second = await collectCloudLiteSnapshot({ root, runId: 'lite-test', includeGitObjects: false });
+    assert.notEqual(second.archive, receipt.archive);
+    assert.deepEqual(readFileSync(receipt.archive), firstArchive);
   } finally { database.close(); }
 });
 
@@ -180,4 +194,39 @@ test('retirement refuses an app containing a Machine absent from the original fl
   } });
   fleet.state = { plan: plan(), machines: [original], operations: {} }; fleet.save();
   await assert.rejects(fleet.retire(), /exact original Machine and volume inventory/); assert.equal(destroyed, false);
+});
+
+test('an incomplete download is retained while a new destination receives verified archive bytes', async () => {
+  const directory = fresh(); mkdirSync(join(directory, 'artifacts'));
+  const partial = join(directory, 'artifacts', 'original-default.tgz'); writeFileSync(partial, 'partial');
+  const originalBytes = readFileSync(partial); const archive = Buffer.from('complete-private-evidence');
+  const receipt = { state: 'completed', archive: '/data/evidence.tgz', bytes: archive.length, sha256: hash(archive) };
+  const fleet = new FactoryCloudLiteFleet({ directory, execute: async (_command, args) => {
+    if (args[0] === 'machine') return JSON.stringify(receipt);
+    assert.deepEqual(args.slice(0, 3), ['ssh', 'sftp', 'get']); writeFileSync(args[4], archive); return '';
+  } });
+  fleet.state = { plan: { ...plan(), machines: 1 }, machines: [{ id: 'original' }], operations: {} }; fleet.save();
+  fleet.quiesce = async () => ({ agents: 10 });
+  await fleet.collect({ concurrency: 1 });
+  assert.deepEqual(readFileSync(partial), originalBytes);
+  assert.notEqual(fleet.state.artifacts[0].file, partial);
+  assert.deepEqual(readFileSync(fleet.state.artifacts[0].file), archive);
+  assert.equal(fleet.state.partialDownloads[0].file, partial);
+});
+
+test('selective collection retains verified peers and distinguishes partial from full collection', async () => {
+  const directory = fresh(); const archive = Buffer.from('one-machine-evidence');
+  const providerReceipt = { state: 'completed', archive: '/data/evidence.tgz', bytes: archive.length, sha256: hash(archive) };
+  const fleet = new FactoryCloudLiteFleet({ directory, execute: async (_command, args) => {
+    if (args[0] === 'machine') return JSON.stringify(providerReceipt);
+    writeFileSync(args[4], archive); return '';
+  } });
+  fleet.state = { plan: { ...plan(), machines: 2 }, machines: [{ id: 'first' }, { id: 'second' }], operations: {} }; fleet.save();
+  fleet.quiesce = async () => ({ agents: 20 });
+  const partial = await fleet.collect({ machineIds: ['first'], concurrency: 1 });
+  assert.equal(partial.complete, false); assert.equal(partial.collected, 1); assert.equal(fleet.state.artifactsCollectedAt, undefined);
+  const first = fleet.state.artifacts[0];
+  const full = await fleet.collect({ machineIds: ['second'], concurrency: 1 });
+  assert.equal(full.complete, true); assert.equal(full.collected, 2); assert.ok(fleet.state.artifacts.some(receipt => receipt.file === first.file));
+  assert.deepEqual(readFileSync(first.file), archive);
 });
