@@ -1,7 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, constants, openSync, fsyncSync, closeSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { freemem, totalmem, loadavg } from 'node:os';
 import { CodexRpc } from './rpc.mjs';
 import { startCloudLiteCoordinator } from './server.mjs';
@@ -36,11 +38,15 @@ export async function runCloudLiteMachine(config) {
   for (;;) { try { bootstrap = await request('/bootstrap', {}); break; } catch { await new Promise(resolve => setTimeout(resolve, 3000)); } }
   const repositoryDirectory = '/data/repository';
   const gitEnv = { ...process.env, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' };
-  const run = (command, args, cwd) => { const p = spawnSync(command, args, { cwd, env: gitEnv, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }); if (p.status !== 0) throw new Error(`${command} failed (${p.status}).`); return p.stdout; };
-  if (!existsSync(join(repositoryDirectory, '.git'))) run('git', ['clone', `https://github.com/${plan.repository}.git`, repositoryDirectory]);
-  run('git', ['config', 'user.name', 'FACTORY swarm'], repositoryDirectory);
-  run('git', ['config', 'user.email', 'flujo.com.co@gmail.com'], repositoryDirectory);
-  run('gh', ['auth', 'setup-git'], repositoryDirectory);
+  const execute = promisify(execFile);
+  const run = async (command, args, cwd) => {
+    try { return (await execute(command, args, { cwd, env: gitEnv, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })).stdout; }
+    catch (error) { throw new Error(`${command} failed (${error.code}).`); }
+  };
+  if (!existsSync(join(repositoryDirectory, '.git'))) await run('git', ['clone', `https://github.com/${plan.repository}.git`, repositoryDirectory]);
+  await run('git', ['config', 'user.name', 'FACTORY swarm'], repositoryDirectory);
+  await run('git', ['config', 'user.email', 'flujo.com.co@gmail.com'], repositoryDirectory);
+  await run('gh', ['auth', 'setup-git'], repositoryDirectory);
   const home = '/data/codex'; mkdirSync(home, { recursive: true, mode: 0o700 });
   // A fresh native harness has only the explicitly configured FACTORY MCP server.
   writeFileSync(join(home, 'config.toml'), 'cli_auth_credentials_store="ephemeral"\nforced_login_method="chatgpt"\n', { mode: 0o600 });
@@ -83,11 +89,11 @@ export async function runCloudLiteMachine(config) {
   }, 1000);
   await rpc.initialize();
   await rpc.request('account/login/start', { type: 'chatgptAuthTokens', ...bootstrap.auth });
-  rootTrace.record('machine.ready', { machine, node: process.version, codex: run('codex', ['--version']), configuration: { cpuKind: plan.cpuKind, cpus: plan.cpus, memoryMb: plan.memoryMb, diskGb: plan.diskGb }, agents: bootstrap.agents.map(x => ({ id: x.id, role: x.role })) });
+  rootTrace.record('machine.ready', { machine, node: process.version, codex: await run('codex', ['--version']), configuration: { cpuKind: plan.cpuKind, cpus: plan.cpus, memoryMb: plan.memoryMb, diskGb: plan.diskGb }, agents: bootstrap.agents.map(x => ({ id: x.id, role: x.role })) });
   const proxy = fileURLToPath(new URL('../../bin/factory-cloud-mcp.mjs', import.meta.url));
   for (const agent of bootstrap.agents) {
     const directory = join('/data/worktrees', agent.id); mkdirSync('/data/worktrees', { recursive: true });
-    if (!existsSync(directory)) run('git', ['worktree', 'add', '--detach', directory, 'HEAD'], repositoryDirectory);
+    if (!existsSync(directory)) await run('git', ['worktree', 'add', '--detach', directory, 'HEAD'], repositoryDirectory);
     const sessionFile = `/data/factory/${agent.id}.session.json`;
     const configOverride = { mcp_servers: { factory: { command: process.execPath, args: [proxy], env: { FACTORY_BOARD_URL: boardUrl, FACTORY_BOARD_TOKEN: agent.token, FACTORY_WORKTREE: directory }, required: true } },
       'features.apps': false, 'features.plugins': false, 'features.multi_agent': false,
@@ -110,8 +116,8 @@ export async function runCloudLiteMachine(config) {
     if (!result) {
       result = await rpc.request('thread/start', { model: agent.role === 'orchestrator' ? plan.model : plan.subagentModel, cwd: directory, approvalPolicy: 'never', sandbox: 'danger-full-access', config: configOverride,
         developerInstructions: instructions, serviceName: `factory.${plan.runId}.${agent.id}`, historyMode: 'legacy' });
-      const fd = openSync(sessionFile, 'w', 0o600);
-      try { writeFileSync(fd, JSON.stringify({ threadId: result.thread.id, agentId: agent.id })); fsyncSync(fd); } finally { closeSync(fd); }
+      const fd = await open(sessionFile, 'w', 0o600);
+      try { await fd.writeFile(JSON.stringify({ threadId: result.thread.id, agentId: agent.id })); await fd.sync(); } finally { await fd.close(); }
     }
     const threadId = result.thread.id; threadAgents.set(threadId, agent.id);
     await request('/operator/session', { agent: agent.id, session: threadId }, operatorToken);
@@ -130,7 +136,7 @@ export async function runCloudLiteMachine(config) {
     if (monitoringBusy) return; monitoringBusy = true;
     try {
     rootTrace.record('machine.health', { uptime: process.uptime(), freeMemory: freemem(), totalMemory: totalmem(), load: loadavg(), process: process.memoryUsage(),
-      disk: run('df', ['-B1', '/data']).trim(), processes: run('ps', ['-eo', 'pid,ppid,rss,pcpu,comm']).trim() });
+      disk: (await run('df', ['-B1', '/data'])).trim(), processes: (await run('ps', ['-eo', 'pid,ppid,rss,pcpu,comm'])).trim() });
     for (const [threadId, agentId] of threadAgents) {
       const agent = bootstrap.agents.find(x => x.id === agentId);
       const incoming = await request('/commands', {}, agent.token);

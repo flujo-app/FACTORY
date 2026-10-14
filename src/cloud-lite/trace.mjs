@@ -1,10 +1,13 @@
-import { existsSync, readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, copyFileSync, constants } from 'node:fs';
+import { existsSync, readFileSync, openSync, writeSync, fsyncSync, fsync, closeSync, renameSync, copyFileSync, constants } from 'node:fs';
+import { rename } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { redact, hash } from './protocol.mjs';
 
 /** Persist before sending; original sequence and bytes survive lost acknowledgements. */
 export class CloudLiteTrace {
-  constructor({ file, url, token, secrets = [], remoteSequence = 0 }) {
+  constructor({ file, url, token, secrets = [], remoteSequence = 0, sync = promisify(fsync) }) {
     this.file = file; this.url = url; this.token = token; this.secrets = [token, ...secrets];
+    this.sync = sync; this.pendingDurability = new Set();
     this.ackFile = `${file}.ack`;
     const localAck = existsSync(this.ackFile) ? Number(readFileSync(this.ackFile, 'utf8')) : 0;
     this.ack = Math.max(Number.isSafeInteger(localAck) ? localAck : 0, remoteSequence);
@@ -30,10 +33,17 @@ export class CloudLiteTrace {
   record(kind, body) {
     const event = { seq: ++this.sequence, kind, body: redact(body, this.secrets), observedAt: new Date().toISOString() };
     const fd = openSync(this.file, 'a', 0o600);
+    let deferred = false;
     try {
       writeSync(fd, JSON.stringify(event) + '\n');
-      if (['turn/completed','agent.enrolled','supervisor.command','codex.exit','trace.recovery'].includes(kind)) fsyncSync(fd);
-    } finally { closeSync(fd); }
+      if (['turn/completed','agent.enrolled','supervisor.command','codex.exit','trace.recovery'].includes(kind)) {
+        // Fly volume commits can wait behind repository installs. Keep the
+        // coordinator responsive; flush still waits for durability before send.
+        const durability = Promise.resolve().then(() => this.sync(fd)).finally(() => closeSync(fd));
+        deferred = true; this.pendingDurability.add(durability);
+        void durability.then(() => this.pendingDurability.delete(durability), () => this.pendingDurability.delete(durability));
+      }
+    } finally { if (!deferred) closeSync(fd); }
     this.queue.push(this.project(event)); return event;
   }
   project(event) {
@@ -44,18 +54,21 @@ export class CloudLiteTrace {
     if (this.flushing || !this.queue.length) return;
     this.flushing = true;
     try {
-      const traceFd = openSync(this.file, 'r+'); try { fsyncSync(traceFd); } finally { closeSync(traceFd); }
       const events = []; let bytes = 0;
+      // Freeze the batch before the asynchronous sync so later writes cannot
+      // enter a receipt whose durability barrier began before those writes.
       for (const event of this.queue.slice(0, 100)) { const size = Buffer.byteLength(JSON.stringify(event)); if (bytes + size > 1024 * 1024) break; events.push(event); bytes += size; }
+      await Promise.all([...this.pendingDurability]);
+      const traceFd = openSync(this.file, 'r+'); try { await this.sync(traceFd); } finally { closeSync(traceFd); }
       const response = await fetch(`${this.url}/trace`, { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ events }), redirect: 'error', signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw new Error('Trace receiver refused the original batch.');
       const receipt = await response.json();
       if (receipt.acknowledged !== events.at(-1).seq) throw new Error('Trace acknowledgement does not match the original batch.');
-      this.ack = receipt.acknowledged;
       const next = `${this.ackFile}.next`; const fd = openSync(next, 'w', 0o600);
-      try { writeSync(fd, String(this.ack)); fsyncSync(fd); } finally { closeSync(fd); }
-      renameSync(next, this.ackFile);
+      try { writeSync(fd, String(receipt.acknowledged)); await this.sync(fd); } finally { closeSync(fd); }
+      await rename(next, this.ackFile);
+      this.ack = receipt.acknowledged;
       this.queue.splice(0, events.length);
     } finally { this.flushing = false; }
   }

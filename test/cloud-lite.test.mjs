@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync, fsync } from 'node:fs';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CloudLiteBoard } from '../src/cloud-lite/board.mjs';
@@ -53,6 +54,36 @@ test('trace replay commits once and rejects altered bytes after a lost ACK', () 
 test('credentials cannot appear in diagnostic trace projection', () => {
   const credential = secret(); assert.equal(redact({ stderr: `failed with ${credential}` }, [credential]).stderr, 'failed with [REDACTED]');
   assert.equal(redact({ jwt: 'eyJabcdefgh.abcdefghijkl.abcdefghijk' }).jwt, '[REDACTED]');
+});
+
+test('slow trace durability keeps coordinator health available and sends only the durable batch', async () => {
+  const p = validateCloudLitePlan({ ...plan(), machines: 1, agentsPerMachine: 1 });
+  const credentials = { 'm0-a0': secret() }; const operatorToken = secret();
+  const coordinator = await startCloudLiteCoordinator({ database: join(fresh(), 'board.sqlite'), plan: p, credentials, operatorToken,
+    auth: { accessToken: secret(), chatgptAccountId: 'account' }, githubToken: secret(), host: '127.0.0.1', port: 0 });
+  const url = `http://127.0.0.1:${coordinator.server.address().port}`;
+  let release; let entered;
+  const delayedDisk = new Promise(resolve => { release = resolve; });
+  const diskStarted = new Promise(resolve => { entered = resolve; });
+  const file = join(fresh(), 'trace.jsonl');
+  const trace = new CloudLiteTrace({ file, url, token: credentials['m0-a0'], sync: async fd => {
+    entered(); await delayedDisk; await promisify(fsync)(fd);
+  } });
+  let pending;
+  try {
+    trace.record('turn/completed', { threadId: 'native-thread' });
+    pending = trace.flush(); await diskStarted;
+    const health = await fetch(url + '/health', { signal: AbortSignal.timeout(2000) });
+    assert.equal(health.status, 200); assert.equal((await health.json()).runId, p.runId);
+    assert.equal(coordinator.board.events().length, 0);
+    trace.record('item/completed', { command: 'node --version' });
+    release(); await pending;
+    assert.deepEqual(coordinator.board.events().map(event => event.source_seq), [1]);
+    assert.equal(readFileSync(trace.ackFile, 'utf8'), '1'); assert.equal(trace.queue.length, 1);
+    await trace.flush();
+    assert.deepEqual(coordinator.board.events().map(event => event.source_seq), [1, 2]);
+    assert.equal(readFileSync(trace.ackFile, 'utf8'), '2'); assert.equal(trace.queue.length, 0);
+  } finally { release(); await pending?.catch(() => {}); await coordinator.close(); }
 });
 
 test('agent progress cannot overwrite the SDK-registered native session identity', () => {
