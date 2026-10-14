@@ -36,7 +36,7 @@ export class CloudLiteTrace {
     let deferred = false;
     try {
       writeSync(fd, JSON.stringify(event) + '\n');
-      if (['turn/completed','agent.enrolled','supervisor.command','codex.exit','trace.recovery'].includes(kind)) {
+      if (['turn/started','turn/completed','native.turn.started','native.turn.completed','native.thread.started','native.thread.resumed','agent.enrolled','supervisor.command','native.operator.stop.completed','codex.exit','trace.recovery'].includes(kind)) {
         // Fly volume commits can wait behind repository installs. Keep the
         // coordinator responsive; flush still waits for durability before send.
         const durability = Promise.resolve().then(() => this.sync(fd)).finally(() => closeSync(fd));
@@ -51,25 +51,34 @@ export class CloudLiteTrace {
     return Buffer.byteLength(raw) > 128 * 1024 ? { ...event, body: { retainedLocally: true, sha256: hash(raw), bytes: Buffer.byteLength(raw), preview: raw.slice(0, 16000) } } : event;
   }
   async flush() {
-    if (this.flushing || !this.queue.length) return;
-    this.flushing = true;
-    try {
-      const events = []; let bytes = 0;
-      // Freeze the batch before the asynchronous sync so later writes cannot
-      // enter a receipt whose durability barrier began before those writes.
-      for (const event of this.queue.slice(0, 100)) { const size = Buffer.byteLength(JSON.stringify(event)); if (bytes + size > 1024 * 1024) break; events.push(event); bytes += size; }
-      await Promise.all([...this.pendingDurability]);
-      const traceFd = openSync(this.file, 'r+'); try { await this.sync(traceFd); } finally { closeSync(traceFd); }
-      const response = await fetch(`${this.url}/trace`, { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events }), redirect: 'error', signal: AbortSignal.timeout(15000) });
-      if (!response.ok) throw new Error('Trace receiver refused the original batch.');
-      const receipt = await response.json();
-      if (receipt.acknowledged !== events.at(-1).seq) throw new Error('Trace acknowledgement does not match the original batch.');
-      const next = `${this.ackFile}.next`; const fd = openSync(next, 'w', 0o600);
-      try { writeSync(fd, String(receipt.acknowledged)); await this.sync(fd); } finally { closeSync(fd); }
-      await rename(next, this.ackFile);
-      this.ack = receipt.acknowledged;
-      this.queue.splice(0, events.length);
-    } finally { this.flushing = false; }
+    if (this.flushing) {
+      await this.flushing;
+      if (this.queue.length) await this.flush();
+      return;
+    }
+    if (!this.queue.length) return;
+    const active = this.flushBatch();
+    this.flushing = active;
+    try { await active; }
+    finally { if (this.flushing === active) this.flushing = null; }
+    if (this.queue.length) await this.flush();
+  }
+  async flushBatch() {
+    const events = []; let bytes = 0;
+    // Freeze the batch before the asynchronous sync so later writes cannot
+    // enter a receipt whose durability barrier began before those writes.
+    for (const event of this.queue.slice(0, 100)) { const size = Buffer.byteLength(JSON.stringify(event)); if (bytes + size > 1024 * 1024) break; events.push(event); bytes += size; }
+    await Promise.all([...this.pendingDurability]);
+    const traceFd = openSync(this.file, 'r+'); try { await this.sync(traceFd); } finally { closeSync(traceFd); }
+    const response = await fetch(`${this.url}/trace`, { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events }), redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Trace receiver refused the original batch.');
+    const receipt = await response.json();
+    if (receipt.acknowledged !== events.at(-1).seq) throw new Error('Trace acknowledgement does not match the original batch.');
+    const next = `${this.ackFile}.next`; const fd = openSync(next, 'w', 0o600);
+    try { writeSync(fd, String(receipt.acknowledged)); await this.sync(fd); } finally { closeSync(fd); }
+    await rename(next, this.ackFile);
+    this.ack = receipt.acknowledged;
+    this.queue.splice(0, events.length);
   }
 }
