@@ -279,64 +279,65 @@ test('observer makes progress on one legacy oversized trace record across restar
 });
 
 test('local synthetic hourly arrivals and a separate burst show bounded collection progress and lag', async () => {
-  // Local synthetic fixture only: retained hour evidence is 133,183 rows at
-  // about 235.92 rows/pass; a separate 15.728s window contained an 880-row
-  // burst. Virtual passes model the hour mean and one isolated burst; this is
-  // not a live collection capacity qualification.
+  // Local synthetic fixture only: measured input was 56,621 retained rows in
+  // one hour (15.728056 rows/s), about 235.920833 rows per 15s poll. The
+  // separate 133,183-row backlog and 880-row/15s burst are distinct evidence.
+  // Virtual passes model these rates; this is not live capacity qualification.
   const initialBacklog = 133183;
-  const meanRowsPerPass = 235.92;
+  const measuredRowsPerSecond = 15.728056;
+  const meanRowsPerPass = 235.920833;
   const fixtureRowsPerPass = 236;
-  const virtualPassSeconds = 15.728;
+  const virtualPassSeconds = 15;
   const pageBudget = 5;
   const rowsPerPage = 100;
   const passCapacity = pageBudget * rowsPerPage;
-  const archive = Array.from({ length: initialBacklog }, (_, index) => ({ seq: index + 1, kind: 'fixture' }));
+  let highestSequence = initialBacklog;
   const directory = fresh();
   let fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
   let pass = 0;
   fleet.request = async path => {
     if (path === '/operator/status') {
-      const watermark = archive.at(-1)?.seq ?? 0;
+      const watermark = highestSequence;
       // Arrivals occur after snapshot capture and therefore belong to a later watermark.
-      archive.push(...Array.from({ length: fixtureRowsPerPass }, (_, index) => ({
-        seq: watermark + index + 1, kind: 'synthetic-arrival',
-      })));
+      highestSequence += fixtureRowsPerPass;
       pass++;
       return { traceSequence: watermark, agents: [], refreshRequested: false };
     }
     const query = new URL(path, 'http://localhost').searchParams;
     const after = Number(query.get('after')); const through = Number(query.get('through'));
-    return { events: archive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
+    const end = Math.min(through, after + rowsPerPage);
+    return { events: Array.from({ length: Math.max(0, end - after) }, (_, index) => ({ seq: after + index + 1, kind: 'fixture' })) };
   };
   const first = await fleet.observe({ maxPages: pageBudget });
   assert.equal(first.traceCollection.eventsCollected, passCapacity);
   assert.equal(first.traceCollection.remainingLag, initialBacklog - passCapacity);
   assert.equal(first.traceCollection.traceWatermark, initialBacklog);
   assert.equal(first.traceCollection.observedWatermark, initialBacklog);
-  assert.ok(Math.abs(meanRowsPerPass / virtualPassSeconds - 15) < 0.00000001);
-  assert.ok(passCapacity / virtualPassSeconds > meanRowsPerPass / virtualPassSeconds);
+  assert.ok(Math.abs(meanRowsPerPass / virtualPassSeconds - measuredRowsPerSecond) < 0.000001);
+  assert.ok(passCapacity > meanRowsPerPass);
 
   // Restart between passes to exercise persisted cursor and fixed target. Each
   // pass drains 500 and receives 236; total outstanding backlog falls by 264.
-  const outstanding = [archive.length - first.traceCollection.traceCursor];
+  const outstanding = [highestSequence - first.traceCollection.traceCursor];
   for (let index = 0; index < 4; index++) {
     fleet = new FactoryCloudLiteFleet({ directory });
     fleet.request = async path => {
       if (path === '/operator/status') {
-        const watermark = archive.at(-1)?.seq ?? 0;
-        archive.push(...Array.from({ length: fixtureRowsPerPass }, (_, row) => ({ seq: watermark + row + 1, kind: 'synthetic-arrival' })));
+        const watermark = highestSequence;
+        highestSequence += fixtureRowsPerPass;
         pass++;
         return { traceSequence: watermark, agents: [], refreshRequested: false };
       }
       const query = new URL(path, 'http://localhost').searchParams;
       const after = Number(query.get('after')); const through = Number(query.get('through'));
-      return { events: archive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
+      const end = Math.min(through, after + rowsPerPage);
+      return { events: Array.from({ length: Math.max(0, end - after) }, (_, row) => ({ seq: after + row + 1, kind: 'fixture' })) };
     };
     const result = await fleet.observe({ maxPages: pageBudget });
     assert.equal(result.traceCollection.traceWatermark, initialBacklog);
     assert.equal(result.traceCollection.complete, false);
     assert.equal(result.traceCollection.eventsCollected, passCapacity);
-    outstanding.push(archive.length - result.traceCollection.traceCursor);
+    outstanding.push(highestSequence - result.traceCollection.traceCursor);
   }
   assert.deepEqual(outstanding, [132919, 132655, 132391, 132127, 131863]);
   assert.equal(pass, 5);
@@ -347,17 +348,19 @@ test('local synthetic hourly arrivals and a separate burst show bounded collecti
   const overloadDir = fresh();
   let overloaded = new FactoryCloudLiteFleet({ directory: overloadDir });
   overloaded.state = { plan: plan(), machines: [], operations: {} }; overloaded.save();
-  const overloadArchive = Array.from({ length: 1000 }, (_, index) => ({ seq: index + 1, kind: 'fixture' }));
+  let overloadWatermark = 1000;
+  let overloadArrivals = 0;
   const overloadedRequest = async path => {
     if (path === '/operator/status') {
-      const watermark = overloadArchive.at(-1).seq;
-      const arrivals = overloadArchive.length === 1000 ? 880 : 236;
-      overloadArchive.push(...Array.from({ length: arrivals }, (_, index) => ({ seq: watermark + index + 1, kind: 'burst-arrival' })));
+      const watermark = overloadWatermark;
+      const arrivals = overloadArrivals === 0 ? 880 : 236;
+      overloadWatermark += arrivals; overloadArrivals++;
       return { traceSequence: watermark, agents: [], refreshRequested: false };
     }
     const query = new URL(path, 'http://localhost').searchParams;
     const after = Number(query.get('after')); const through = Number(query.get('through'));
-    return { events: overloadArchive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
+    const end = Math.min(through, after + rowsPerPage);
+    return { events: Array.from({ length: Math.max(0, end - after) }, (_, index) => ({ seq: after + index + 1, kind: 'burst-arrival' })) };
   };
   overloaded.request = overloadedRequest;
   let overload = await overloaded.observe({ maxPages: pageBudget });
@@ -383,13 +386,13 @@ test('local synthetic hourly arrivals and a separate burst show bounded collecti
   let byteFleet = new FactoryCloudLiteFleet({ directory: byteDir });
   byteFleet.state = { plan: plan(), machines: [], operations: {} }; byteFleet.save();
   const maxBody = 'x'.repeat(129258);
-  const byteArchive = Array.from({ length: 880 }, (_, index) => ({ seq: index + 1, kind: 'burst-max-body', body: maxBody }));
   byteFleet.request = async path => {
-    if (path === '/operator/status') return { traceSequence: byteArchive.at(-1).seq, agents: [], refreshRequested: false };
+    if (path === '/operator/status') return { traceSequence: 880, agents: [], refreshRequested: false };
     const query = new URL(path, 'http://localhost').searchParams;
     const after = Number(query.get('after')); const through = Number(query.get('through'));
     const page = []; let bytes = 0;
-    for (const event of byteArchive.filter(item => item.seq > after && item.seq <= through).slice(0, rowsPerPage)) {
+    for (let seq = after + 1; seq <= Math.min(through, after + rowsPerPage); seq++) {
+      const event = { seq, kind: 'burst-max-body', body: maxBody };
       const size = Buffer.byteLength(JSON.stringify(event));
       if (bytes + size > 512 * 1024) break;
       page.push(event); bytes += size;
