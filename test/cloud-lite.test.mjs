@@ -675,10 +675,12 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     } }] }, credentials[actor.id]);
     assert.equal(nextReceipt.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt.commandId, nextStopId);
-    // Simulate a committed ACK whose HTTP response is lost by discarding it.
+    // Simulate a client dropping an already committed response; drain it for cleanup.
     const lostAckResponse = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
     assert.equal(lostAckResponse.status, 200);
+    await lostAckResponse.arrayBuffer();
     const acknowledgedAt = board.db.prepare('SELECT acknowledged FROM cloud_lite_commands WHERE id=?').get(nextStopId).acknowledged;
+    assert.equal(typeof acknowledgedAt, 'number');
     const retriedAck = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
     assert.deepEqual(await retriedAck.json(), { acknowledged: true, cancelled: false, receiptAccepted: true });
     assert.equal(board.db.prepare('SELECT acknowledged FROM cloud_lite_commands WHERE id=?').get(nextStopId).acknowledged, acknowledgedAt);
@@ -961,7 +963,8 @@ test('legacy stop replay preserves its original target and recipient, and reject
   try {
     const agent = 'm0-a0'; const oldThread = '01a13930-1da9-76a1-0a6e-af0c060ec3a4';
     const oldTurn = '01a13931-1da9-76a1-0a6e-af0c060ec3a4'; const newTurn = '01a13932-1da9-76a1-0a6e-af0c060ec3a4';
-    const laterTurn = '01a13933-1da9-76a1-0a6e-af0c060ec3a4';
+    const laterTurn = '01a13933-1da9-76a1-0a6e-af0c060ec3a4'; const resumedThread = '01a13934-1da9-76a1-0a6e-af0c060ec3a4';
+    const resumedTurn = '01a13935-1da9-76a1-0a6e-af0c060ec3a4';
     coordinator.board.registerSession(agent, oldThread);
     const observed = await request('/trace', { events: [
       { seq: 1, kind: 'native.thread.started', body: { threadId: oldThread, threadStatus: 'active' } },
@@ -985,6 +988,11 @@ test('legacy stop replay preserves its original target and recipient, and reject
     const partialOriginal = coordinator.board.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(partial.id);
     assert.deepEqual(JSON.parse(partialOriginal.body), { action: 'stop', expectedThreadId: oldThread, expectedTurnId: newTurn });
     await request('/trace', { events: [{ seq: 4, kind: 'native.turn.started', body: { threadId: oldThread, turn: { id: laterTurn } } }] }, credentials[agent]);
+    coordinator.board.registerSession(agent, resumedThread);
+    await request('/trace', { events: [
+      { seq: 5, kind: 'native.thread.started', body: { threadId: resumedThread, threadStatus: 'active' } },
+      { seq: 6, kind: 'native.turn.started', body: { threadId: resumedThread, turn: { id: resumedTurn } } },
+    ] }, credentials[agent]);
     assert.deepEqual(await fleet.command(agent, partial), { recorded: true });
     assert.deepEqual(coordinator.board.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(partial.id), partialOriginal);
     const changedPartial = await rawRequest('/operator/command', { ...partial, expectedTurnId: laterTurn });
@@ -997,6 +1005,10 @@ test('legacy stop replay preserves its original target and recipient, and reject
     assert.equal(coordinator.board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get(partial.id).superseded_by, 'later-message');
     const inbox = await request('/commands', {}, credentials[agent]);
     assert.deepEqual(inbox.commands.map(command => command.id), ['later-message']);
+    const messageIdentity = { id: 'stable-message-id', recipient: agent, action: 'message', message: 'same message body' };
+    assert.deepEqual(await fleet.command(agent, messageIdentity), { recorded: true });
+    const changedMessageRecipient = await rawRequest('/operator/command', { ...messageIdentity, recipient: 'm0-a1' });
+    assert.equal(changedMessageRecipient.status, 400); await changedMessageRecipient.arrayBuffer();
 
     const changedTarget = await rawRequest('/operator/command', { ...stable, expectedThreadId: oldThread, expectedTurnId: newTurn });
     assert.equal(changedTarget.status, 400); await changedTarget.arrayBuffer();
