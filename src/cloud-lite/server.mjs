@@ -56,9 +56,14 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         let expectedThreadId = body.expectedThreadId; let expectedTurnId = body.expectedTurnId;
         if (body.action === 'stop' && (expectedThreadId === undefined || expectedTurnId === undefined)) {
           const previous = original && JSON.parse(original.body);
-          if (previous?.action === 'stop' && expectedThreadId === undefined && expectedTurnId === undefined) {
+          if (previous?.action === 'stop') {
             // A stable legacy retry keeps its original binding even after the
-            // runtime has observed a later thread or turn.
+            // runtime has observed a later thread or turn. Supplied partial
+            // fields must still agree with the original complete binding.
+            if (expectedThreadId !== undefined && expectedThreadId !== previous.expectedThreadId
+              || expectedTurnId !== undefined && expectedTurnId !== previous.expectedTurnId) {
+              throw new Error('Stable stop command target cannot change on replay.');
+            }
             expectedThreadId = previous.expectedThreadId; expectedTurnId = previous.expectedTurnId;
           } else {
             const native = board.inventory().find(value => value.id === body.recipient)?.nativeRuntime;
