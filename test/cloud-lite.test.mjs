@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CloudLiteBoard } from '../src/cloud-lite/board.mjs';
@@ -8,6 +8,8 @@ import { validateCloudLitePlan, agentInventory, machineConfig, redact, secret } 
 import { FactoryCloudLiteFleet } from '../src/cloud-lite/fleet.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { CloudLiteTrace } from '../src/cloud-lite/trace.mjs';
+import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const plan = () => validateCloudLitePlan({ runId: 'lite-test', app: 'factory-lite-test', repository: 'mario-andreschak/FLUJO', goal: 'Analyze and merge existing PRs', machines: 10, agentsPerMachine: 10 });
 const fresh = () => mkdtempSync(join(tmpdir(), 'factory-cloud-lite-'));
@@ -124,4 +126,58 @@ test('authenticated HTTP board binds sender independently of client input', asyn
       body: JSON.stringify({ name: 'factory_message', arguments: { sender: 'm0-a0', recipient: 'm1-a1', messageId: 'fake-role', message: {} } }) });
     assert.equal(response.status, 400);
   } finally { await coordinator.close(); }
+});
+
+test('evidence collection includes independent evidence roots and consistent WAL database content', async () => {
+  const root = fresh(); const evidence = join(root, 'm8-evidence'); mkdirSync(evidence);
+  writeFileSync(join(evidence, 'result.json'), '{"tests":54}');
+  writeFileSync(join(evidence, 'trace.jsonl'), '{"seq":1}\n{"seq":');
+  mkdirSync(join(root, 'node_modules')); writeFileSync(join(root, 'node_modules', 'cache'), 'disposable');
+  writeFileSync(join(root, 'auth.json'), 'private-credential');
+  const database = new DatabaseSync(join(root, 'board.sqlite'));
+  database.exec('PRAGMA journal_mode=WAL; CREATE TABLE evidence(result TEXT); INSERT INTO evidence VALUES(\'passed\');');
+  try {
+    const destination = join(root, '.factory-export-test');
+    const receipt = await collectCloudLiteSnapshot({ root, runId: 'lite-test', destination });
+    assert.equal(receipt.sqliteBackups, 1); assert.equal(existsSync(receipt.archive), true);
+    assert.equal(readFileSync(join(destination, 'snapshot', 'm8-evidence', 'trace.jsonl'), 'utf8'), '{"seq":1}\n');
+    const retained = new DatabaseSync(join(destination, 'snapshot', 'board.sqlite'), { readOnly: true });
+    try { assert.equal(retained.prepare('SELECT result FROM evidence').get().result, 'passed'); } finally { retained.close(); }
+    assert.equal(existsSync(join(destination, 'snapshot', 'node_modules')), false);
+    assert.equal(existsSync(join(destination, 'snapshot', 'auth.json')), false);
+    assert.equal(readFileSync(join(destination, 'snapshot', 'm8-evidence', 'result.json'), 'utf8'), '{"tests":54}');
+  } finally { database.close(); }
+});
+
+test('a new stop supersedes older work but replaying that stop preserves a later explicit message', async () => {
+  const p = plan(); const credentials = Object.fromEntries(agentInventory(p).map(x => [x.id, secret()])); const operatorToken = secret();
+  const coordinator = await startCloudLiteCoordinator({ database: join(fresh(), 'board.sqlite'), plan: p, credentials, operatorToken,
+    auth: { accessToken: secret(), chatgptAccountId: 'account' }, githubToken: secret(), host: '127.0.0.1', port: 0 });
+  const url = `http://127.0.0.1:${coordinator.server.address().port}`;
+  const request = async (path, body, token = operatorToken) => {
+    const response = await fetch(url + path, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200); return response.json();
+  };
+  try {
+    await request('/operator/command', { id: 'old-work', recipient: 'm0-a0', action: 'message', message: 'Review PR' });
+    const stop = { id: 'stop-work', recipient: 'm0-a0', action: 'stop' };
+    await request('/operator/command', stop);
+    let inbox = await request('/commands', {}, credentials['m0-a0']); assert.deepEqual(inbox.commands.map(command => command.id), ['stop-work']);
+    assert.equal(coordinator.board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get('old-work').superseded_by, 'stop-work');
+    await request('/commands', { acknowledge: 'stop-work' }, credentials['m0-a0']);
+    await request('/operator/command', { id: 'new-work', recipient: 'm0-a0', action: 'message', message: 'Resume review' });
+    await request('/operator/command', stop);
+    inbox = await request('/commands', {}, credentials['m0-a0']); assert.deepEqual(inbox.commands.map(command => command.id), ['new-work']);
+  } finally { await coordinator.close(); }
+});
+
+test('retirement refuses an app containing a Machine absent from the original fleet journal', async () => {
+  let destroyed = false; const original = { id: 'original', name: 'owned', volumeId: 'volume-one' };
+  const fleet = new FactoryCloudLiteFleet({ directory: fresh(), execute: async (_command, args) => {
+    if (args[0] === 'machine') return JSON.stringify([{ id: 'original', name: 'owned', config: { metadata: { 'factory.run': 'lite-test' }, mounts: [{ volume: 'volume-one' }] } }, { id: 'other' }]);
+    if (args[0] === 'volumes') return JSON.stringify([{ id: 'volume-one' }]);
+    destroyed = true; return '';
+  } });
+  fleet.state = { plan: plan(), machines: [original], operations: {} }; fleet.save();
+  await assert.rejects(fleet.retire(), /exact original Machine and volume inventory/); assert.equal(destroyed, false);
 });

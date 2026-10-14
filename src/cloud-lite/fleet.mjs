@@ -4,6 +4,9 @@ import { secret, hash, agentInventory, validateCloudLitePlan, machineConfig, red
 import { CodexRpc } from './rpc.mjs';
 import { cloudLiteBootstrap } from './bootstrap.mjs';
 import { loadFlujoCloudInfrastructure } from './upstream.mjs';
+import { fileURLToPath } from 'node:url';
+import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 /** Only this native host owns managed refresh; remote harnesses receive external access tokens. */
 export class CodexSubscriptionBroker {
@@ -249,15 +252,67 @@ export class FactoryCloudLiteFleet {
     if (selected.length === this.state.machines.length) this.state.bundleSha256 = digest;
     this.save(); return { updated: selected.length, digest };
   }
-  async collect() {
-    const artifacts = join(this.directory, 'artifacts'); mkdirSync(artifacts, { recursive: true, mode: 0o700 });
-    for (const machine of this.state.machines) {
-      const remote = '/data/factory-artifacts.tgz';
-      await this.fly(['machine', 'exec', machine.id, 'tar -czf /data/factory-artifacts.tgz --exclude=*/node_modules --exclude=*/.next --exclude=*/.npm --exclude=*/auth.json -C /data factory codex worktrees repository', '--app', this.state.plan.app, '--timeout', '300'], { timeoutMs: 330000 });
-      const destination = join(artifacts, `${machine.id}.tgz`);
-      await this.fly(['ssh', 'sftp', 'get', remote, destination, '--app', this.state.plan.app, '--machine', machine.id, '--quiet'], { timeoutMs: 600000 });
-      this.event('artifacts.collected', { machineId: machine.id, file: destination });
+  async quiesce({ timeoutMs = 120000, attempt = 'default' } = {}) {
+    if (!/^[a-z0-9-]{3,48}$/.test(attempt)) throw new Error('Select a stable stop attempt identity.');
+    const inventory = agentInventory(this.state.plan);
+    for (const agent of inventory) await this.command(agent.id, { id: `quiesce-${this.state.plan.runId}-${attempt}-${agent.id}`, action: 'stop' });
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const snapshot = await this.request('/operator/status');
+      if (snapshot.agents.length === inventory.length && snapshot.agents.every(agent => agent.status === 'stopped')) {
+        this.state.quiescedAt = new Date().toISOString(); this.save(); return { agents: inventory.length, quiescedAt: this.state.quiescedAt };
+      }
+      if (Date.now() >= deadline) throw new Error('Original agents have not all acknowledged stop; retain the live fleet and inspect its commands.');
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
+  }
+  async collect({ attempt = 'default', concurrency = 3 } = {}) {
+    if (!/^[a-z0-9-]{3,32}$/.test(attempt)) throw new Error('Select a stable collection attempt identity.');
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 10) throw new Error('Select 1 to 10 simultaneous Machine collections.');
+    await this.quiesce({ attempt: `collection-${attempt}` });
+    const artifacts = join(this.directory, 'artifacts'); mkdirSync(artifacts, { recursive: true, mode: 0o700 });
+    const collector = readFileSync(fileURLToPath(new URL('./collect.mjs', import.meta.url))).toString('base64');
+    const receipts = []; const failures = []; let next = 0;
+    const capture = async machine => {
+      this.event('artifacts.started', { machineId: machine.id });
+      const job = `/data/factory/collection-${this.state.plan.runId}-${attempt}.json`;
+      const worker = `import {writeFileSync,renameSync} from 'node:fs'; const save=value=>{writeFileSync('${job}.next',JSON.stringify(value),{mode:384});renameSync('${job}.next','${job}');}; try {const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,${collector}'); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}'});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
+      const launch = `const fs=require('node:fs'); const job='${job}'; if(fs.existsSync(job)){console.log(fs.readFileSync(job,'utf8'));}else{fs.writeFileSync(job,JSON.stringify({state:'preparing'}),{flag:'wx',mode:384});const out=fs.openSync(job+'.log','a',384);const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',Buffer.from('${Buffer.from(worker).toString('base64')}','base64').toString()],{detached:true,stdio:['ignore',out,out]});fs.writeFileSync(job,JSON.stringify({state:'running',pid:child.pid}),{mode:384});child.unref();fs.closeSync(out);console.log(fs.readFileSync(job,'utf8'));}`;
+      // Dispatch only a durable detached job; Fly exec's observation timeout
+      // must never be interpreted as permission to start another copy.
+      try { await this.fly(['machine','exec',machine.id,`node -e "eval(Buffer.from('${Buffer.from(launch).toString('base64')}','base64').toString())"`,'--app',this.state.plan.app,'--timeout','30']); }
+      catch { this.event('artifacts.dispatch_unknown', { machineId: machine.id, job }); }
+      let receipt; let observationErrors = 0;
+      for (;;) {
+        const inspect = `const fs=require('node:fs');const value=fs.existsSync('${job}')?JSON.parse(fs.readFileSync('${job}','utf8')):{state:'missing'};if(value.state==='running'){try{process.kill(value.pid,0);}catch{value.state='missing';}}console.log(JSON.stringify(value));`;
+        let raw;
+        try { raw = await this.fly(['machine','exec',machine.id,`node -e "eval(Buffer.from('${Buffer.from(inspect).toString('base64')}','base64').toString())"`,'--app',this.state.plan.app,'--timeout','30']); observationErrors = 0; }
+        catch {
+          this.event('artifacts.observation_pending', { machineId: machine.id, job });
+          if (++observationErrors >= 3) throw new Error(`Original collection observation remains pending at ${job}; retain its job identity.`);
+          await new Promise(resolve => setTimeout(resolve, 30000)); continue;
+        }
+        const state = JSON.parse(raw.trim().split('\n').findLast(line => line.startsWith('{')));
+        if (state.state === 'completed') { receipt = state; break; }
+        if (state.state !== 'running') throw new Error(`Original collection job is ${state.state}; inspect ${job} before selecting another attempt.`);
+        this.event('artifacts.pending',{machineId:machine.id,job,pid:state.pid});
+        await new Promise(resolve => setTimeout(resolve, 30000));
+      }
+      this.event('artifacts.snapshot', { machineId: machine.id, ...receipt });
+      const remote = receipt.archive;
+      const destination = join(artifacts, `${machine.id}-${attempt}.tgz`);
+      if (!existsSync(destination)) await this.fly(['ssh', 'sftp', 'get', remote, destination, '--app', this.state.plan.app, '--machine', machine.id, '--quiet'], { timeoutMs: 600000 });
+      const digest = createHash('sha256'); for await (const bytes of createReadStream(destination)) digest.update(bytes);
+      if (digest.digest('hex') !== receipt.sha256) throw new Error('Downloaded evidence differs from the original Machine archive.');
+      receipts.push({ ...receipt, machineId: machine.id, file: destination });
+      this.state.artifacts = receipts; this.save(); this.event('artifacts.collected', receipts.at(-1));
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, this.state.machines.length) }, async () => {
+      for (;;) { const machine = this.state.machines[next++]; if (!machine) return;
+        try { await capture(machine); } catch (error) { failures.push({ machineId: machine.id, error: error.message }); }
+      }
+    }));
+    if (failures.length) throw new Error(`Evidence collection incomplete: ${JSON.stringify(failures)}. Keep the original jobs and volumes.`);
     this.state.artifactsCollectedAt = new Date().toISOString(); this.save(); return { directory: artifacts };
   }
   async stop() {
@@ -267,7 +322,15 @@ export class FactoryCloudLiteFleet {
     this.state.status = 'stopped'; this.save();
   }
   async retire() {
-    // The journal retains exact ownership; no app other than this unique fleet is adopted.
+    if (this.state.operations['app.retire']?.state !== 'succeeded') {
+      const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
+      const volumes = JSON.parse(await this.fly(['volumes', 'list', '--app', this.state.plan.app, '--json']));
+      if (inventory.length !== this.state.machines.length || inventory.some(value => !this.state.machines.some(machine =>
+        machine.id === value.id && machine.name === value.name && value.config?.metadata?.['factory.run'] === this.state.plan.runId && value.config?.mounts?.some(mount => mount.volume === machine.volumeId))) ||
+        volumes.length !== this.state.machines.length || volumes.some(value => !this.state.machines.some(machine => machine.volumeId === value.id))) {
+        throw new Error('Retirement requires the exact original Machine and volume inventory; retain resources whose ownership differs.');
+      }
+    }
     await this.stage('app.retire', async () => { await this.fly(['apps', 'destroy', this.state.plan.app, '--yes']); return { app: this.state.plan.app, retired: true }; });
     this.state.status = 'retired'; this.save();
   }

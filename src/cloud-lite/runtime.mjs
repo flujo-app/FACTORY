@@ -50,7 +50,7 @@ export async function runCloudLiteMachine(config) {
     traces.set(agent.id, new CloudLiteTrace({ file: `/data/factory/${agent.id}.jsonl`, url: boardUrl, token: agent.token, remoteSequence: position.sequence,
       secrets: [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials)] }));
   }
-  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const inboxVersions = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
+  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const inboxVersions = new Map(); const stoppedThreads = new Set(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
   const rpc = new CodexRpc({ env: { PATH: process.env.PATH, HOME: '/data', CODEX_HOME: home, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' }, cwd: repositoryDirectory,
     onStderr: text => rootTrace.record('codex.stderr', { text }),
     onRequest: async (method, params) => {
@@ -73,7 +73,7 @@ export async function runCloudLiteMachine(config) {
       const actor = bootstrap.agents.find(x => x.id === agent);
       void request('/tool', { name: 'factory_checkpoint', arguments: { status: 'running' } }, actor.token).catch(() => {});
     }
-    if (value.method === 'turn/completed') states.set(threadId, { status: value.params?.turn?.status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
+    if (value.method === 'turn/completed') states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : value.params?.turn?.status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
   });
   rpc.on('exit', result => { rootTrace.record('codex.exit', result); void stop(); });
   timer = setInterval(async () => {
@@ -137,13 +137,23 @@ export async function runCloudLiteMachine(config) {
       inboxVersions.set(threadId, incoming.inboxVersion ?? 0);
       for (const command of incoming.commands) {
         if (command.action === 'stop') {
+          stoppedThreads.add(threadId);
           const turnId = turns.get(threadId); if (turnId) { try { await rpc.request('turn/interrupt', { threadId, turnId }); } catch {} }
           states.set(threadId, { status: 'stopped', completed: Date.now() });
           await request('/tool', { name: 'factory_checkpoint', arguments: { status: 'stopped' } }, agent.token);
         } else if (command.action === 'message') {
+          stoppedThreads.delete(threadId);
           const turnId = turns.get(threadId);
-          if (turnId && states.get(threadId)?.status !== 'completed') await rpc.request('turn/steer', { threadId, expectedTurnId: turnId, input: [{ type: 'text', text: command.message }] });
-          else await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: command.message }] });
+          const input = [{ type: 'text', text: command.message }];
+          if (turnId && states.get(threadId)?.status !== 'completed') {
+            try { await rpc.request('turn/steer', { threadId, expectedTurnId: turnId, input }); }
+            catch (error) {
+              if (error.message !== 'no active turn to steer') throw error;
+              const current = await rpc.request('thread/read', { threadId, includeTurns: false });
+              if (current.thread.status?.type === 'active') throw error;
+              await rpc.request('turn/start', { threadId, input, effort: plan.reasoningEffort });
+            }
+          } else await rpc.request('turn/start', { threadId, input, effort: plan.reasoningEffort });
         }
         traces.get(agentId).record('supervisor.command', { id: command.id, action: command.action });
         await request('/commands', { acknowledge: command.id }, agent.token);

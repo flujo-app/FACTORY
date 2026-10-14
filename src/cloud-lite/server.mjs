@@ -48,10 +48,22 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
       }
       if (request.url === '/operator/command' && actor.role === 'operator' && request.method === 'POST') {
         if (!body.id || !board.inventory().some(x => x.id === body.recipient)) throw new Error('Select a known agent and stable command id.');
+        if (!['message','stop'].includes(body.action) || body.action === 'message' && typeof body.message !== 'string') throw new Error('Select a stop or text message command.');
         const original = board.db.prepare('SELECT body FROM cloud_lite_commands WHERE id=?').get(body.id);
         const serialized = JSON.stringify({ action: body.action, message: body.message });
         if (original && original.body !== serialized) throw new Error('Command id belongs to different bytes.');
-        board.db.prepare('INSERT OR IGNORE INTO cloud_lite_commands VALUES(?,?,?,NULL)').run(body.id, body.recipient, serialized);
+        board.db.exec('BEGIN IMMEDIATE');
+        try {
+          // A newly requested stop supersedes earlier queued work. Retrying its
+          // durable id does not cancel a later explicit resume/message command.
+          if (!original && body.action === 'stop') {
+            const cancelled = Date.now();
+            board.db.prepare('INSERT OR IGNORE INTO cloud_lite_command_cancellations SELECT id,?,? FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL').run(body.id, cancelled, body.recipient);
+            board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE recipient=? AND acknowledged IS NULL').run(cancelled, body.recipient);
+          }
+          board.db.prepare('INSERT OR IGNORE INTO cloud_lite_commands VALUES(?,?,?,NULL)').run(body.id, body.recipient, serialized);
+          board.db.exec('COMMIT');
+        } catch (error) { board.db.exec('ROLLBACK'); throw error; }
         return send(200, { recorded: true });
       }
       if (request.url === '/commands' && actor.role !== 'operator') {

@@ -237,8 +237,30 @@ Provider mutations retain durable intents. An uncertain operation blocks another
 mutation under that key rather than launching duplicate infrastructure. Stop,
 artifact collection, owned retirement, provider billing and filesystem cleanup
 remain distinct stages. Native histories and local trace outboxes survive on
-the volumes; collect them before retirement. These development APIs require
-real provider acceptance before any production-readiness claim.
+the volumes; collect them before retirement. `quiesce()` sends durable stop
+commands and waits for every native agent to acknowledge. A new stop supersedes
+older queued messages, with separate cancellation receipts; retrying its id
+preserves later explicit messages. `collect()` quiesces the pool, copies all
+worker data, makes consistent SQLite backups, and downloads archives with
+verified SHA-256 digests and file manifests. Each Machine retains its collection
+job receipt; observation timeouts do not launch another copy. A failed or missing
+job requires inspection before an explicit new `attempt` identity is selected.
+Dependency caches, `.next` output and `auth.json` are omitted. Archives remain
+private because native histories and worktrees can contain confidential source.
+`retire()` verifies the original Machine and volume inventory before destroying
+the dedicated app.
+
+The [2026-10-14 Fly run](evidence/cloud-lite-run-20261014.json) verified 10 real
+Machines with 100 distinct subscription-authenticated native sessions. All 100
+started turns and used built-in shell or MCP tools. The observed 943 agent
+messages included 298 cross-machine orchestrator messages and no forbidden
+subagent deliveries; a real cross-machine subagent call was explicitly rejected.
+A separate cold SDK deployment reached its native shell/MCP checkpoint in about
+155 seconds from app creation, using the upstream Machines API and private proxy.
+This proves the configured launch and communication path. FLUJO reviews retained
+real test receipts and findings, but other owners performed the observed merges;
+five owned drafts retain their original acceptance holds. Full production
+qualification and those held FLUJO deliveries are not asserted.
 
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`

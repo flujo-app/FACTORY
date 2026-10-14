@@ -9,6 +9,7 @@ export class CloudLiteBoard {
     this.db.exec(`CREATE TABLE IF NOT EXISTS cloud_lite_agents(id TEXT PRIMARY KEY, machine TEXT NOT NULL, role TEXT NOT NULL, token_hash TEXT NOT NULL, session TEXT, status TEXT NOT NULL DEFAULT 'pending', updated INTEGER);
       CREATE TABLE IF NOT EXISTS cloud_lite_claims(resource TEXT PRIMARY KEY, machine TEXT NOT NULL, owner TEXT NOT NULL, status TEXT NOT NULL, details TEXT NOT NULL, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_traces(seq INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, source_seq INTEGER NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, observed INTEGER NOT NULL, UNIQUE(source,source_seq));
+      CREATE TABLE IF NOT EXISTS cloud_lite_command_cancellations(command_id TEXT PRIMARY KEY, superseded_by TEXT NOT NULL, cancelled INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_commands(id TEXT PRIMARY KEY, recipient TEXT NOT NULL, body TEXT NOT NULL, acknowledged INTEGER);
       CREATE TABLE IF NOT EXISTS cloud_lite_validations(resource TEXT NOT NULL, revision TEXT NOT NULL, machine TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(resource,revision));
       CREATE TABLE IF NOT EXISTS cloud_lite_run(id INTEGER PRIMARY KEY CHECK(id=1), plan TEXT NOT NULL, digest TEXT NOT NULL);`);
