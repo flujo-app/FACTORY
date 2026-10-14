@@ -357,14 +357,8 @@ export class FactoryCloudLiteFleet {
   }
   snapshot() { return structuredClone(this.state); }
   async command(agent, { id, action = 'message', message, expectedThreadId, expectedTurnId } = {}) {
-    if (action === 'stop' && (expectedThreadId === undefined || expectedTurnId === undefined)) {
-      const snapshot = await this.request('/operator/status');
-      const native = snapshot.agents.find(value => value.id === agent)?.nativeRuntime;
-      const target = nativeStopTarget(agent, native);
-      if (expectedThreadId !== undefined && expectedThreadId !== target.expectedThreadId
-        || expectedTurnId !== undefined && expectedTurnId !== target.expectedTurnId) throw new Error('Supplied stop target differs from the current native thread/turn.');
-      expectedThreadId = target.expectedThreadId; expectedTurnId = target.expectedTurnId;
-    }
+    // The coordinator binds an omitted legacy stop target when it first
+    // records the stable id, then reuses that stored binding on retries.
     return this.request('/operator/command', { id, recipient: agent, action, message, expectedThreadId, expectedTurnId });
   }
   /** Replace only the runtime bundle on the original, journal-owned Machines. */

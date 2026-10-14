@@ -102,9 +102,18 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
           const command = board.db.prepare('SELECT body,acknowledged FROM cloud_lite_commands WHERE id=? AND recipient=?').get(body.acknowledge, actor.id);
           const cancelled = board.db.prepare('SELECT 1 FROM cloud_lite_command_cancellations WHERE command_id=?').get(body.acknowledge);
           if (!command || cancelled) return send(200, { acknowledged: false, cancelled: true });
-          if (JSON.parse(command.body).action === 'stop'
-            && !board.db.prepare('SELECT 1 FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id=?').get(actor.id, body.acknowledge)) {
-            return send(200, { acknowledged: false, cancelled: false, receiptAccepted: false });
+          const issued = JSON.parse(command.body);
+          if (issued.action === 'stop') {
+            const receipt = board.db.prepare('SELECT * FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id=?')
+              .get(actor.id, body.acknowledge);
+            const current = board.db.prepare(`SELECT a.session,n.thread_id,n.thread_status,n.turn_id,n.turn_status
+              FROM cloud_lite_agents a LEFT JOIN cloud_lite_native_runtime n ON n.agent_id=a.id WHERE a.id=?`).get(actor.id);
+            if (!receipt || receipt.thread_id !== issued.expectedThreadId || receipt.turn_id !== issued.expectedTurnId
+              || current.session !== receipt.thread_id || current.thread_id !== receipt.thread_id
+              || current.thread_status !== receipt.thread_status || current.turn_id !== receipt.turn_id
+              || current.turn_status !== receipt.turn_status || current.turn_status === 'inProgress') {
+              return send(200, { acknowledged: false, cancelled: false, receiptAccepted: false });
+            }
           }
           if (command.acknowledged !== null) return send(200, { acknowledged: true, cancelled: false, receiptAccepted: true });
           const result = board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE id=? AND recipient=? AND acknowledged IS NULL').run(Date.now(), body.acknowledge, actor.id);

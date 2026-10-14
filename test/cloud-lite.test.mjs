@@ -675,14 +675,17 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     } }] }, credentials[actor.id]);
     assert.equal(nextReceipt.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt.commandId, nextStopId);
-    const acknowledgedStop = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
-    assert.deepEqual(await acknowledgedStop.json(), { acknowledged: true, cancelled: false, receiptAccepted: true });
+    // Simulate a committed ACK whose HTTP response is lost by discarding it.
+    const lostAckResponse = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
+    assert.equal(lostAckResponse.status, 200);
     const acknowledgedAt = board.db.prepare('SELECT acknowledged FROM cloud_lite_commands WHERE id=?').get(nextStopId).acknowledged;
     const retriedAck = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
     assert.deepEqual(await retriedAck.json(), { acknowledged: true, cancelled: false, receiptAccepted: true });
     assert.equal(board.db.prepare('SELECT acknowledged FROM cloud_lite_commands WHERE id=?').get(nextStopId).acknowledged, acknowledgedAt);
     const message = await post('/operator/command', { id: 'message-only', recipient: actor.id, action: 'message', message: 'continue' });
     assert.equal(message.status, 200);
+    const cancelledAck = await post('/commands', { acknowledge: nextStopId }, credentials[actor.id]);
+    assert.deepEqual(await cancelledAck.json(), { acknowledged: false, cancelled: true });
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
     assert.equal(board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get(nextStopId).superseded_by, 'message-only');
     const cancelledReceipt = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
@@ -730,6 +733,14 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=14').get(actor.id).n, 1);
     assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_native_stop_receipt_rejections WHERE source=? AND source_seq=14').get(actor.id).n, 1);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.turnId, newTurn);
+    const mismatchedProofId = 'mismatched-proof-stop';
+    const mismatchedProofCommand = await post('/operator/command', { id: mismatchedProofId, recipient: actor.id, action: 'stop',
+      expectedThreadId: threadId, expectedTurnId: newTurn });
+    assert.equal(mismatchedProofCommand.status, 200);
+    board.db.prepare('INSERT INTO cloud_lite_native_stop_receipts VALUES(?,?,?,?,?,?,?,?)')
+      .run(actor.id, mismatchedProofId, threadId, turnId, 'idle', 'interrupted', 15, Date.now());
+    const mismatchedAck = await post('/commands', { acknowledge: mismatchedProofId }, credentials[actor.id]);
+    assert.deepEqual(await mismatchedAck.json(), { acknowledged: false, cancelled: false, receiptAccepted: false });
   } finally { await coordinator.close(); }
 });
 
@@ -761,20 +772,18 @@ test('fleet quiescence requires a current receipt for every stable stop command,
     await assert.rejects(stale.quiesce({ attempt: 'proof', timeoutMs: 0 }), /not all acknowledged stop/);
     assert.equal(stale.state.quiescedAt, undefined);
   });
-  await t.test('legacy public stop command binds the current native target', async () => {
+  await t.test('legacy public stop command leaves first target binding to the coordinator', async () => {
     const legacy = new FactoryCloudLiteFleet({ directory: fresh() }); legacy.state = { plan: p, operations: {} };
-    const target = status('active').agents[0].nativeRuntime;
     const calls = [];
     legacy.request = async (path, body) => {
       calls.push({ path, body });
-      if (path === '/operator/status') return status('active');
       return { recorded: true };
     };
     await legacy.command('m0-a0', { id: 'legacy-stop', action: 'stop' });
-    assert.deepEqual(calls[1], { path: '/operator/command', body: {
+    assert.deepEqual(calls, [{ path: '/operator/command', body: {
       id: 'legacy-stop', recipient: 'm0-a0', action: 'stop', message: undefined,
-      expectedThreadId: target.threadId, expectedTurnId: target.turnId,
-    } });
+      expectedThreadId: undefined, expectedTurnId: undefined,
+    } }]);
   });
 });
 
@@ -959,14 +968,24 @@ test('legacy stop replay preserves its original target and recipient, and reject
     ] }, credentials[agent]);
     assert.equal(observed.acknowledged, 2);
     const stable = { id: 'legacy-stable-stop', recipient: agent, action: 'stop' };
-    assert.deepEqual(await request('/operator/command', stable), { recorded: true });
+    const fleet = new FactoryCloudLiteFleet({ directory: fresh() }); fleet.state = { plan: p, operations: {} };
+    fleet.request = async (path, body) => {
+      const response = await rawRequest(path, body);
+      if (!response.ok) throw new Error(`Fleet coordinator ${path} returned ${response.status}.`);
+      return response.json();
+    };
+    assert.deepEqual(await fleet.command(agent, stable), { recorded: true });
     const originalRow = coordinator.board.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(stable.id);
     assert.equal(originalRow.recipient, agent);
     assert.deepEqual(JSON.parse(originalRow.body), { action: 'stop', expectedThreadId: oldThread, expectedTurnId: oldTurn });
     await request('/trace', { events: [{ seq: 3, kind: 'native.turn.started', body: { threadId: oldThread, turn: { id: newTurn } } }] }, credentials[agent]);
-    assert.deepEqual(await request('/operator/command', stable), { recorded: true });
+    await fleet.command(agent, { id: 'later-message', action: 'message', message: 'keep this queued' });
+    assert.deepEqual(await fleet.command(agent, stable), { recorded: true });
     assert.deepEqual(coordinator.board.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(stable.id), originalRow);
-    assert.equal(coordinator.board.db.prepare('SELECT count(*) AS count FROM cloud_lite_command_cancellations WHERE command_id=?').get(stable.id).count, 0);
+    assert.equal(coordinator.board.db.prepare('SELECT count(*) AS count FROM cloud_lite_command_cancellations WHERE command_id=?').get(stable.id).count, 1);
+    assert.equal(coordinator.board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get(stable.id).superseded_by, 'later-message');
+    const inbox = await request('/commands', {}, credentials[agent]);
+    assert.deepEqual(inbox.commands.map(command => command.id), ['later-message']);
 
     const changedTarget = await rawRequest('/operator/command', { ...stable, expectedThreadId: oldThread, expectedTurnId: newTurn });
     assert.equal(changedTarget.status, 400); await changedTarget.arrayBuffer();
