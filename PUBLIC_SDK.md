@@ -170,6 +170,111 @@ only builds the process specification.
 
 ## FLUJO worker dispatch
 
+### Cloud Codex lite workers (development)
+
+`FactoryCloudLiteFleet` provisions a dedicated Fly fleet running native Codex
+app-server harnesses with their built-in tools and only FACTORY's board MCP.
+Each machine has one orchestrator and `agentsPerMachine - 1` subordinate Codex
+sessions, isolated Git worktrees, persisted native histories, and durable traces.
+The SDK starts and registers the configured pool; additional native automatic
+fanout is disabled so every subordinate has its own board identity and policy.
+CPU kind, CPU count, RAM, persistent disk, region, machine count and agent count
+are explicit plan settings. No FLUJO worker harness is used for this path.
+
+```js
+import { FactoryCloudLiteFleet, CodexSubscriptionBroker } from 'flujo-factory';
+
+const fleet = new FactoryCloudLiteFleet({
+  directory: '/absolute/private/fleet-run',
+  flujoCloudPath: '/absolute/installed/flujo-cloud',
+  auth: new CodexSubscriptionBroker({ authFile: '/absolute/private/.codex/auth.json' }),
+});
+await fleet.deploy({
+  runId: 'my-cloud-lite-run', app: 'my-cloud-lite-app',
+  repository: 'mario-andreschak/FLUJO', goal: ownerGoal,
+  machines: 10, agentsPerMachine: 10,
+  cpuKind: 'shared', cpus: 2, memoryMb: 4096, diskGb: 20, region: 'iad',
+  model: 'gpt-6.1-sol', subagentModel: 'gpt-6-luna', reasoningEffort: 'medium',
+}, { image: immutableWorkerImage, githubToken: privateGithubCredential,
+  bundlePath: '/absolute/private/flujo-factory.tgz' });
+const observation = await fleet.observe();
+await fleet.disconnect();
+```
+
+The coordinator lives on the first machine and retains the one authoritative
+FactoryControl database on its volume. Orchestrators can message other
+orchestrators and their own machine's agents; subagents can message only their
+own machine. Individual credentials bind the sender independently of tool input.
+Atomic PR/issue claims prevent cross-machine duplicate assignment. Tool access is
+not hostile-process isolation: agents have the native shell/filesystem access
+requested for the job and must be trusted with their machine and repository.
+
+Provisioning imports flujo-cloud's `createMachine`, `createFlyRunner`,
+`buildMachineConfig`, `resolveWorkerImage`, and private proxy implementation
+from the selected installation. It does not copy their source or perform an
+image build, registry login, or image push. `imageSource` can supply FLUJO's
+compatibility advertisement for its existing official image resolver; an
+explicit immutable image retains the upstream custom-image contract. The native
+Codex bootstrap accepts a digest-bound SDK tarball on an existing Node image.
+Workers communicate over the exact coordinator Machine's private Fly address,
+and the host uses flujo-cloud's private proxy. No public worker services or
+dedicated IP addresses are created by the native profile.
+
+Subscription access tokens use upstream Codex's external-token app-server login.
+Refresh tokens stay on the trusted host, which runs native Codex refresh and
+updates the coordinator when workers request it. Run `observe()` continuously
+while workers execute; a disconnected host can prevent authentication renewal.
+The runtime does not switch to an API key. Credentials never belong in an image,
+public journal, source commit or trace. Store the fleet directory privately.
+
+The cloud MCP adds identity/status, work claims and progress, authenticated
+messages/inbox, checkpoints, and supervisor Windows/Linux validation requests.
+The operator HTTP interface supports authenticated observations, trace export,
+validation evidence and durable steer/stop commands. Agent-reported work status
+is distinct from independently verified GitHub delivery.
+
+Provider mutations retain durable intents. An uncertain operation blocks another
+mutation under that key rather than launching duplicate infrastructure. Stop,
+artifact collection, owned retirement, provider billing and filesystem cleanup
+remain distinct stages. Native histories and local trace outboxes survive on
+the volumes; collect them before retirement. `quiesce()` sends durable stop
+commands and waits for every native agent to acknowledge. A new stop supersedes
+older queued messages, with separate cancellation receipts; retrying its id
+preserves later explicit messages. `collect()` quiesces the pool, copies all
+worker data, makes consistent SQLite backups, and downloads archives with
+verified SHA-256 digests and file manifests. Each Machine retains its collection
+job receipt; incomplete JSONL tails are preserved separately as raw bytes.
+Observation timeouts do not launch another copy. A failed or missing
+job requires inspection before an explicit new `attempt` identity is selected.
+Transfers report captured bytes, accept `transferTimeoutMs`, and retain partial
+downloads. Repeating the same capture attempt observes its original remote job
+and uses a fresh destination for an incomplete download.
+`includeGitObjects: false` omits cloned Git object stores while retaining current
+source files, Git metadata, native histories, traces and test evidence. Select a
+new capture `attempt` when changing this setting; full Git history is included
+by default.
+Identical files with matching permissions share snapshot hard links, so repeated
+worktree assets occupy one archive entry while every original path is retained.
+`machineIds` selects original owned Machines for recovery of an incomplete
+collection. Previously verified archives are retained; the returned `complete`
+flag is true only when all original Machines have collected receipts.
+Dependency caches, `.next` output and `auth.json` are omitted. Archives remain
+private because native histories and worktrees can contain confidential source.
+`retire()` verifies the original Machine and volume inventory before destroying
+the dedicated app.
+
+The [2026-10-14 Fly run](evidence/cloud-lite-run-20261014.json) verified 10 real
+Machines with 100 distinct subscription-authenticated native sessions. All 100
+started turns and used built-in shell or MCP tools. The observed 943 agent
+messages included 298 cross-machine orchestrator messages and no forbidden
+subagent deliveries; a real cross-machine subagent call was explicitly rejected.
+A separate cold SDK deployment reached its native shell/MCP checkpoint in about
+155 seconds from app creation, using the upstream Machines API and private proxy.
+This proves the configured launch and communication path. FLUJO reviews retained
+real test receipts and findings, but other owners performed the observed merges;
+five owned drafts retain their original acceptance holds. Full production
+qualification and those held FLUJO deliveries are not asserted.
+
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`
 task lease. `provisionWorker` reserves a child cell and records a provider

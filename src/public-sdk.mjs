@@ -96,3 +96,6 @@ export { observeSaviaCaseTopology } from './flujo-swarm/template/savia-topology.
 export { createPresentationServer, startPresentationServer } from './presentation.mjs';
 export { createObservatoryClient } from './observatory-client.mjs';
 export { liteWorkerCommand, startLiteWorker } from './lite-worker.mjs';
+export { FactoryCloudLiteFleet, CodexSubscriptionBroker } from './cloud-lite/fleet.mjs';
+export { validateCloudLitePlan, agentInventory, machineConfig as cloudLiteMachineConfig } from './cloud-lite/protocol.mjs';
+export { cloudLiteBootstrap } from './cloud-lite/bootstrap.mjs';

@@ -17,6 +17,10 @@ for (const name of [
   'createObservatoryClient',
   'liteWorkerCommand',
   'startLiteWorker',
+  'FactoryCloudLiteFleet',
+  'CodexSubscriptionBroker',
+  'validateCloudLitePlan',
+  'cloudLiteMachineConfig',
 ]) {
   assert.equal(typeof sdk[name], 'function', `${name} is missing`);
 }
