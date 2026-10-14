@@ -92,7 +92,7 @@ export class CloudLiteBoard {
     const threadId = params?.threadId ?? params?.thread?.id;
     const turn = params?.turn ?? {};
     const event = kind === 'native.thread.started' || kind === 'thread/started' ? 'thread.started'
-      : kind === 'native.thread.resumed' ? 'thread.resumed'
+      : kind === 'native.thread.resumed' || kind === 'thread/resumed' ? 'thread.resumed'
         : kind === 'thread/status/changed' ? 'thread.status'
           : kind === 'turn/started' || kind === 'native.turn.started' ? 'turn.started'
             : kind === 'turn/completed' || kind === 'native.turn.completed' ? 'turn.completed' : null;
@@ -229,6 +229,7 @@ export class CloudLiteBoard {
       || command.expectedThreadId !== expectedThreadId || command.expectedTurnId !== expectedTurnId) {
       throw new Error('Native stop receipt does not match an issued stop command for this agent and target.');
     }
+    if ((turnId ?? null) !== expectedTurnId) throw new Error('Native stop receipt turn differs from the issued command target.');
     if (this.db.prepare('SELECT 1 FROM cloud_lite_command_cancellations WHERE command_id=?').get(commandId)) {
       throw new Error('Native stop receipt belongs to a superseded command.');
     }

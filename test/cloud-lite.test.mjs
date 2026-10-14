@@ -248,32 +248,100 @@ test('observer makes progress on one legacy oversized trace record across restar
   assert.equal(JSON.parse(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim()).seq, 1);
 });
 
-test('bounded observer batches make sustained progress while a newer trace tail arrives', async () => {
+test('local synthetic 21.65 rows/s arrivals make bounded progress while reporting overload honestly', async () => {
+  // Fixture only: the measured fleet sample was 336 unique rows / 15.517 s
+  // (21.6535 rows/s, one window). Virtual passes model that arrival rate; they
+  // do not qualify sustained live collection capacity.
+  const fixtureRowsPerPass = 336;
+  const virtualPassSeconds = 15.517114346;
+  const pageBudget = 5;
+  const rowsPerPage = 100;
+  const passCapacity = pageBudget * rowsPerPage;
+  const archive = Array.from({ length: 5000 }, (_, index) => ({ seq: index + 1, kind: 'fixture' }));
   const directory = fresh();
-  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
-  let statusCount = 0;
-  const requests = [];
+  let fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  let pass = 0;
   fleet.request = async path => {
-    if (path === '/operator/status') return { traceSequence: [1000, 1005, 1005][statusCount++] ?? 1005, agents: [], refreshRequested: false };
-    requests.push(path);
+    if (path === '/operator/status') {
+      const watermark = archive.at(-1)?.seq ?? 0;
+      // Arrivals occur after snapshot capture and therefore belong to a later watermark.
+      archive.push(...Array.from({ length: fixtureRowsPerPass }, (_, index) => ({
+        seq: watermark + index + 1, kind: 'synthetic-arrival',
+      })));
+      pass++;
+      return { traceSequence: watermark, agents: [], refreshRequested: false };
+    }
     const query = new URL(path, 'http://localhost').searchParams;
     const after = Number(query.get('after')); const through = Number(query.get('through'));
-    const end = Math.min(through, after + 100);
-    return { events: Array.from({ length: end - after }, (_, index) => ({ seq: after + index + 1, kind: 'burst' })) };
+    return { events: archive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
   };
-  const first = await fleet.observe({ maxPages: 5 });
-  assert.equal(first.traceCollection.pages, 5); assert.equal(first.traceCollection.eventsCollected, 500);
-  assert.equal(first.traceCollection.remainingLag, 500);
-  const resumed = new FactoryCloudLiteFleet({ directory }); resumed.request = fleet.request;
-  const second = await resumed.observe({ maxPages: 5 });
-  assert.equal(second.traceCollection.pages, 5); assert.equal(second.traceCollection.traceWatermark, 1000);
-  assert.equal(second.traceCollection.complete, true); assert.equal(second.traceCollection.observedLag, 5);
-  const final = new FactoryCloudLiteFleet({ directory }); final.request = fleet.request;
-  const third = await final.observe({ maxPages: 5 });
-  assert.equal(third.traceCollection.traceWatermark, 1005); assert.equal(third.traceCollection.remainingLag, 0);
-  assert.equal(requests.some(path => path.endsWith('through=1005') && path.includes('after=500')), false);
-  const events = readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n');
-  assert.equal(events.length, 1005);
+  const first = await fleet.observe({ maxPages: pageBudget });
+  assert.equal(first.traceCollection.eventsCollected, passCapacity);
+  assert.equal(first.traceCollection.remainingLag, 4500);
+  assert.equal(first.traceCollection.traceWatermark, 5000);
+  assert.equal(first.traceCollection.observedWatermark, 5000);
+  assert.ok(Math.abs(fixtureRowsPerPass / virtualPassSeconds - 21.653510602) < 0.00000001);
+  assert.equal(passCapacity / virtualPassSeconds > fixtureRowsPerPass / virtualPassSeconds, true);
+
+  // Restart between passes to exercise persisted cursor and fixed target. Each
+  // pass drains 500 and receives 336; total outstanding backlog falls by 164.
+  const outstanding = [archive.length - first.traceCollection.traceCursor];
+  for (let index = 0; index < 4; index++) {
+    fleet = new FactoryCloudLiteFleet({ directory });
+    fleet.request = async path => {
+      if (path === '/operator/status') {
+        const watermark = archive.at(-1)?.seq ?? 0;
+        archive.push(...Array.from({ length: fixtureRowsPerPass }, (_, row) => ({ seq: watermark + row + 1, kind: 'synthetic-arrival' })));
+        pass++;
+        return { traceSequence: watermark, agents: [], refreshRequested: false };
+      }
+      const query = new URL(path, 'http://localhost').searchParams;
+      const after = Number(query.get('after')); const through = Number(query.get('through'));
+      return { events: archive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
+    };
+    const result = await fleet.observe({ maxPages: pageBudget });
+    assert.equal(result.traceCollection.traceWatermark, 5000);
+    assert.equal(result.traceCollection.complete, false);
+    assert.equal(result.traceCollection.eventsCollected, passCapacity);
+    outstanding.push(archive.length - result.traceCollection.traceCursor);
+  }
+  assert.deepEqual(outstanding, [4836, 4672, 4508, 4344, 4180]);
+  assert.equal(pass, 5);
+  assert.equal(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').length, 2500);
+
+  // Overload fixture: 600 rows arrive per virtual pass (>500-row budget).
+  // The collector must stay bounded and report incomplete lag, never claim catch-up.
+  const overloadDir = fresh();
+  let overloaded = new FactoryCloudLiteFleet({ directory: overloadDir });
+  overloaded.state = { plan: plan(), machines: [], operations: {} }; overloaded.save();
+  const overloadArchive = Array.from({ length: 1000 }, (_, index) => ({ seq: index + 1, kind: 'fixture' }));
+  const overloadedRequest = async path => {
+    if (path === '/operator/status') {
+      const watermark = overloadArchive.at(-1).seq;
+      overloadArchive.push(...Array.from({ length: 600 }, (_, index) => ({ seq: watermark + index + 1, kind: 'overload-arrival' })));
+      return { traceSequence: watermark, agents: [], refreshRequested: false };
+    }
+    const query = new URL(path, 'http://localhost').searchParams;
+    const after = Number(query.get('after')); const through = Number(query.get('through'));
+    return { events: overloadArchive.filter(event => event.seq > after && event.seq <= through).slice(0, rowsPerPage) };
+  };
+  overloaded.request = overloadedRequest;
+  let overload = await overloaded.observe({ maxPages: pageBudget });
+  assert.equal(overload.traceCollection.complete, false);
+  assert.equal(overload.traceCollection.traceWatermark, 1000);
+  assert.equal(overload.traceCollection.eventsCollected, passCapacity);
+  assert.equal(overload.traceCollection.observedLag, 500);
+  overloaded = new FactoryCloudLiteFleet({ directory: overloadDir }); overloaded.request = overloadedRequest;
+  overload = await overloaded.observe({ maxPages: pageBudget });
+  assert.equal(overload.traceCollection.complete, true);
+  assert.equal(overload.traceCollection.traceWatermark, 1000);
+  assert.equal(overload.traceCollection.observedLag, 600);
+  overloaded = new FactoryCloudLiteFleet({ directory: overloadDir }); overloaded.request = overloadedRequest;
+  overload = await overloaded.observe({ maxPages: pageBudget });
+  assert.equal(overload.traceCollection.complete, false);
+  assert.equal(overload.traceCollection.traceWatermark, 2200);
+  assert.equal(overload.traceCollection.eventsCollected, passCapacity);
+  assert.equal(overload.traceCollection.observedLag, 700);
 });
 
 test('observer handles requested auth refresh before malformed archive metadata', async () => {
@@ -470,34 +538,44 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     assert.equal(agent.status, 'pending');
     assert.deepEqual(agent.nativeRuntime.operatorStopReceipt,
       { commandId, threadId, turnId, threadStatus: 'idle', turnStatus: 'interrupted', eventSequence: 5, updated: agent.nativeRuntime.operatorStopReceipt.updated });
+    const resumedThread = await post('/trace', { events: [{ seq: 6, kind: 'thread/resumed', body: { threadId, threadStatus: 'idle' } }] }, credentials[actor.id]);
+    assert.equal(resumedThread.status, 200);
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
     const nextStopId = 'quiesce-run-b-m0-a2';
     const nextStop = await post('/operator/command', { id: nextStopId, recipient: actor.id, action: 'stop', expectedThreadId: threadId, expectedTurnId: turnId });
     assert.equal(nextStop.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
-    const cancelledReceipt = await post('/trace', { events: [{ seq: 6, kind: 'native.operator.stop.completed', body: {
+    const cancelledReceipt = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
       commandId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(cancelledReceipt.status, 400);
     const message = await post('/operator/command', { id: 'message-only', recipient: actor.id, action: 'message', message: 'continue' });
     assert.equal(message.status, 200);
-    const forged = await post('/trace', { events: [{ seq: 6, kind: 'native.operator.stop.completed', body: {
+    const forged = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
       commandId: 'message-only', expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(forged.status, 400);
-    const unrelated = await post('/trace', { events: [{ seq: 6, kind: 'native.operator.stop.completed', body: {
+    const unrelated = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
       commandId: 'never-issued', expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(unrelated.status, 400);
+    const otherTurnId = '01a1392b-1da9-76a1-0a6e-af0c060ec3a4';
+    const wrongTarget = await post('/operator/command', { id: 'wrong-target', recipient: actor.id, action: 'stop', expectedThreadId: threadId, expectedTurnId: otherTurnId });
+    assert.equal(wrongTarget.status, 200);
+    const mismatchedTurn = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
+      commandId: 'wrong-target', expectedThreadId: threadId, expectedTurnId: otherTurnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
+    } }] }, credentials[actor.id]);
+    assert.equal(mismatchedTurn.status, 400);
     const newTurn = '01a1392a-1da9-76a1-0a6e-af0c060ec3a4';
-    const resumed = await post('/trace', { events: [{ seq: 6, kind: 'native.turn.started', body: { threadId, turn: { id: newTurn } } }] }, credentials[actor.id]);
+    const resumed = await post('/trace', { events: [{ seq: 7, kind: 'native.turn.started', body: { threadId, turn: { id: newTurn } } }] }, credentials[actor.id]);
     assert.equal(resumed.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
-    const stale = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
+    const stale = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
       commandId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(stale.status, 400);
-    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=6').get(actor.id).n, 1);
-    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=7').get(actor.id).n, 0);
+    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=7').get(actor.id).n, 1);
+    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=8').get(actor.id).n, 0);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.turnId, newTurn);
   } finally { await coordinator.close(); }
 });
