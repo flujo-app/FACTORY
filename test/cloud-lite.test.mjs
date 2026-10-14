@@ -11,7 +11,7 @@ import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { CloudLiteTrace } from '../src/cloud-lite/trace.mjs';
 import { NativeOperatorStop } from '../src/cloud-lite/operator-stop.mjs';
 import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
-import { isCurrentNativeTurn, nativeStopTurn } from '../src/cloud-lite/runtime.mjs';
+import { finalizeNativeStopCommand, isCurrentNativeTurn, nativeStopTurn } from '../src/cloud-lite/runtime.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
 const plan = () => validateCloudLitePlan({ runId: 'lite-test', app: 'factory-lite-test', repository: 'mario-andreschak/FLUJO', goal: 'Analyze and merge existing PRs', machines: 10, agentsPerMachine: 10 });
@@ -516,6 +516,46 @@ test('runtime stop targeting recovers terminal-only turn identity and ignores a 
   assert.equal(isCurrentNativeTurn(turns, threadId, turnA), false);
   assert.deepEqual(nativeStopTurn(turns, terminalTurns, threadId), { id: turnB, status: 'inProgress' });
   assert.equal(isCurrentNativeTurn(turns, threadId, turnB), true);
+});
+
+test('runtime stop finalization refuses a message-revoked task at every async boundary', async t => {
+  for (const boundary of ['proof', 'flush', 'acknowledgement']) await t.test(boundary, async () => {
+    let release; let entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const waiting = new Promise(resolve => { entered = resolve; });
+    let revoked = false; let published = 0; let acknowledgements = 0; let stopped = 0; let proofTraceAcked = false;
+    const finalization = finalizeNativeStopCommand({
+      prove: async () => {
+        if (boundary === 'proof') { entered(); await gate; proofTraceAcked = true; }
+      },
+      publish: () => { published++; },
+      flush: async () => { if (boundary === 'flush') { entered(); await gate; } },
+      acknowledge: async () => { acknowledgements++; if (boundary === 'acknowledgement') { entered(); await gate; } return { acknowledged: true }; },
+      isRevoked: () => revoked,
+      markStopped: () => { stopped++; },
+    });
+    await waiting;
+    revoked = true; // A newer operator message revokes this pending stop.
+    release();
+    assert.equal(await finalization, false);
+    assert.equal(stopped, 0);
+    if (boundary === 'proof') {
+      assert.equal(proofTraceAcked, true);
+      assert.equal(published, 0); assert.equal(acknowledgements, 0);
+    } else if (boundary === 'flush') {
+      assert.equal(published, 1); assert.equal(acknowledgements, 0);
+    } else {
+      assert.equal(published, 1); assert.equal(acknowledgements, 1);
+    }
+  });
+
+  const order = [];
+  assert.equal(await finalizeNativeStopCommand({
+    prove: async () => order.push('proof'), publish: () => order.push('publish'),
+    flush: async () => order.push('flush'), acknowledge: async () => { order.push('ack'); return { acknowledged: true }; },
+    isRevoked: () => false, markStopped: () => order.push('stopped'),
+  }), true);
+  assert.deepEqual(order, ['proof', 'publish', 'flush', 'ack', 'stopped']);
 });
 
 test('native operator stop emits a receipt only after matching interrupt and inactive readback', async t => {

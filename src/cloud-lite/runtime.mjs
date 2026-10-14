@@ -26,6 +26,17 @@ export function isCurrentNativeTurn(turns, threadId, notificationTurnId) {
   const current = turns.get(threadId);
   return !notificationTurnId || !current || notificationTurnId === current;
 }
+export async function finalizeNativeStopCommand({ prove, publish, flush, acknowledge, isRevoked, markStopped }) {
+  await prove();
+  if (isRevoked()) return false;
+  publish();
+  await flush();
+  if (isRevoked()) return false;
+  const result = await acknowledge();
+  if (!result?.acknowledged || isRevoked()) return false;
+  markStopped();
+  return true;
+}
 export async function runCloudLiteMachine(config) {
   const { plan, index, credentials, operatorToken, initialAuth, githubToken } = config;
   mkdirSync('/data/factory', { recursive: true, mode: 0o700 });
@@ -185,20 +196,23 @@ export async function runCloudLiteMachine(config) {
           stoppingThreads.add(threadId);
           if (!stopTasks.has(command.id)) {
             const stopTask = (async () => {
-              await stopControllers.get(threadId).stop(command.id, {
-                expectedThreadId: command.expectedThreadId, expectedTurnId: command.expectedTurnId,
+              const completed = await finalizeNativeStopCommand({
+                prove: () => stopControllers.get(threadId).stop(command.id, {
+                  expectedThreadId: command.expectedThreadId, expectedTurnId: command.expectedTurnId,
+                }),
+                publish: () => traces.get(agentId).record('supervisor.command', { id: command.id, action: 'stop' }),
+                flush: () => traces.get(agentId).flush(),
+                acknowledge: () => request('/commands', { acknowledge: command.id }, agent.token),
+                isRevoked: () => revokedStopCommands.has(command.id),
+                markStopped: () => {
+                  stoppedThreads.add(threadId);
+                  states.set(threadId, { status: 'stopped', completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
+                },
               });
-              if (revokedStopCommands.has(command.id)) return;
-              traces.get(agentId).record('supervisor.command', { id: command.id, action: 'stop' });
-              await traces.get(agentId).flush();
-              if (revokedStopCommands.has(command.id)) return;
-              const acknowledgement = await request('/commands', { acknowledge: command.id }, agent.token);
-              if (!acknowledgement.acknowledged || revokedStopCommands.has(command.id)) {
+              if (!completed) {
                 revokedStopCommands.add(command.id);
                 return;
               }
-              stoppedThreads.add(threadId);
-              states.set(threadId, { status: 'stopped', completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
             })().catch(() => {
               rootTrace.record('operator.stop.failed', { agent: agentId, commandId: command.id, category: 'native_stop_unconfirmed' });
               void rootTrace.flush().catch(() => {});
