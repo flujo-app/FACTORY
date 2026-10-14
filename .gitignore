@@ -6,3 +6,4 @@ evidence/
 *.sqlite-wal
 __pycache__/
 *.pyc
+.cloud-lite-private/

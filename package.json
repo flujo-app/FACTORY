@@ -16,6 +16,8 @@
     "bin/factory-public.mjs",
     "bin/factory-mcp.mjs",
     "bin/factory-lite.mjs",
+    "bin/factory-cloud-mcp.mjs",
+    "bin/factory-cloud-runtime.mjs",
     "bin/factory.mjs",
     "scripts/watch-pilot.mjs",
     "scripts/pilot.mjs",

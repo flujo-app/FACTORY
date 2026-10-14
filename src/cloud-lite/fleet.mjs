@@ -1,0 +1,274 @@
+import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync, fsyncSync, closeSync, renameSync } from 'node:fs';
+import { join, resolve, isAbsolute } from 'node:path';
+import { secret, hash, agentInventory, validateCloudLitePlan, machineConfig, redact } from './protocol.mjs';
+import { CodexRpc } from './rpc.mjs';
+import { cloudLiteBootstrap } from './bootstrap.mjs';
+import { loadFlujoCloudInfrastructure } from './upstream.mjs';
+
+/** Only this native host owns managed refresh; remote harnesses receive external access tokens. */
+export class CodexSubscriptionBroker {
+  constructor({ authFile, codexCommand = 'codex' } = {}) {
+    if (!isAbsolute(authFile ?? '')) throw new TypeError('Select the existing absolute Codex subscription auth file.');
+    this.authFile = authFile; this.command = codexCommand;
+  }
+  read() {
+    const cache = JSON.parse(readFileSync(this.authFile, 'utf8'));
+    if (cache.OPENAI_API_KEY || !cache.tokens?.access_token || !cache.tokens?.account_id) throw new Error('A ChatGPT subscription login is required; API-key fallback is disabled.');
+    const jwt = JSON.parse(Buffer.from(cache.tokens.access_token.split('.')[1], 'base64url').toString());
+    return { accessToken: cache.tokens.access_token, chatgptAccountId: cache.tokens.account_id,
+      chatgptPlanType: jwt['https://api.openai.com/auth']?.chatgpt_plan_type };
+  }
+  async refresh() {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      const home = resolve(this.authFile, '..');
+      const rpc = new CodexRpc({ command: this.command, args: ['-c', 'mcp_servers={}'], env: { ...process.env, CODEX_HOME: home } });
+      try { await rpc.initialize(); await rpc.request('account/read', { refreshToken: true }); return this.read(); }
+      finally { rpc.close(); }
+    })().finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
+}
+
+export class FactoryCloudLiteFleet {
+  constructor({ directory, flujoCloudPath = process.env.FACTORY_FLUJO_CLOUD_PATH, infrastructure, flyCommand = 'flyctl', flyEnv = process.env, proxyEnv = flyEnv, execute, auth, onEvent = () => {} } = {}) {
+    if (!isAbsolute(directory ?? '')) throw new TypeError('An absolute private fleet directory is required.');
+    this.directory = directory; this.flyCommand = flyCommand; this.flyEnv = flyEnv; this.execute = execute; this.auth = auth; this.onEvent = onEvent;
+    this.flujoCloudPath = flujoCloudPath; this.infrastructure = infrastructure;
+    this.proxyEnv = proxyEnv;
+    mkdirSync(directory, { recursive: true, mode: 0o700 }); this.journalPath = join(directory, 'fleet.json');
+    this.state = existsSync(this.journalPath) ? JSON.parse(readFileSync(this.journalPath, 'utf8')) : null;
+  }
+  save() {
+    const temporary = `${this.journalPath}.${secret()}.next`;
+    const fd = openSync(temporary, 'wx', 0o600);
+    try { writeFileSync(fd, JSON.stringify(this.state, null, 2)); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(temporary, this.journalPath);
+  }
+  event(type, body) { const event = { observedAt: new Date().toISOString(), type, body }; this.onEvent(event); }
+  async upstream() {
+    this.infrastructure ??= await loadFlujoCloudInfrastructure({ directory: this.flujoCloudPath, binary: this.flyCommand, env: this.flyEnv, proxyEnv: this.proxyEnv, cwd: this.directory });
+    return this.infrastructure;
+  }
+  async fly(args, options = {}) {
+    if (this.execute) return this.execute(this.flyCommand, args, { env: this.flyEnv, ...options, secrets: [...(this.knownSecrets ?? []), this.flyEnv.FLY_API_TOKEN, this.flyEnv.FLY_ACCESS_TOKEN].filter(Boolean) });
+    return (await this.upstream()).run(args, options);
+  }
+  async stage(key, operation) {
+    if (existsSync(this.journalPath)) this.state = JSON.parse(readFileSync(this.journalPath, 'utf8'));
+    const prior = this.state.operations[key];
+    if (prior?.state === 'succeeded') return prior.result;
+    if (prior) throw new Error(`Operation ${key} is ${prior.state}; inspect the existing provider identity before recovery.`);
+    const intents = join(this.directory, 'intents'); mkdirSync(intents, { recursive: true, mode: 0o700 });
+    const intentFile = join(intents, `${hash(key)}.json`);
+    try { writeFileSync(intentFile, JSON.stringify({ key, app: this.state.plan.app, startedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' }); }
+    catch (error) { if (error.code === 'EEXIST') throw new Error(`Operation ${key} retains an original intent; reconcile before dispatch.`); throw error; }
+    this.state.operations[key] = { state: 'running', startedAt: new Date().toISOString() }; this.save(); this.event('provider.started', { key });
+    try {
+      const result = await operation(); this.state.operations[key] = { ...this.state.operations[key], state: 'succeeded', result, endedAt: new Date().toISOString() };
+      this.save(); this.event('provider.succeeded', { key, result }); return result;
+    } catch (error) {
+      this.state.operations[key] = { ...this.state.operations[key], state: 'unknown', error: redact(error.message, this.knownSecrets), endedAt: new Date().toISOString() };
+      this.save(); this.event('provider.unknown', { key, error: this.state.operations[key].error }); throw error;
+    }
+  }
+  async prepare(input) {
+    if (existsSync(this.journalPath)) this.state = JSON.parse(readFileSync(this.journalPath, 'utf8'));
+    const plan = validateCloudLitePlan(input);
+    if (this.state) {
+      if (JSON.stringify(this.state.plan) !== JSON.stringify(plan)) throw new Error('Existing fleet binding differs.');
+    } else {
+      const credentials = Object.fromEntries(agentInventory(plan).map(a => [a.id, secret()]));
+      writeFileSync(join(this.directory, 'credentials.json'), JSON.stringify({ credentials, operatorToken: secret() }), { mode: 0o600, flag: 'wx' });
+      this.state = { schemaVersion: 1, plan, image: null, operations: {}, machines: [], createdAt: new Date().toISOString() }; this.save();
+    }
+    await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal']); return { app: plan.app }; });
+    return this.snapshot();
+  }
+  async deploy(input, { image, imageSource, channel, githubToken, bundlePath } = {}) {
+    if (!githubToken || !this.auth) throw new TypeError('Select a GitHub credential and subscription auth broker.');
+    if (imageSource) image = (await (await this.upstream()).resolveWorkerImage({ source: imageSource, image, channel })).image;
+    if (!image) throw new TypeError('Select an immutable worker image or its upstream FLUJO compatibility advertisement.');
+    await this.prepare(input); const plan = this.state.plan;
+    if (this.state.image && this.state.image !== image) throw new Error('Existing fleet image differs.');
+    this.state.image = image; this.save();
+    let bootstrapPath;
+    if (bundlePath) {
+      if (!isAbsolute(bundlePath)) throw new TypeError('Select an absolute SDK tarball path.');
+      const bundleDigest = hash(readFileSync(bundlePath));
+      if (this.state.bundleSha256 && this.state.bundleSha256 !== bundleDigest) throw new Error('Existing fleet bundle differs.');
+      this.state.bundleSha256 = bundleDigest; this.save();
+      bootstrapPath = join(this.directory, 'bootstrap.sh'); writeFileSync(bootstrapPath, cloudLiteBootstrap(bundleDigest), { mode: 0o600 });
+    }
+    const { credentials, operatorToken } = JSON.parse(readFileSync(join(this.directory, 'credentials.json')));
+    const initialAuth = this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials)];
+    await this.stage('app.credentials', async () => {
+      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken })).toString('base64');
+      this.knownSecrets.push(config);
+      await this.fly(['secrets', 'import', '--app', plan.app, '--stage'], { input: `FACTORY_CLOUD_BOOTSTRAP_B64=${config}\n` });
+      return { staged: true };
+    });
+    for (let index = 0; index < plan.machines; index++) {
+      const name = `factory-${plan.runId}-m${index}`;
+      const volume = await this.stage(`m${index}.volume`, async () => {
+        const raw = await this.fly(['volumes', 'create', `factory_m${index}`, '--app', plan.app, '--region', plan.region, '--size', String(plan.diskGb), '--scheduled-snapshots=false', '--yes', '--json']);
+        const parsed = JSON.parse(raw); return { id: parsed.id ?? parsed.ID };
+      });
+      const upstream = await this.upstream();
+      const base = upstream.buildMachineConfig({ image, volumeId: volume.id, owner: plan.runId }, { idle: false, memoryMb: plan.memoryMb });
+      const config = { ...base, ...machineConfig(plan, { image, volumeId: volume.id, index, environment: {
+        FACTORY_MACHINE_INDEX: String(index), ...(index ? { FACTORY_BOARD_MACHINE_ID: this.state.machines[0]?.id } : {}),
+      } }) };
+      config.init = { exec: bundlePath ? ['/bin/bash', '/opt/factory-bootstrap.sh'] : ['node', '/opt/factory/bin/factory-cloud-runtime.mjs'] };
+      const configPath = join(this.directory, `m${index}.machine.json`); writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+      const old = this.state.operations[`m${index}.machine`];
+      if (old?.state === 'unknown' && old.error?.includes('unknown flag: --json')) {
+        const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', plan.app, '--json']));
+        if (inventory.some(x => x.name === name || x.Name === name)) throw new Error('A machine exists despite the CLI validation refusal; retain the original outcome.');
+        this.state.operations[`m${index}.machine`] = { ...old, state: 'not_applied', reconciliation: 'Closed CLI argument refusal plus exact-name provider absence.' }; this.save();
+      }
+      const machine = await this.stage(`m${index}.machine-create`, async () => {
+        if (bundlePath) config.files = [
+          { guest_path: '/tmp/factory-sdk.tgz', raw_value: readFileSync(bundlePath).toString('base64') },
+          { guest_path: '/opt/factory-bootstrap.sh', raw_value: readFileSync(bootstrapPath).toString('base64') },
+        ];
+        // This is flujo-cloud's existing Machines API helper. No positional CLI
+        // image resolver, image build, registry login or push occurs here.
+        await upstream.createMachine({ app: plan.app, name, region: plan.region, config });
+        const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', plan.app, '--json']));
+        const matching = inventory.filter(x => x.name === name || x.Name === name);
+        if (matching.length !== 1) throw new Error('Exactly one original machine must be observed after creation.');
+        const value = matching[0]; const id = value.id ?? value.ID;
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9-]+$/.test(id)) throw new Error('Provider machine identity was not confirmed.');
+        return { id, name, volumeId: volume.id, config: { cpuKind: plan.cpuKind, cpus: plan.cpus, memoryMb: plan.memoryMb, diskGb: plan.diskGb } };
+      });
+      if (!this.state.machines.some(x => x.id === machine.id)) { this.state.machines.push(machine); this.save(); }
+    }
+    this.state.status = 'provisioned'; this.save(); return this.snapshot();
+  }
+  async request(path, body) {
+    if (!this.connection) {
+      const upstream = await this.upstream();
+      const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
+      const first = this.state.machines[0];
+      const owned = inventory.find(x => x.id === first?.id);
+      if (!owned || owned.config?.metadata?.['factory.run'] !== this.state.plan.runId || owned.config?.metadata?.['factory.machine'] !== 'm0') {
+        throw new Error('Coordinator Machine ownership differs from the original fleet journal.');
+      }
+      if (owned.state !== 'started') throw new Error('Original coordinator Machine is not started.');
+      this.connection = await upstream.proxy({ app: this.state.plan.app, org: this.state.plan.org ?? 'personal', machineId: first.id, localPort: await upstream.unusedLoopbackPort() });
+      const deadline = Date.now() + 30000;
+      try {
+        for (;;) {
+          this.connection.check();
+          try {
+            const response = await fetch(this.connection.origin + '/health', { signal: AbortSignal.timeout(2000), redirect: 'error' });
+            const health = await response.json();
+            if (response.ok && health.runId === this.state.plan.runId && health.runtime === 'factory-cloud-lite') break;
+          } catch { /* flujo-cloud starts the owned proxy asynchronously. */ }
+          if (Date.now() >= deadline) throw new Error('Original coordinator did not become ready through the upstream private proxy.');
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (error) { await this.disconnect(); throw error; }
+    }
+    try { this.connection.check(); } catch (error) { await this.disconnect(); throw error; }
+    const { operatorToken } = JSON.parse(readFileSync(join(this.directory, 'credentials.json')));
+    try {
+      const response = await fetch(`${this.connection.origin}${path}`, { method: body === undefined ? 'GET' : 'POST',
+        headers: { Authorization: `Bearer ${operatorToken}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'error', signal: AbortSignal.timeout(30000) });
+      if (!response.ok) throw new Error(`Fleet coordinator ${path} returned ${response.status}.`); return await response.json();
+    } catch (error) { await this.disconnect(); throw error; }
+  }
+  async disconnect() { if (this.connection) { await this.connection.stop(); this.connection = null; } }
+  async start({ attempt } = {}) {
+    if (!/^[a-z0-9-]{3,64}$/.test(attempt ?? '')) throw new TypeError('Select a stable recovery attempt identity.');
+    for (const machine of this.state.machines) await this.stage(`${machine.id}.start.${attempt}`, async () => {
+      const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
+      const original = inventory.find(value => value.id === machine.id);
+      if (!original || original.name !== machine.name || original.config?.metadata?.['factory.run'] !== this.state.plan.runId) throw new Error('Start requires the original owned Machine identity.');
+      if (original.state !== 'started') {
+        if (original.state !== 'stopped') throw new Error('Original Machine is transitioning; observe it before starting.');
+        await this.fly(['machine', 'start', machine.id, '--app', this.state.plan.app]);
+      }
+      const readback = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json'])).find(value => value.id === machine.id);
+      return { machineId: machine.id, state: readback?.state };
+    });
+    return this.snapshot();
+  }
+  async observe() {
+    const snapshot = await this.request('/operator/status');
+    if (snapshot.refreshRequested) { const auth = await this.auth.refresh(); this.knownSecrets?.push(auth.accessToken); await this.request('/operator/auth', auth); }
+    const report = await this.request(`/operator/events?after=${this.state.traceCursor ?? 0}`);
+    if (report.events.length) {
+      const fs = await import('node:fs');
+      fs.appendFileSync(join(this.directory, 'traces.jsonl'), report.events.map(event => JSON.stringify(event)).join('\n') + '\n', { mode: 0o600 });
+      this.state.traceCursor = report.events.at(-1).seq;
+    }
+    this.state.observation = snapshot; this.save(); return snapshot;
+  }
+  snapshot() { return structuredClone(this.state); }
+  async command(agent, { id, action = 'message', message } = {}) {
+    return this.request('/operator/command', { id, recipient: agent, action, message });
+  }
+  /** Replace only the runtime bundle on the original, journal-owned Machines. */
+  async updateRuntime({ bundlePath, machineIds } = {}) {
+    if (!isAbsolute(bundlePath ?? '')) throw new TypeError('Select an absolute SDK tarball path.');
+    const digest = hash(readFileSync(bundlePath));
+    const selected = machineIds === undefined ? this.state.machines : this.state.machines.filter(machine => machineIds.includes(machine.id));
+    if (machineIds !== undefined && (!Array.isArray(machineIds) || !machineIds.length || new Set(machineIds).size !== machineIds.length || selected.length !== machineIds.length)) {
+      throw new TypeError('Select original journal-owned Machine identities.');
+    }
+    const bootstrapPath = join(this.directory, `bootstrap-${digest}.sh`);
+    writeFileSync(bootstrapPath, cloudLiteBootstrap(digest), { mode: 0o600 });
+    for (const machine of selected) {
+      await this.stage(`${machine.id}.runtime.${digest}`, async () => {
+        const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
+        const original = inventory.find(value => value.id === machine.id);
+        if (!original || original.name !== machine.name || original.config?.metadata?.['factory.run'] !== this.state.plan.runId) {
+          throw new Error('Runtime update requires the exact original Machine identity.');
+        }
+        const config = original.config;
+        config.init = { exec: ['/bin/bash', '/opt/factory-bootstrap.sh'] };
+        config.env.FACTORY_BOARD_MACHINE_ID = this.state.machines[0].id;
+        config.env.FACTORY_BOARD_PORT = '4200';
+        config.services = [];
+        config.metadata['factory.bundle'] = digest;
+        const configPath = join(this.directory, `${machine.id}.${digest}.machine.json`);
+        writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+        await this.fly(['machine', 'update', machine.id, '--app', this.state.plan.app, '--machine-config', configPath,
+          '--file-local', `/tmp/factory-sdk.tgz=${bundlePath}`, '--file-local', `/opt/factory-bootstrap.sh=${bootstrapPath}`, '--yes', '--detach']);
+        const readback = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json'])).find(value => value.id === machine.id);
+        if (readback?.config?.metadata?.['factory.bundle'] !== digest || readback.config.env.FACTORY_BOARD_MACHINE_ID !== this.state.machines[0].id) {
+          throw new Error('Original Machine did not confirm the runtime update.');
+        }
+        return { machineId: machine.id, digest, state: readback.state };
+      });
+    }
+    this.state.runtimeBundles = { ...this.state.runtimeBundles, ...Object.fromEntries(selected.map(machine => [machine.id, digest])) };
+    if (selected.length === this.state.machines.length) this.state.bundleSha256 = digest;
+    this.save(); return { updated: selected.length, digest };
+  }
+  async collect() {
+    const artifacts = join(this.directory, 'artifacts'); mkdirSync(artifacts, { recursive: true, mode: 0o700 });
+    for (const machine of this.state.machines) {
+      const remote = '/data/factory-artifacts.tgz';
+      await this.fly(['machine', 'exec', machine.id, 'tar -czf /data/factory-artifacts.tgz --exclude=*/node_modules --exclude=*/.next --exclude=*/.npm --exclude=*/auth.json -C /data factory codex worktrees repository', '--app', this.state.plan.app, '--timeout', '300'], { timeoutMs: 330000 });
+      const destination = join(artifacts, `${machine.id}.tgz`);
+      await this.fly(['ssh', 'sftp', 'get', remote, destination, '--app', this.state.plan.app, '--machine', machine.id, '--quiet'], { timeoutMs: 600000 });
+      this.event('artifacts.collected', { machineId: machine.id, file: destination });
+    }
+    this.state.artifactsCollectedAt = new Date().toISOString(); this.save(); return { directory: artifacts };
+  }
+  async stop() {
+    for (const machine of [...this.state.machines].reverse()) await this.stage(`${machine.id}.stop`, async () => {
+      await this.fly(['machine', 'stop', machine.id, '--app', this.state.plan.app]); return { stopped: true, machineId: machine.id };
+    });
+    this.state.status = 'stopped'; this.save();
+  }
+  async retire() {
+    // The journal retains exact ownership; no app other than this unique fleet is adopted.
+    await this.stage('app.retire', async () => { await this.fly(['apps', 'destroy', this.state.plan.app, '--yes']); return { app: this.state.plan.app, retired: true }; });
+    this.state.status = 'retired'; this.save();
+  }
+}

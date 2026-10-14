@@ -170,6 +170,76 @@ only builds the process specification.
 
 ## FLUJO worker dispatch
 
+### Cloud Codex lite workers (development)
+
+`FactoryCloudLiteFleet` provisions a dedicated Fly fleet running native Codex
+app-server harnesses with their built-in tools and only FACTORY's board MCP.
+Each machine has one orchestrator and `agentsPerMachine - 1` subordinate Codex
+sessions, isolated Git worktrees, persisted native histories, and durable traces.
+The SDK starts and registers the configured pool; additional native automatic
+fanout is disabled so every subordinate has its own board identity and policy.
+CPU kind, CPU count, RAM, persistent disk, region, machine count and agent count
+are explicit plan settings. No FLUJO worker harness is used for this path.
+
+```js
+import { FactoryCloudLiteFleet, CodexSubscriptionBroker } from 'flujo-factory';
+
+const fleet = new FactoryCloudLiteFleet({
+  directory: '/absolute/private/fleet-run',
+  flujoCloudPath: '/absolute/installed/flujo-cloud',
+  auth: new CodexSubscriptionBroker({ authFile: '/absolute/private/.codex/auth.json' }),
+});
+await fleet.deploy({
+  runId: 'my-cloud-lite-run', app: 'my-cloud-lite-app',
+  repository: 'mario-andreschak/FLUJO', goal: ownerGoal,
+  machines: 10, agentsPerMachine: 10,
+  cpuKind: 'shared', cpus: 2, memoryMb: 4096, diskGb: 20, region: 'iad',
+  model: 'gpt-6.1-sol', subagentModel: 'gpt-6-luna', reasoningEffort: 'medium',
+}, { image: immutableWorkerImage, githubToken: privateGithubCredential,
+  bundlePath: '/absolute/private/flujo-factory.tgz' });
+const observation = await fleet.observe();
+await fleet.disconnect();
+```
+
+The coordinator lives on the first machine and retains the one authoritative
+FactoryControl database on its volume. Orchestrators can message other
+orchestrators and their own machine's agents; subagents can message only their
+own machine. Individual credentials bind the sender independently of tool input.
+Atomic PR/issue claims prevent cross-machine duplicate assignment. Tool access is
+not hostile-process isolation: agents have the native shell/filesystem access
+requested for the job and must be trusted with their machine and repository.
+
+Provisioning imports flujo-cloud's `createMachine`, `createFlyRunner`,
+`buildMachineConfig`, `resolveWorkerImage`, and private proxy implementation
+from the selected installation. It does not copy their source or perform an
+image build, registry login, or image push. `imageSource` can supply FLUJO's
+compatibility advertisement for its existing official image resolver; an
+explicit immutable image retains the upstream custom-image contract. The native
+Codex bootstrap accepts a digest-bound SDK tarball on an existing Node image.
+Workers communicate over the exact coordinator Machine's private Fly address,
+and the host uses flujo-cloud's private proxy. No public worker services or
+dedicated IP addresses are created by the native profile.
+
+Subscription access tokens use upstream Codex's external-token app-server login.
+Refresh tokens stay on the trusted host, which runs native Codex refresh and
+updates the coordinator when workers request it. Run `observe()` continuously
+while workers execute; a disconnected host can prevent authentication renewal.
+The runtime does not switch to an API key. Credentials never belong in an image,
+public journal, source commit or trace. Store the fleet directory privately.
+
+The cloud MCP adds identity/status, work claims and progress, authenticated
+messages/inbox, checkpoints, and supervisor Windows/Linux validation requests.
+The operator HTTP interface supports authenticated observations, trace export,
+validation evidence and durable steer/stop commands. Agent-reported work status
+is distinct from independently verified GitHub delivery.
+
+Provider mutations retain durable intents. An uncertain operation blocks another
+mutation under that key rather than launching duplicate infrastructure. Stop,
+artifact collection, owned retirement, provider billing and filesystem cleanup
+remain distinct stages. Native histories and local trace outboxes survive on
+the volumes; collect them before retirement. These development APIs require
+real provider acceptance before any production-readiness claim.
+
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`
 task lease. `provisionWorker` reserves a child cell and records a provider
