@@ -35,8 +35,10 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         currentAuth = body; refreshRequested = false; return send(200, { updated: true });
       }
       if (request.url?.startsWith('/operator/events') && actor.role === 'operator') {
-        const after = Number(new URL(request.url, 'http://localhost').searchParams.get('after') ?? 0);
-        return send(200, { events: board.events(after), refreshRequested });
+        const parameters = new URL(request.url, 'http://localhost').searchParams;
+        const after = Number(parameters.get('after') ?? 0);
+        const through = Number(parameters.get('through') ?? Number.MAX_SAFE_INTEGER);
+        return send(200, { events: board.events(after, through), refreshRequested });
       }
       if (request.url === '/operator/status' && actor.role === 'operator') return send(200, { ...board.snapshot(), refreshRequested });
       if (request.url === '/operator/session' && actor.role === 'operator' && request.method === 'POST') return send(200,board.registerSession(body.agent,body.session));

@@ -36,7 +36,7 @@ export class CloudLiteTrace {
     let deferred = false;
     try {
       writeSync(fd, JSON.stringify(event) + '\n');
-      if (['turn/completed','agent.enrolled','supervisor.command','codex.exit','trace.recovery'].includes(kind)) {
+      if (['turn/started','turn/completed','native.turn.started','native.turn.completed','native.thread.started','native.thread.resumed','agent.enrolled','supervisor.command','codex.exit','trace.recovery'].includes(kind)) {
         // Fly volume commits can wait behind repository installs. Keep the
         // coordinator responsive; flush still waits for durability before send.
         const durability = Promise.resolve().then(() => this.sync(fd)).finally(() => closeSync(fd));

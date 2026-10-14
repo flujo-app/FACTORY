@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync, fsyncSync, closeSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync, fsyncSync, closeSync, renameSync, readSync, ftruncateSync, writeSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { secret, hash, agentInventory, validateCloudLitePlan, machineConfig, redact } from './protocol.mjs';
 import { CodexRpc } from './rpc.mjs';
@@ -8,6 +8,94 @@ import { fileURLToPath } from 'node:url';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
+
+const TRACE_PAGE_SIZE = 100;
+const DEFAULT_OBSERVATION_PAGES = 5;
+const TRACE_PAGE_BYTE_LIMIT = 512 * 1024;
+const TRACE_SINGLE_RECORD_LIMIT = 2 * 1024 * 1024 + 4096;
+const TRACE_RECOVERY_WINDOW = TRACE_SINGLE_RECORD_LIMIT;
+
+function lastPersistedTraceSequence(file) {
+  if (!existsSync(file)) return 0;
+  const fd = openSync(file, 'r+');
+  try {
+    const size = statSync(file).size;
+    if (!size) return 0;
+    const lastByte = Buffer.alloc(1);
+    readSync(fd, lastByte, 0, 1, size - 1);
+    const complete = lastByte[0] === 10;
+    let position = complete ? size - 1 : size;
+    let newline = -1;
+    while (position > 0 && (complete ? size - 1 : size) - position < TRACE_RECOVERY_WINDOW) {
+      const start = Math.max(0, position - 64 * 1024);
+      const chunk = Buffer.alloc(position - start);
+      readSync(fd, chunk, 0, chunk.length, start);
+      const found = chunk.lastIndexOf(10);
+      if (found >= 0) { newline = start + found; break; }
+      position = start;
+    }
+    if (newline < 0 && position > 0) throw new Error('Trace tail exceeds the bounded recovery window.');
+    const lineStart = newline + 1;
+    if (!complete) {
+      const fragment = Buffer.alloc(size - lineStart);
+      readSync(fd, fragment, 0, fragment.length, lineStart);
+      const evidence = `${file}.preserved-tail-${hash(fragment)}.raw`;
+      let evidenceFd;
+      try {
+        evidenceFd = openSync(evidence, 'wx', 0o600);
+        writeSync(evidenceFd, fragment);
+        fsyncSync(evidenceFd);
+      } catch (error) {
+        if (error.code !== 'EEXIST' || !readFileSync(evidence).equals(fragment)) throw error;
+      } finally { if (evidenceFd !== undefined) closeSync(evidenceFd); }
+      ftruncateSync(fd, lineStart);
+      fsyncSync(fd);
+      return lastPersistedTraceSequence(file);
+    }
+    const lineLength = size - 1 - lineStart;
+    if (lineLength > TRACE_RECOVERY_WINDOW) throw new Error('Trace tail record exceeds the bounded recovery window.');
+    const bytes = Buffer.alloc(lineLength);
+    readSync(fd, bytes, 0, lineLength, lineStart);
+    const line = bytes.toString('utf8');
+    if (!line) return 0;
+    const event = JSON.parse(line);
+    if (!Number.isSafeInteger(event.seq) || event.seq < 1) throw new Error('Persisted trace tail has an invalid sequence.');
+    return event.seq;
+  } finally { closeSync(fd); }
+}
+
+function appendTracePage(file, events, after, through) {
+  const fresh = [];
+  let previous = after;
+  for (const event of events) {
+    if (!Number.isSafeInteger(event.seq) || event.seq <= previous) throw new Error('Trace page sequence is not strictly increasing.');
+    if (event.seq > through) throw new Error('Trace page exceeded its fixed watermark.');
+    previous = event.seq;
+    if (event.seq > after) fresh.push(event);
+  }
+  if (!fresh.length) return after;
+  const fd = openSync(file, 'a', 0o600);
+  try {
+    for (const event of fresh) {
+      const record = Buffer.from(JSON.stringify(event) + '\n');
+      let offset = 0;
+      while (offset < record.length) {
+        const written = writeSync(fd, record, offset, record.length - offset);
+        if (!written) throw new Error('Trace archive write made no progress.');
+        offset += written;
+      }
+    }
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
+  return fresh.at(-1).seq;
+}
+
+function persistObservation(file, value) {
+  const temporary = `${file}.${secret()}.next`;
+  const fd = openSync(temporary, 'wx', 0o600);
+  try { writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(temporary, file);
+}
 
 /** Only this native host owns managed refresh; remote harnesses receive external access tokens. */
 export class CodexSubscriptionBroker {
@@ -200,25 +288,59 @@ export class FactoryCloudLiteFleet {
     });
     return this.snapshot();
   }
-  async observe() {
+  async observe({ maxPages = DEFAULT_OBSERVATION_PAGES } = {}) {
+    if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 25) throw new TypeError('Select a bounded trace page budget.');
     // A watcher may run beside a deployment/recovery controller. Its cursor and
     // observations must never replace that controller's provisioning receipts.
     const observationPath = join(this.directory, 'observation.json');
-    const retained = existsSync(observationPath) ? JSON.parse(readFileSync(observationPath, 'utf8')) : null;
-    if (retained && retained.runId !== this.state.plan.runId) throw new Error('Observation journal belongs to another fleet.');
     const snapshot = await this.request('/operator/status');
     if (snapshot.refreshRequested) { const auth = await this.auth.refresh(); this.knownSecrets?.push(auth.accessToken); await this.request('/operator/auth', auth); }
+    const retained = existsSync(observationPath) ? JSON.parse(readFileSync(observationPath, 'utf8')) : null;
+    if (retained && retained.runId !== this.state.plan.runId) throw new Error('Observation journal belongs to another fleet.');
+    const observedWatermark = Number.isSafeInteger(snapshot.traceSequence) && snapshot.traceSequence >= 0 ? snapshot.traceSequence : null;
+    if (observedWatermark === null) throw new Error('Fleet status did not provide a fixed trace watermark.');
+    const priorWatermark = retained?.collection?.complete === false ? retained.traceWatermark : null;
+    const traceWatermark = priorWatermark ?? observedWatermark;
+    if (!Number.isSafeInteger(traceWatermark) || traceWatermark < 0 || traceWatermark > observedWatermark) throw new Error('Retained trace watermark is invalid or ahead of coordinator status.');
+    const traceFile = join(this.directory, 'traces.jsonl');
     let traceCursor = retained?.traceCursor ?? this.state.traceCursor ?? 0;
-    const report = await this.request(`/operator/events?after=${traceCursor}`);
-    if (report.events.length) {
-      const fs = await import('node:fs');
-      fs.appendFileSync(join(this.directory, 'traces.jsonl'), report.events.map(event => JSON.stringify(event)).join('\n') + '\n', { mode: 0o600 });
-      traceCursor = report.events.at(-1).seq;
+    if (!Number.isSafeInteger(traceCursor) || traceCursor < 0) throw new Error('Retained trace cursor is invalid.');
+    if (traceCursor > traceWatermark) throw new Error('Retained trace cursor is ahead of its fixed watermark.');
+    const durableCursor = lastPersistedTraceSequence(traceFile);
+    if (durableCursor < traceCursor) throw new Error('Retained trace cursor is ahead of durable trace evidence.');
+    if (durableCursor > traceWatermark) throw new Error('Durable trace evidence is ahead of the fixed collection watermark.');
+    // A crash after append+fsync but before cursor replacement leaves complete
+    // rows in the trace file. Reconcile from that durable tail without appending
+    // the same rows again.
+    traceCursor = durableCursor;
+    let pages = 0;
+    let lastPageEvents = 0;
+    let eventsCollected = 0;
+    const observationStarted = Date.now();
+    while (traceCursor < traceWatermark && pages < maxPages) {
+      const report = await this.request(`/operator/events?after=${traceCursor}&through=${traceWatermark}`);
+      if (!Array.isArray(report.events) || report.events.length > TRACE_PAGE_SIZE) throw new Error('Coordinator returned an invalid bounded trace page.');
+      if (!report.events.length) break;
+      const pageBytes = report.events.reduce((total, event) => total + Buffer.byteLength(JSON.stringify(event)), 0);
+      if (pageBytes > TRACE_PAGE_BYTE_LIMIT && !(report.events.length === 1 && pageBytes <= TRACE_SINGLE_RECORD_LIMIT)) {
+        throw new Error('Coordinator returned a trace page above the byte limit.');
+      }
+      const nextCursor = appendTracePage(traceFile, report.events, traceCursor, traceWatermark);
+      if (nextCursor <= traceCursor) throw new Error('Trace page did not advance within the fixed watermark.');
+      traceCursor = nextCursor;
+      pages++;
+      lastPageEvents = report.events.length;
+      eventsCollected += report.events.length;
+      const collection = { traceCursor, traceWatermark, observedWatermark, complete: traceCursor >= traceWatermark,
+        remainingLag: Math.max(0, traceWatermark - traceCursor), observedLag: Math.max(0, observedWatermark - traceCursor),
+        pages, eventsCollected, lastPageEvents, durationMs: Date.now() - observationStarted };
+      persistObservation(observationPath, { runId: this.state.plan.runId, traceCursor, traceWatermark, observation: snapshot, collection });
     }
-    const temporary = `${observationPath}.${secret()}.next`;
-    const fd = openSync(temporary, 'wx', 0o600);
-    try { writeFileSync(fd, JSON.stringify({ runId: this.state.plan.runId, traceCursor, observation: snapshot })); fsyncSync(fd); } finally { closeSync(fd); }
-    renameSync(temporary, observationPath);
+    const collection = { traceCursor, traceWatermark, observedWatermark, complete: traceCursor >= traceWatermark,
+      remainingLag: Math.max(0, traceWatermark - traceCursor), observedLag: Math.max(0, observedWatermark - traceCursor),
+      pages, eventsCollected, lastPageEvents, durationMs: Date.now() - observationStarted };
+    snapshot.traceCollection = collection;
+    persistObservation(observationPath, { runId: this.state.plan.runId, traceCursor, traceWatermark, observation: snapshot, collection });
     this.state = JSON.parse(readFileSync(this.journalPath, 'utf8'));
     this.state.traceCursor = traceCursor; this.state.observation = snapshot;
     return snapshot;

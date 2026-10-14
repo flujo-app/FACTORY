@@ -12,6 +12,7 @@ export class CloudLiteBoard {
       CREATE TABLE IF NOT EXISTS cloud_lite_command_cancellations(command_id TEXT PRIMARY KEY, superseded_by TEXT NOT NULL, cancelled INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_commands(id TEXT PRIMARY KEY, recipient TEXT NOT NULL, body TEXT NOT NULL, acknowledged INTEGER);
       CREATE TABLE IF NOT EXISTS cloud_lite_validations(resource TEXT NOT NULL, revision TEXT NOT NULL, machine TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(resource,revision));
+      CREATE TABLE IF NOT EXISTS cloud_lite_native_runtime(agent_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, event_seq INTEGER NOT NULL, thread_lifecycle TEXT NOT NULL, thread_status TEXT, turn_id TEXT, turn_status TEXT, failure TEXT, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_run(id INTEGER PRIMARY KEY CHECK(id=1), plan TEXT NOT NULL, digest TEXT NOT NULL);`);
     if (plan) {
       const previous = this.db.prepare('SELECT digest FROM cloud_lite_run WHERE id=1').get();
@@ -39,12 +40,80 @@ export class CloudLiteBoard {
     if (!actor) throw Object.assign(new Error('Board authentication failed.'), { code: 'AUTH' });
     return actor;
   }
-  inventory() { return this.db.prepare('SELECT id,machine,role,session,status,updated FROM cloud_lite_agents ORDER BY machine,id').all(); }
+  inventory() {
+    return this.db.prepare(`SELECT a.id,a.machine,a.role,a.session,a.status,a.updated,
+      n.thread_id AS native_thread_id,n.event_seq AS native_event_seq,n.thread_lifecycle,n.thread_status,
+      n.turn_id AS native_turn_id,n.turn_status,n.failure AS native_failure,n.updated AS native_updated
+      FROM cloud_lite_agents a LEFT JOIN cloud_lite_native_runtime n ON n.agent_id=a.id ORDER BY a.machine,a.id`).all()
+      .map(agent => {
+        const { native_thread_id, native_event_seq, thread_lifecycle, thread_status, native_turn_id, turn_status, native_failure, native_updated, ...rest } = agent;
+        return { ...rest, nativeRuntime: native_thread_id ? {
+          threadId: native_thread_id, eventSequence: native_event_seq, threadLifecycle: thread_lifecycle,
+          ...(thread_status ? { threadStatus: thread_status } : {}),
+          ...(native_turn_id ? { turnId: native_turn_id } : {}),
+          ...(turn_status ? { turnStatus: turn_status } : {}),
+          ...(native_failure ? { failure: JSON.parse(native_failure) } : {}), updated: native_updated,
+        } : null };
+      });
+  }
   registerSession(agent, session) {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session ?? '')) throw new TypeError('Provide the real native Codex thread identity.');
+    const previous = this.db.prepare('SELECT session FROM cloud_lite_agents WHERE id=?').get(agent);
+    if (previous && previous.session !== session) this.db.prepare('DELETE FROM cloud_lite_native_runtime WHERE agent_id=?').run(agent);
     const result = this.db.prepare('UPDATE cloud_lite_agents SET session=?,updated=? WHERE id=?').run(session,Date.now(),agent);
     if (!result.changes) throw new Error('Unknown configured agent.');
     return { registered: true };
+  }
+  observeNativeRuntime(actor, eventSequence, kind, body = {}) {
+    if (!actor || actor.role === 'operator' || typeof actor.id !== 'string') throw new Error('Native runtime observations require an authenticated agent.');
+    const params = body?.params ?? body;
+    const threadId = params?.threadId ?? params?.thread?.id;
+    const turn = params?.turn ?? {};
+    const event = kind === 'native.thread.started' || kind === 'thread/started' ? 'thread.started'
+      : kind === 'native.thread.resumed' ? 'thread.resumed'
+        : kind === 'thread/status/changed' ? 'thread.status'
+          : kind === 'turn/started' || kind === 'native.turn.started' ? 'turn.started'
+            : kind === 'turn/completed' || kind === 'native.turn.completed' ? 'turn.completed' : null;
+    if (!event) return { recorded: false, irrelevant: true };
+    const rawThreadStatus = params?.threadStatus ?? params?.thread?.status?.type ?? params?.status?.type ?? params?.status;
+    const threadStatus = rawThreadStatus === undefined ? undefined
+      : ['active','idle','archived','notLoaded','systemError','notFound','unknown'].includes(rawThreadStatus) ? rawThreadStatus : 'unknown';
+    const turnId = typeof turn.id === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(turn.id) ? turn.id : null;
+    const rawTurnStatus = event === 'turn.started' ? 'inProgress' : turn.status;
+    const turnStatus = rawTurnStatus === undefined ? undefined
+      : ['inProgress','completed','failed','interrupted','unknown'].includes(rawTurnStatus) ? rawTurnStatus : 'unknown';
+    const errorCode = turn.error?.code;
+    const failure = turn.status === 'failed' || turn.status === 'interrupted'
+      ? { category: turn.status === 'failed' ? 'turn_failed' : 'turn_interrupted',
+        ...(Number.isSafeInteger(errorCode) && Math.abs(errorCode) <= 1000000 ? { errorCode } : {}) }
+      : null;
+    if (!Number.isSafeInteger(eventSequence) || eventSequence < 1) {
+      throw new TypeError('Provide the registered native thread and positive trace sequence.');
+    }
+    let safeFailure = null;
+    if (failure !== undefined && failure !== null) {
+      if (typeof failure !== 'object' || Array.isArray(failure) || !['turn_failed','turn_interrupted'].includes(failure.category)) throw new TypeError('Failure metadata must use a safe category.');
+      safeFailure = { category: failure.category };
+      if (Number.isSafeInteger(failure.errorCode) && Math.abs(failure.errorCode) <= 1000000) safeFailure.errorCode = failure.errorCode;
+    }
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId ?? '')) return { recorded: false, identityMismatch: true };
+    const session = this.db.prepare('SELECT session FROM cloud_lite_agents WHERE id=?').get(actor.id);
+    if (!session || session.session !== threadId) return { recorded: false, identityMismatch: true };
+    const old = this.db.prepare('SELECT * FROM cloud_lite_native_runtime WHERE agent_id=?').get(actor.id);
+    if (old && old.thread_id === threadId && old.event_seq >= eventSequence) return { recorded: false, stale: true };
+    const sameThread = old?.thread_id === threadId;
+    const nextLifecycle = event === 'thread.started' ? 'started' : event === 'thread.resumed' ? 'resumed' : sameThread ? old.thread_lifecycle : 'observed';
+    const nextThreadStatus = threadStatus ?? (sameThread ? old.thread_status : null);
+    const nextTurnId = event === 'turn.started' ? turnId ?? null : sameThread ? old.turn_id : null;
+    const nextTurnStatus = event === 'turn.started' ? turnStatus ?? 'inProgress' : turnStatus ?? (sameThread ? old.turn_status : null);
+    const nextFailure = event === 'turn.started' ? null : safeFailure ?? (sameThread && event !== 'turn.completed' ? old.failure : null);
+    this.db.prepare(`INSERT INTO cloud_lite_native_runtime(agent_id,thread_id,event_seq,thread_lifecycle,thread_status,turn_id,turn_status,failure,updated)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET thread_id=excluded.thread_id,event_seq=excluded.event_seq,
+      thread_lifecycle=excluded.thread_lifecycle,thread_status=excluded.thread_status,turn_id=excluded.turn_id,
+      turn_status=excluded.turn_status,failure=excluded.failure,updated=excluded.updated`)
+      .run(actor.id, threadId, eventSequence, nextLifecycle, nextThreadStatus, nextTurnId, nextTurnStatus,
+        nextFailure ? JSON.stringify(nextFailure) : null, Date.now());
+    return { recorded: true };
   }
   snapshot() { return { plan: JSON.parse(this.db.prepare('SELECT plan FROM cloud_lite_run WHERE id=1').get().plan),
     agents: this.inventory(), claims: this.db.prepare('SELECT * FROM cloud_lite_claims ORDER BY updated DESC').all().map(r => ({ ...r, details: JSON.parse(r.details) })),
@@ -99,16 +168,22 @@ export class CloudLiteBoard {
         const old = this.db.prepare('SELECT kind,body FROM cloud_lite_traces WHERE source=? AND source_seq=?').get(actor.id, event.seq);
         if (old && (old.kind !== event.kind || old.body !== body)) throw new Error('A trace sequence cannot identify different bytes.');
         this.db.prepare('INSERT OR IGNORE INTO cloud_lite_traces(source,source_seq,kind,body,observed) VALUES(?,?,?,?,?)').run(actor.id, event.seq, event.kind, body, Date.now());
+        this.observeNativeRuntime(actor, event.seq, event.kind, JSON.parse(body));
       }
       return { acknowledged: events.at(-1)?.seq ?? 0 };
     });
   }
-  events(after = 0) {
+  events(after = 0, through = Number.MAX_SAFE_INTEGER) {
+    if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(through) || through < after) throw new TypeError('Select a bounded trace cursor and watermark.');
     const result = []; let bytes = 0;
-    for (const row of this.db.prepare('SELECT * FROM cloud_lite_traces WHERE seq>? ORDER BY seq LIMIT 100').all(after)) {
-      const size = Buffer.byteLength(row.body);
-      if (result.length && bytes + size > 512 * 1024) break;
-      result.push({ ...row, body: JSON.parse(row.body) }); bytes += size;
+    for (const row of this.db.prepare('SELECT * FROM cloud_lite_traces WHERE seq>? AND seq<=? ORDER BY seq LIMIT 100').all(after, through)) {
+      const event = { ...row, body: JSON.parse(row.body) };
+      const size = Buffer.byteLength(JSON.stringify(event));
+      if (bytes + size > 512 * 1024) {
+        if (!result.length) result.push(event); // Preserve legacy progress for one accepted oversized first record.
+        break;
+      }
+      result.push(event); bytes += size;
     }
     return result;
   }

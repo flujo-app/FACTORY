@@ -51,6 +51,27 @@ test('trace replay commits once and rejects altered bytes after a lost ACK', () 
     assert.throws(() => board.trace(actor, [{ ...events[0], body: { changed: true } }]), /different bytes/);
   } finally { board.close(); }
 });
+
+test('trace pages enforce both the event budget and the captured through watermark', () => {
+  const p = plan(); const credentials = Object.fromEntries(agentInventory(p).map(x => [x.id, secret()]));
+  const board = new CloudLiteBoard(join(fresh(), 'board.sqlite'), { plan: p, credentials });
+  try {
+    const actor = board.authenticate(credentials['m0-a0']);
+    board.trace(actor, Array.from({ length: 100 }, (_, index) => ({ seq: index + 1, kind: 'fixture', body: { index } })));
+    const watermark = board.snapshot().traceSequence;
+    board.trace(actor, Array.from({ length: 2 }, (_, index) => ({ seq: index + 101, kind: 'late', body: { index } })));
+    const first = board.events(0, watermark);
+    assert.equal(first.length, 100);
+    assert.equal(first.at(-1).seq, watermark);
+    assert.equal(board.events(watermark, watermark).length, 0);
+    assert.deepEqual(board.events(watermark, watermark + 2).map(event => event.seq), [watermark + 1, watermark + 2]);
+    board.trace(actor, [{ seq: 103, kind: 'large', body: 'x'.repeat(600 * 1024) }]);
+    const oversized = board.events(watermark + 2, watermark + 3);
+    assert.equal(oversized.length, 1);
+    assert.equal(oversized[0].body.length, 600 * 1024);
+  } finally { board.close(); }
+});
+
 test('credentials cannot appear in diagnostic trace projection', () => {
   const credential = secret(); assert.equal(redact({ stderr: `failed with ${credential}` }, [credential]).stderr, 'failed with [REDACTED]');
   assert.equal(redact({ jwt: 'eyJabcdefgh.abcdefghijkl.abcdefghijk' }).jwt, '[REDACTED]');
@@ -94,21 +115,180 @@ test('a concurrent observer retains controller receipts and resumes its separate
   observer.request = async path => {
     if (path === '/operator/status') {
       controller.state.operations.upgrade = { state: 'succeeded', result: { machineId: 'owned-machine' } }; controller.save();
-      return { agents: [], refreshRequested: false };
+      return { agents: [], traceSequence: 19, refreshRequested: false };
     }
-    assert.equal(path, '/operator/events?after=0');
+    assert.equal(path, '/operator/events?after=0&through=19');
     return { events: [{ seq: 19, kind: 'turn/started' }] };
   };
   await observer.observe();
   assert.equal(JSON.parse(readFileSync(controller.journalPath, 'utf8')).operations.upgrade.state, 'succeeded');
   const resumed = new FactoryCloudLiteFleet({ directory });
   resumed.request = async path => {
-    if (path === '/operator/status') return { agents: [], refreshRequested: false };
-    assert.equal(path, '/operator/events?after=19'); return { events: [] };
+    if (path === '/operator/status') return { agents: [], traceSequence: 19, refreshRequested: false };
+    assert.equal(path, '/operator/events?after=19&through=19'); return { events: [] };
   };
   await resumed.observe();
   assert.equal(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').length, 1);
   assert.equal(JSON.parse(readFileSync(controller.journalPath, 'utf8')).operations.upgrade.state, 'succeeded');
+});
+
+test('observer drains only a bounded fixed watermark and resumes from its durable cursor', async () => {
+  const directory = fresh();
+  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  let pass = 0;
+  const requests = [];
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: pass++ === 0 ? 205 : 210, agents: [], refreshRequested: false };
+    requests.push(path);
+    const url = new URL(path, 'http://localhost');
+    const after = Number(url.searchParams.get('after'));
+    const through = Number(url.searchParams.get('through'));
+    const end = Math.min(through, after + 100);
+    return { events: Array.from({ length: Math.max(0, end - after) }, (_, index) => ({ seq: after + index + 1, kind: 'fixture' })) };
+  };
+
+  const first = await fleet.observe({ maxPages: 2 });
+  assert.equal(first.traceCollection.traceCursor, 200); assert.equal(first.traceCollection.traceWatermark, 205);
+  assert.equal(first.traceCollection.complete, false); assert.equal(first.traceCollection.remainingLag, 5);
+  assert.equal(first.traceCollection.observedLag, 5); assert.equal(first.traceCollection.pages, 2);
+  assert.equal(first.traceCollection.eventsCollected, 200); assert.equal(first.traceCollection.lastPageEvents, 100);
+  assert.deepEqual(requests, ['/operator/events?after=0&through=205', '/operator/events?after=100&through=205']);
+  assert.equal(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').length, 200);
+  const retained = JSON.parse(readFileSync(join(directory, 'observation.json'), 'utf8'));
+  assert.equal(retained.traceCursor, 200); assert.equal(retained.traceWatermark, 205);
+
+  const secondFleet = new FactoryCloudLiteFleet({ directory });
+  secondFleet.request = fleet.request;
+  const second = await secondFleet.observe({ maxPages: 2 });
+  assert.equal(second.traceCollection.traceCursor, 205); assert.equal(second.traceCollection.traceWatermark, 205);
+  assert.equal(second.traceCollection.complete, true); assert.equal(second.traceCollection.remainingLag, 0);
+  assert.equal(second.traceCollection.observedLag, 5); assert.equal(second.traceCollection.pages, 1);
+  assert.equal(second.traceCollection.eventsCollected, 5); assert.equal(second.traceCollection.lastPageEvents, 5);
+  assert.equal(requests.at(-1), '/operator/events?after=200&through=205');
+  const thirdFleet = new FactoryCloudLiteFleet({ directory });
+  thirdFleet.request = fleet.request;
+  const third = await thirdFleet.observe({ maxPages: 2 });
+  assert.equal(third.traceCollection.traceCursor, 210); assert.equal(third.traceCollection.traceWatermark, 210);
+  assert.equal(third.traceCollection.complete, true); assert.equal(third.traceCollection.remainingLag, 0);
+  assert.equal(third.traceCollection.observedLag, 0); assert.equal(third.traceCollection.pages, 1);
+  const events = readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events.length, 210);
+  assert.deepEqual(events.map(event => event.seq), Array.from({ length: 210 }, (_, index) => index + 1));
+  assert.equal(requests.at(-1), '/operator/events?after=205&through=210');
+});
+
+test('observer reconciles a durable page append after a cursor-write interruption without duplicates', async () => {
+  const directory = fresh();
+  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  writeFileSync(join(directory, 'traces.jsonl'), JSON.stringify({ seq: 1, kind: 'fixture' }) + '\n');
+  writeFileSync(join(directory, 'observation.json'), JSON.stringify({ runId: 'lite-test', traceCursor: 0, traceWatermark: 2 }));
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: 2, agents: [], refreshRequested: false };
+    assert.equal(path, '/operator/events?after=1&through=2'); return { events: [{ seq: 2, kind: 'fixture' }] };
+  };
+  await fleet.observe();
+  const events = readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(events.map(event => event.seq), [1, 2]);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'observation.json'), 'utf8')).traceCursor, 2);
+});
+
+test('observer scans large durable tail records and preserves large torn fragments during recovery', async () => {
+  const directory = fresh();
+  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  const traceFile = join(directory, 'traces.jsonl');
+  const first = JSON.stringify({ seq: 1, kind: 'fixture', body: 'x'.repeat(300 * 1024) }) + '\n';
+  const fragment = Buffer.from('t'.repeat(300 * 1024));
+  writeFileSync(traceFile, first + fragment);
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: 2, agents: [], refreshRequested: false };
+    assert.equal(path, '/operator/events?after=1&through=2'); return { events: [{ seq: 2, kind: 'fixture' }] };
+  };
+  await fleet.observe();
+  const events = readFileSync(traceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(events.map(event => event.seq), [1, 2]);
+  const preserved = `${traceFile}.preserved-tail-${hash(fragment)}.raw`;
+  assert.equal(readFileSync(preserved).equals(fragment), true);
+});
+
+test('observer rejects out-of-watermark and oversized pages before writing any trace bytes', async () => {
+  for (const events of [
+    [{ seq: 1, kind: 'fixture' }, { seq: 3, kind: 'beyond-watermark' }],
+    [{ seq: 1, kind: 'large', body: 'x'.repeat(300 * 1024) }, { seq: 2, kind: 'large', body: 'y'.repeat(300 * 1024) }],
+  ]) {
+    const directory = fresh();
+    const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+    fleet.request = async path => path === '/operator/status'
+      ? { traceSequence: 2, agents: [], refreshRequested: false }
+      : { events };
+    await assert.rejects(fleet.observe(), /watermark|byte limit/);
+    assert.equal(existsSync(join(directory, 'traces.jsonl')), false);
+    assert.equal(existsSync(join(directory, 'observation.json')), false);
+  }
+});
+
+test('observer makes progress on one legacy oversized trace record across restart', async () => {
+  const directory = fresh();
+  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  let archiveRequests = 0;
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: 1, agents: [], refreshRequested: false };
+    archiveRequests++;
+    assert.equal(path, '/operator/events?after=0&through=1');
+    return { events: [{ seq: 1, kind: 'large', body: 'x'.repeat(600 * 1024) }] };
+  };
+  const first = await fleet.observe();
+  assert.equal(first.traceCollection.complete, true); assert.equal(first.traceCollection.traceCursor, 1);
+  const resumed = new FactoryCloudLiteFleet({ directory });
+  resumed.request = async path => {
+    assert.equal(path, '/operator/status'); return { traceSequence: 1, agents: [], refreshRequested: false };
+  };
+  await resumed.observe();
+  assert.equal(archiveRequests, 1);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim()).seq, 1);
+});
+
+test('bounded observer batches make sustained progress while a newer trace tail arrives', async () => {
+  const directory = fresh();
+  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  let statusCount = 0;
+  const requests = [];
+  fleet.request = async path => {
+    if (path === '/operator/status') return { traceSequence: [1000, 1005, 1005][statusCount++] ?? 1005, agents: [], refreshRequested: false };
+    requests.push(path);
+    const query = new URL(path, 'http://localhost').searchParams;
+    const after = Number(query.get('after')); const through = Number(query.get('through'));
+    const end = Math.min(through, after + 100);
+    return { events: Array.from({ length: end - after }, (_, index) => ({ seq: after + index + 1, kind: 'burst' })) };
+  };
+  const first = await fleet.observe({ maxPages: 5 });
+  assert.equal(first.traceCollection.pages, 5); assert.equal(first.traceCollection.eventsCollected, 500);
+  assert.equal(first.traceCollection.remainingLag, 500);
+  const resumed = new FactoryCloudLiteFleet({ directory }); resumed.request = fleet.request;
+  const second = await resumed.observe({ maxPages: 5 });
+  assert.equal(second.traceCollection.pages, 5); assert.equal(second.traceCollection.traceWatermark, 1000);
+  assert.equal(second.traceCollection.complete, true); assert.equal(second.traceCollection.observedLag, 5);
+  const final = new FactoryCloudLiteFleet({ directory }); final.request = fleet.request;
+  const third = await final.observe({ maxPages: 5 });
+  assert.equal(third.traceCollection.traceWatermark, 1005); assert.equal(third.traceCollection.remainingLag, 0);
+  assert.equal(requests.some(path => path.endsWith('through=1005') && path.includes('after=500')), false);
+  const events = readFileSync(join(directory, 'traces.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(events.length, 1005);
+});
+
+test('observer handles requested auth refresh before malformed archive metadata', async () => {
+  const directory = fresh();
+  const fleet = new FactoryCloudLiteFleet({ directory }); fleet.state = { plan: plan(), machines: [], operations: {} }; fleet.save();
+  writeFileSync(join(directory, 'observation.json'), '{broken');
+  const order = [];
+  fleet.auth = { refresh: async () => { order.push('refresh'); return { accessToken: 'safe-test-token' }; } };
+  fleet.request = async path => {
+    order.push(path);
+    if (path === '/operator/status') return { traceSequence: 0, agents: [], refreshRequested: true };
+    if (path === '/operator/auth') return { updated: true };
+    throw new Error('Archive should not be requested.');
+  };
+  await assert.rejects(fleet.observe(), SyntaxError);
+  assert.deepEqual(order, ['/operator/status', 'refresh', '/operator/auth']);
 });
 
 test('agent progress cannot overwrite the SDK-registered native session identity', () => {
@@ -121,6 +301,72 @@ test('agent progress cannot overwrite the SDK-registered native session identity
     assert.equal(board.inventory().find(agent=>agent.id==='m0-a1').session,session);
     assert.throws(()=>board.registerSession('m0-a1','made-up'),/real native/);
   } finally { board.close(); }
+});
+
+test('native lifecycle status is separate from agent checkpoint and strips failure text', () => {
+  const p = plan(); const credentials = Object.fromEntries(agentInventory(p).map(x => [x.id, secret()]));
+  const board = new CloudLiteBoard(join(fresh(), 'board.sqlite'), { plan: p, credentials });
+  try {
+    const actor = board.authenticate(credentials['m0-a1']);
+    const threadId = '01a1390d-1da9-76a1-0a6e-af0c060ec3a4';
+    const turnId = '01a1390e-1da9-76a1-0a6e-af0c060ec3a4';
+    board.registerSession(actor.id, threadId);
+    board.call(actor, 'factory_checkpoint', { status: 'reviewing' });
+    board.trace(actor, [{ seq: 1, kind: 'thread/started', body: { thread: { id: threadId, status: { type: 'active' } } } }]);
+    board.trace(actor, [{ seq: 2, kind: 'turn/started', body: { threadId, turn: { id: turnId, status: 'inProgress' } } }]);
+    board.trace(actor, [{ seq: 3, kind: 'turn/completed', body: { threadId, turn: { id: turnId, status: 'failed', error: {
+      code: -32000, message: 'never persist this private provider error',
+    } } } }]);
+    board.trace(actor, [{ seq: 2, kind: 'turn/started', body: { threadId, turn: { id: turnId, status: 'inProgress' } } }]);
+    const agent = board.snapshot().agents.find(value => value.id === actor.id);
+    assert.equal(agent.status, 'reviewing');
+    assert.equal(agent.session, threadId);
+    assert.deepEqual(agent.nativeRuntime, { threadId, eventSequence: 3, threadLifecycle: 'started', threadStatus: 'active', turnId,
+      turnStatus: 'failed', failure: { category: 'turn_failed', errorCode: -32000 }, updated: agent.nativeRuntime.updated });
+    assert.doesNotMatch(JSON.stringify(agent.nativeRuntime), /private provider error/);
+    board.trace(actor, [{ seq: 4, kind: 'turn/started', body: { threadId: '01a1390d-1da9-76a1-0a6e-af0c060ec3a5', turn: { id: turnId } } }]);
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.eventSequence, 3);
+    board.registerSession(actor.id, '01a1390f-1da9-76a1-0a6e-af0c060ec3a4');
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime, null);
+  } finally { board.close(); }
+});
+
+test('SDK lifecycle and operator-stop paths never author the agent checkpoint', () => {
+  const runtime = readFileSync(new URL('../src/cloud-lite/runtime.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(runtime, /factory_checkpoint/);
+});
+
+test('durable trace retry reconciles failed native turns in order after coordinator outage', async () => {
+  const p = validateCloudLitePlan({ ...plan(), machines: 1, agentsPerMachine: 1 });
+  const credentials = { 'm0-a0': secret() };
+  const coordinator = await startCloudLiteCoordinator({ database: join(fresh(), 'board.sqlite'), plan: p, credentials,
+    operatorToken: secret(), auth: { accessToken: secret(), chatgptAccountId: 'account' }, githubToken: secret(), host: '127.0.0.1', port: 0 });
+  const threadId = '01a1390d-1da9-76a1-0a6e-af0c060ec3a4';
+  const turnId = '01a1390e-1da9-76a1-0a6e-af0c060ec3a4';
+  const actor = coordinator.board.authenticate(credentials['m0-a0']);
+  coordinator.board.registerSession(actor.id, threadId);
+  const trace = new CloudLiteTrace({ file: join(fresh(), 'native.jsonl'), url: `http://127.0.0.1:${coordinator.server.address().port}`,
+    token: credentials['m0-a0'] });
+  const traceIngest = coordinator.board.trace.bind(coordinator.board);
+  try {
+    trace.record('turn/started', { threadId, turn: { id: turnId } });
+    trace.record('turn/completed', { threadId, turn: { id: turnId, status: 'failed', error: { code: -32000, message: 'private failure' } } });
+    coordinator.board.trace = () => { throw new Error('coordinator temporarily unavailable'); };
+    await assert.rejects(trace.flush(), /refused/);
+    assert.equal(trace.queue.length, 2);
+    coordinator.board.trace = traceIngest;
+    await trace.flush();
+    let native = coordinator.board.inventory()[0].nativeRuntime;
+    assert.equal(native.eventSequence, 2); assert.equal(native.turnStatus, 'failed');
+    assert.deepEqual(native.failure, { category: 'turn_failed', errorCode: -32000 });
+    trace.record('turn/started', { threadId, turn: { id: '01a13910-1da9-76a1-0a6e-af0c060ec3a4' } });
+    await trace.flush();
+    native = coordinator.board.inventory()[0].nativeRuntime;
+    assert.equal(native.eventSequence, 3); assert.equal(native.turnStatus, 'inProgress');
+    assert.equal(native.failure, undefined);
+    assert.equal(coordinator.board.events(0, 3).length, 3);
+    assert.doesNotMatch(JSON.stringify(native), /private failure/);
+  } finally { coordinator.board.trace = traceIngest; await coordinator.close(); }
 });
 
 test('torn trace recovery preserves damaged bytes and never reuses a receiver-confirmed sequence', () => {

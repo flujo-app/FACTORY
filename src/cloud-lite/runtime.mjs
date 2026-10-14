@@ -10,6 +10,11 @@ import { startCloudLiteCoordinator } from './server.mjs';
 import { CloudLiteTrace } from './trace.mjs';
 import { hash } from './protocol.mjs';
 
+const threadStatuses = new Set(['active','idle','archived','notLoaded','systemError','notFound']);
+const turnStatuses = new Set(['inProgress','completed','interrupted','failed']);
+
+function nativeThreadStatus(value) { return threadStatuses.has(value) ? value : 'unknown'; }
+function nativeTurnStatus(value) { return turnStatuses.has(value) ? value : 'unknown'; }
 export async function runCloudLiteMachine(config) {
   const { plan, index, credentials, operatorToken, initialAuth, githubToken } = config;
   mkdirSync('/data/factory', { recursive: true, mode: 0o700 });
@@ -73,13 +78,23 @@ export async function runCloudLiteMachine(config) {
     const threadId = value.params?.threadId ?? value.params?.thread?.id;
     const agent = threadAgents.get(threadId) ?? rootId;
     traces.get(agent).record(value.method, value.params ?? {});
+    const turn = value.params?.turn ?? {};
+    const turnId = turn.id ?? turns.get(threadId);
     if (value.method === 'turn/started') {
       states.delete(threadId);
-      turns.set(threadId, value.params?.turn?.id);
-      const actor = bootstrap.agents.find(x => x.id === agent);
-      void request('/tool', { name: 'factory_checkpoint', arguments: { status: 'running' } }, actor.token).catch(() => {});
+      turns.set(threadId, turnId);
+      if (threadId) traces.get(agent).record('native.turn.started', { threadId, turn: { ...(turnId ? { id: turnId } : {}), status: 'inProgress' } });
     }
-    if (value.method === 'turn/completed') states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : value.params?.turn?.status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
+    if (value.method === 'turn/completed') {
+      const status = nativeTurnStatus(turn.status);
+      states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
+      if (threadId) {
+        const errorCode = turn.error?.code;
+        traces.get(agent).record('native.turn.completed', { threadId, turn: { ...(turnId ? { id: turnId } : {}), status,
+          ...((status === 'failed' || status === 'interrupted')
+            ? { error: { ...(Number.isSafeInteger(errorCode) && Math.abs(errorCode) <= 1000000 ? { code: errorCode } : {}) } } : {}) } });
+      }
+    }
   });
   rpc.on('exit', result => { rootTrace.record('codex.exit', result); void stop(); });
   timer = setInterval(async () => {
@@ -121,10 +136,13 @@ export async function runCloudLiteMachine(config) {
     }
     const threadId = result.thread.id; threadAgents.set(threadId, agent.id);
     await request('/operator/session', { agent: agent.id, session: threadId }, operatorToken);
-    await request('/tool', { name: 'factory_checkpoint', arguments: { status: 'ready' } }, agent.token);
     traces.get(agent.id).record('agent.enrolled', { threadId, agentId: agent.id, machine, parentId: agent.id === rootId ? null : rootId });
     // Recovery observes existing live work; it never replays a retained running turn.
     const current = recovering ? await rpc.request('thread/read', { threadId, includeTurns: false }) : null;
+    const observedThreadStatus = current?.thread?.status?.type ?? result.thread?.status?.type;
+    const threadEvent = recovering ? 'thread.resumed' : 'thread.started';
+    traces.get(agent.id).record('native.' + threadEvent, { threadId,
+      ...(observedThreadStatus ? { threadStatus: nativeThreadStatus(observedThreadStatus) } : {}) });
     if (current?.thread.status?.type !== 'active') {
       const recoveryNote = unavailableSession ? `The prior prepared session ${unavailableSession} has no persisted rollout. Reconcile your existing FACTORY claims, inbox, checkout and GitHub state before continuing; do not replay previous delivery operations.\n` : '';
       const input = recoveryNote + (agent.role === 'orchestrator' ? plan.goal : `Work under ${rootId} toward this goal. Check inbox and shared ownership first:\n${plan.goal}`);
@@ -146,7 +164,6 @@ export async function runCloudLiteMachine(config) {
           stoppedThreads.add(threadId);
           const turnId = turns.get(threadId); if (turnId) { try { await rpc.request('turn/interrupt', { threadId, turnId }); } catch {} }
           states.set(threadId, { status: 'stopped', completed: Date.now() });
-          await request('/tool', { name: 'factory_checkpoint', arguments: { status: 'stopped' } }, agent.token);
         } else if (command.action === 'message') {
           stoppedThreads.delete(threadId);
           const turnId = turns.get(threadId);
