@@ -15,6 +15,16 @@ const TRACE_PAGE_BYTE_LIMIT = 512 * 1024;
 const TRACE_SINGLE_RECORD_LIMIT = 2 * 1024 * 1024 + 4096;
 const TRACE_RECOVERY_WINDOW = TRACE_SINGLE_RECORD_LIMIT;
 
+function nativeStopTarget(agentId, native) {
+  if (!native || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(native.threadId ?? '')
+    || !['active','idle','archived'].includes(native.threadStatus)
+    || native.threadStatus === 'active' && (native.turnStatus !== 'inProgress' || !native.turnId)
+    || native.turnStatus === 'inProgress' && native.threadStatus !== 'active') {
+    throw new Error(`Agent ${agentId} lacks a consistent registered native thread/turn state; refusing an unbound stop.`);
+  }
+  return { expectedThreadId: native.threadId, expectedTurnId: native.turnId ?? null };
+}
+
 function lastPersistedTraceSequence(file) {
   if (!existsSync(file)) return 0;
   const fd = openSync(file, 'r+');
@@ -346,8 +356,16 @@ export class FactoryCloudLiteFleet {
     return snapshot;
   }
   snapshot() { return structuredClone(this.state); }
-  async command(agent, { id, action = 'message', message } = {}) {
-    return this.request('/operator/command', { id, recipient: agent, action, message });
+  async command(agent, { id, action = 'message', message, expectedThreadId, expectedTurnId } = {}) {
+    if (action === 'stop' && (expectedThreadId === undefined || expectedTurnId === undefined)) {
+      const snapshot = await this.request('/operator/status');
+      const native = snapshot.agents.find(value => value.id === agent)?.nativeRuntime;
+      const target = nativeStopTarget(agent, native);
+      if (expectedThreadId !== undefined && expectedThreadId !== target.expectedThreadId
+        || expectedTurnId !== undefined && expectedTurnId !== target.expectedTurnId) throw new Error('Supplied stop target differs from the current native thread/turn.');
+      expectedThreadId = target.expectedThreadId; expectedTurnId = target.expectedTurnId;
+    }
+    return this.request('/operator/command', { id, recipient: agent, action, message, expectedThreadId, expectedTurnId });
   }
   /** Replace only the runtime bundle on the original, journal-owned Machines. */
   async updateRuntime({ bundlePath, machineIds } = {}) {
@@ -390,11 +408,37 @@ export class FactoryCloudLiteFleet {
   async quiesce({ timeoutMs = 120000, attempt = 'default' } = {}) {
     if (!/^[a-z0-9-]{3,48}$/.test(attempt)) throw new Error('Select a stable stop attempt identity.');
     const inventory = agentInventory(this.state.plan);
-    for (const agent of inventory) await this.command(agent.id, { id: `quiesce-${this.state.plan.runId}-${attempt}-${agent.id}`, action: 'stop' });
+    const initial = await this.request('/operator/status');
+    const initialById = new Map(initial.agents.map(agent => [agent.id, agent]));
+    const stopCommands = new Map();
+    for (const agent of inventory) {
+      const observed = initialById.get(agent.id)?.nativeRuntime;
+      const target = nativeStopTarget(agent.id, observed);
+      const commandId = `quiesce-${this.state.plan.runId}-${attempt}-${agent.id}`;
+      stopCommands.set(agent.id, commandId);
+      await this.command(agent.id, { id: commandId, action: 'stop', ...target });
+    }
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const snapshot = await this.request('/operator/status');
-      if (snapshot.agents.length === inventory.length && snapshot.agents.every(agent => agent.status === 'stopped')) {
+      const byId = new Map(snapshot.agents.map(agent => [agent.id, agent]));
+      const allStopped = snapshot.agents.length === inventory.length && inventory.every(expected => {
+        const agent = byId.get(expected.id);
+        const native = agent?.nativeRuntime;
+        const receipt = native?.operatorStopReceipt;
+        if (!native || !receipt || receipt.commandId !== stopCommands.get(expected.id) || receipt.threadId !== native.threadId
+          || !['idle','archived'].includes(receipt.threadStatus) || !['idle','archived'].includes(native.threadStatus)
+          || native.turnStatus === 'inProgress') return false;
+        if (receipt.turnId && (receipt.turnId !== native.turnId || receipt.turnStatus !== native.turnStatus)) return false;
+        const target = initialById.get(expected.id)?.nativeRuntime;
+        if (!target || native.threadId !== target.threadId || (native.turnId ?? null) !== (target.turnId ?? null)) return false;
+        if (receipt.turnId !== (target.turnId ?? undefined)) return false;
+        if (target.turnStatus === 'inProgress') {
+          if (!['completed','interrupted'].includes(native.turnStatus) || receipt.turnStatus !== native.turnStatus) return false;
+        } else if (receipt.turnStatus !== target.turnStatus) return false;
+        return true;
+      });
+      if (allStopped) {
         this.state.quiescedAt = new Date().toISOString(); this.save(); return { agents: inventory.length, quiescedAt: this.state.quiescedAt };
       }
       if (Date.now() >= deadline) throw new Error('Original agents have not all acknowledged stop; retain the live fleet and inspect its commands.');

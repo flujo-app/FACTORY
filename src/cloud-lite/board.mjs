@@ -24,6 +24,7 @@ export class CloudLiteBoard {
       CREATE TABLE IF NOT EXISTS cloud_lite_commands(id TEXT PRIMARY KEY, recipient TEXT NOT NULL, body TEXT NOT NULL, acknowledged INTEGER);
       CREATE TABLE IF NOT EXISTS cloud_lite_validations(resource TEXT NOT NULL, revision TEXT NOT NULL, machine TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(resource,revision));
       CREATE TABLE IF NOT EXISTS cloud_lite_native_runtime(agent_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, event_seq INTEGER NOT NULL, thread_lifecycle TEXT NOT NULL, thread_status TEXT, turn_id TEXT, turn_status TEXT, failure TEXT, updated INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipts(agent_id TEXT NOT NULL, command_id TEXT NOT NULL, thread_id TEXT NOT NULL, turn_id TEXT, thread_status TEXT NOT NULL, turn_status TEXT, event_seq INTEGER NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(agent_id,command_id));
       CREATE TABLE IF NOT EXISTS cloud_lite_run(id INTEGER PRIMARY KEY CHECK(id=1), plan TEXT NOT NULL, digest TEXT NOT NULL);`);
     if (plan) {
       const previous = this.db.prepare('SELECT digest FROM cloud_lite_run WHERE id=1').get();
@@ -58,19 +59,29 @@ export class CloudLiteBoard {
       FROM cloud_lite_agents a LEFT JOIN cloud_lite_native_runtime n ON n.agent_id=a.id ORDER BY a.machine,a.id`).all()
       .map(agent => {
         const { native_thread_id, native_event_seq, thread_lifecycle, thread_status, native_turn_id, turn_status, native_failure, native_updated, ...rest } = agent;
+        const operatorStopReceipt = this.latestNativeStop(agent.id);
         return { ...rest, nativeRuntime: native_thread_id ? {
           threadId: native_thread_id, eventSequence: native_event_seq, threadLifecycle: thread_lifecycle,
           ...(thread_status ? { threadStatus: thread_status } : {}),
           ...(native_turn_id ? { turnId: native_turn_id } : {}),
           ...(turn_status ? { turnStatus: turn_status } : {}),
           ...(native_failure ? { failure: JSON.parse(native_failure) } : {}), updated: native_updated,
+          ...(operatorStopReceipt ? { operatorStopReceipt } : {}),
         } : null };
       });
+  }
+  latestNativeStop(agentId) {
+    const receipt = this.db.prepare('SELECT command_id,thread_id,turn_id,thread_status,turn_status,event_seq,updated FROM cloud_lite_native_stop_receipts WHERE agent_id=? ORDER BY event_seq DESC LIMIT 1').get(agentId);
+    return receipt ? { commandId: receipt.command_id, threadId: receipt.thread_id, ...(receipt.turn_id ? { turnId: receipt.turn_id } : {}),
+      threadStatus: receipt.thread_status, ...(receipt.turn_status ? { turnStatus: receipt.turn_status } : {}), eventSequence: receipt.event_seq, updated: receipt.updated } : null;
   }
   registerSession(agent, session) {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session ?? '')) throw new TypeError('Provide the real native Codex thread identity.');
     const previous = this.db.prepare('SELECT session FROM cloud_lite_agents WHERE id=?').get(agent);
-    if (previous && previous.session !== session) this.db.prepare('DELETE FROM cloud_lite_native_runtime WHERE agent_id=?').run(agent);
+    if (previous && previous.session !== session) {
+      this.db.prepare('DELETE FROM cloud_lite_native_runtime WHERE agent_id=?').run(agent);
+      this.db.prepare('DELETE FROM cloud_lite_native_stop_receipts WHERE agent_id=?').run(agent);
+    }
     const result = this.db.prepare('UPDATE cloud_lite_agents SET session=?,updated=? WHERE id=?').run(session,Date.now(),agent);
     if (!result.changes) throw new Error('Unknown configured agent.');
     return { registered: true };
@@ -121,6 +132,9 @@ export class CloudLiteBoard {
     const nextTurnStatus = event === 'turn.started' ? turnStatus ?? 'inProgress' : turnStatus ?? (sameThread ? old.turn_status : null);
     const priorFailure = sameThread ? decodeNativeFailure(old.failure) : null;
     const nextFailure = event === 'turn.started' ? null : event === 'turn.completed' ? safeFailure : safeFailure ?? priorFailure;
+    if (event === 'thread.started' || event === 'thread.resumed' || event === 'turn.started') {
+      this.db.prepare('DELETE FROM cloud_lite_native_stop_receipts WHERE agent_id=?').run(actor.id);
+    }
     this.db.prepare(`INSERT INTO cloud_lite_native_runtime(agent_id,thread_id,event_seq,thread_lifecycle,thread_status,turn_id,turn_status,failure,updated)
       VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET thread_id=excluded.thread_id,event_seq=excluded.event_seq,
       thread_lifecycle=excluded.thread_lifecycle,thread_status=excluded.thread_status,turn_id=excluded.turn_id,
@@ -182,10 +196,49 @@ export class CloudLiteBoard {
         const old = this.db.prepare('SELECT kind,body FROM cloud_lite_traces WHERE source=? AND source_seq=?').get(actor.id, event.seq);
         if (old && (old.kind !== event.kind || old.body !== body)) throw new Error('A trace sequence cannot identify different bytes.');
         this.db.prepare('INSERT OR IGNORE INTO cloud_lite_traces(source,source_seq,kind,body,observed) VALUES(?,?,?,?,?)').run(actor.id, event.seq, event.kind, body, Date.now());
-        this.observeNativeRuntime(actor, event.seq, event.kind, JSON.parse(body));
+        if (event.kind === 'native.operator.stop.completed') this.recordNativeStopReceipt(actor, event.seq, JSON.parse(body));
+        else this.observeNativeRuntime(actor, event.seq, event.kind, JSON.parse(body));
       }
       return { acknowledged: events.at(-1)?.seq ?? 0 };
     });
+  }
+  recordNativeStopReceipt(actor, eventSequence, body) {
+    if (!actor || actor.role === 'operator' || typeof actor.id !== 'string') throw new Error('Operator stop receipts require an authenticated agent.');
+    const params = body?.params ?? body;
+    const threadId = params?.threadId;
+    const commandId = params?.commandId;
+    const threadStatus = params?.threadStatus;
+    const turn = params?.turn;
+    const turnId = turn?.id;
+    const turnStatus = turn?.status;
+    const expectedThreadId = params?.expectedThreadId;
+    const expectedTurnId = params?.expectedTurnId;
+    if (!Number.isSafeInteger(eventSequence) || eventSequence < 1 || typeof commandId !== 'string' || !/^[a-zA-Z0-9._:-]{1,256}$/.test(commandId)
+      || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId ?? '')
+      || expectedThreadId !== threadId
+      || expectedTurnId !== null && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedTurnId ?? '')
+      || !['idle','archived'].includes(threadStatus)
+      || turnId !== undefined && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(turnId)
+      || turnStatus !== undefined && !['completed','interrupted','failed'].includes(turnStatus)) throw new TypeError('Native stop receipt must contain stable identity and a safe inactive state.');
+    const session = this.db.prepare('SELECT session FROM cloud_lite_agents WHERE id=?').get(actor.id);
+    if (!session || session.session !== threadId) throw new Error('Native stop receipt does not match the registered thread.');
+    const issued = this.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(commandId);
+    const command = issued ? JSON.parse(issued.body) : null;
+    if (!issued || issued.recipient !== actor.id || command?.action !== 'stop'
+      || command.expectedThreadId !== expectedThreadId || command.expectedTurnId !== expectedTurnId) {
+      throw new Error('Native stop receipt does not match an issued stop command for this agent and target.');
+    }
+    const native = this.db.prepare('SELECT * FROM cloud_lite_native_runtime WHERE agent_id=?').get(actor.id);
+    if (!native || native.thread_id !== threadId || native.thread_status !== threadStatus || native.turn_status === 'inProgress') throw new Error('Native stop receipt is stale or the thread remains active.');
+    if (turnId && (native.turn_id !== turnId || native.turn_status !== turnStatus)) throw new Error('Native stop receipt does not match the latest terminal turn.');
+    const old = this.db.prepare('SELECT * FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id=?').get(actor.id, commandId);
+    if (old) {
+      if (old.thread_id !== threadId || old.turn_id !== (turnId ?? null) || old.thread_status !== threadStatus || old.turn_status !== (turnStatus ?? null)) throw new Error('Stable operator stop identity cannot identify different proof.');
+      return { recorded: false, duplicate: true };
+    }
+    this.db.prepare('INSERT INTO cloud_lite_native_stop_receipts VALUES(?,?,?,?,?,?,?,?)')
+      .run(actor.id, commandId, threadId, turnId ?? null, threadStatus, turnStatus ?? null, eventSequence, Date.now());
+    return { recorded: true };
   }
   events(after = 0, through = Number.MAX_SAFE_INTEGER) {
     if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(through) || through < after) throw new TypeError('Select a bounded trace cursor and watermark.');

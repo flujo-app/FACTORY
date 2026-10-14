@@ -8,6 +8,7 @@ import { freemem, totalmem, loadavg } from 'node:os';
 import { CodexRpc } from './rpc.mjs';
 import { startCloudLiteCoordinator } from './server.mjs';
 import { CloudLiteTrace } from './trace.mjs';
+import { NativeOperatorStop } from './operator-stop.mjs';
 import { hash } from './protocol.mjs';
 
 const threadStatuses = new Set(['active','idle','archived','notLoaded','systemError','notFound']);
@@ -61,7 +62,7 @@ export async function runCloudLiteMachine(config) {
     traces.set(agent.id, new CloudLiteTrace({ file: `/data/factory/${agent.id}.jsonl`, url: boardUrl, token: agent.token, remoteSequence: position.sequence,
       secrets: [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials)] }));
   }
-  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const inboxVersions = new Map(); const stoppedThreads = new Set(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
+  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
   const rpc = new CodexRpc({ env: { PATH: process.env.PATH, HOME: '/data', CODEX_HOME: home, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' }, cwd: repositoryDirectory,
     onStderr: text => rootTrace.record('codex.stderr', { text }),
     onRequest: async (method, params) => {
@@ -78,15 +79,19 @@ export async function runCloudLiteMachine(config) {
     const threadId = value.params?.threadId ?? value.params?.thread?.id;
     const agent = threadAgents.get(threadId) ?? rootId;
     traces.get(agent).record(value.method, value.params ?? {});
+    if (value.method === 'thread/started' || value.method === 'thread/resumed') stopControllers.get(threadId)?.invalidateReceipts();
     const turn = value.params?.turn ?? {};
     const turnId = turn.id ?? turns.get(threadId);
     if (value.method === 'turn/started') {
       states.delete(threadId);
+      terminalTurns.delete(threadId);
       turns.set(threadId, turnId);
+      stopControllers.get(threadId)?.observeTurnStarted({ threadId, turnId });
       if (threadId) traces.get(agent).record('native.turn.started', { threadId, turn: { ...(turnId ? { id: turnId } : {}), status: 'inProgress' } });
     }
     if (value.method === 'turn/completed') {
       const status = nativeTurnStatus(turn.status);
+      terminalTurns.set(threadId, { id: turnId, status });
       states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
       if (threadId) {
         const errorCode = turn.error?.code;
@@ -94,6 +99,7 @@ export async function runCloudLiteMachine(config) {
           ...((status === 'failed' || status === 'interrupted')
             ? { error: { ...(Number.isSafeInteger(errorCode) && Math.abs(errorCode) <= 1000000 ? { code: errorCode } : {}) } } : {}) } });
       }
+      stopControllers.get(threadId)?.observeTerminal({ threadId, turnId, status });
     }
   });
   rpc.on('exit', result => { rootTrace.record('codex.exit', result); void stop(); });
@@ -135,6 +141,13 @@ export async function runCloudLiteMachine(config) {
       try { await fd.writeFile(JSON.stringify({ threadId: result.thread.id, agentId: agent.id })); await fd.sync(); } finally { await fd.close(); }
     }
     const threadId = result.thread.id; threadAgents.set(threadId, agent.id);
+    stopControllers.set(threadId, new NativeOperatorStop({ rpc, threadId,
+      getTurn: () => {
+        const turnId = turns.get(threadId);
+        if (!turnId) return null;
+        const terminal = terminalTurns.get(threadId);
+        return { id: turnId, status: terminal?.id === turnId ? terminal.status : 'inProgress' };
+      }, trace: (kind, body) => traces.get(agent.id).record(kind, body), flush: () => traces.get(agent.id).flush() }));
     await request('/operator/session', { agent: agent.id, session: threadId }, operatorToken);
     traces.get(agent.id).record('agent.enrolled', { threadId, agentId: agent.id, machine, parentId: agent.id === rootId ? null : rootId });
     // Recovery observes existing live work; it never replays a retained running turn.
@@ -161,10 +174,26 @@ export async function runCloudLiteMachine(config) {
       inboxVersions.set(threadId, incoming.inboxVersion ?? 0);
       for (const command of incoming.commands) {
         if (command.action === 'stop') {
-          stoppedThreads.add(threadId);
-          const turnId = turns.get(threadId); if (turnId) { try { await rpc.request('turn/interrupt', { threadId, turnId }); } catch {} }
-          states.set(threadId, { status: 'stopped', completed: Date.now() });
+          stoppingThreads.add(threadId);
+          if (!stopTasks.has(command.id)) {
+            const stopTask = (async () => {
+              await stopControllers.get(threadId).stop(command.id, {
+                expectedThreadId: command.expectedThreadId, expectedTurnId: command.expectedTurnId,
+              });
+              stoppedThreads.add(threadId);
+              states.set(threadId, { status: 'stopped', completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
+              traces.get(agentId).record('supervisor.command', { id: command.id, action: 'stop' });
+              await traces.get(agentId).flush();
+              await request('/commands', { acknowledge: command.id }, agent.token);
+            })().catch(() => {
+              rootTrace.record('operator.stop.failed', { agent: agentId, commandId: command.id, category: 'native_stop_unconfirmed' });
+              void rootTrace.flush().catch(() => {});
+            });
+            stopTasks.set(command.id, stopTask);
+          }
+          continue;
         } else if (command.action === 'message') {
+          stoppingThreads.delete(threadId);
           stoppedThreads.delete(threadId);
           const turnId = turns.get(threadId);
           const input = [{ type: 'text', text: command.message }];
@@ -186,7 +215,7 @@ export async function runCloudLiteMachine(config) {
       const agentId = threadAgents.get(threadId);
       const newMail = (inboxVersions.get(threadId) ?? 0) > state.inboxVersion;
       const leaderFollowup = agentId === rootId && Date.now() - state.completed >= 120000;
-      if (stopping || state.status !== 'completed' || !newMail && !leaderFollowup) continue;
+      if (stopping || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup) continue;
       states.delete(threadId);
       try { await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: 'Continue the active goal. Check the FACTORY inbox and current claims, report useful progress and evidence, and take the next available action. Coordinate with your orchestrator and avoid duplicate work.' }], effort: plan.reasoningEffort }); }
       catch (error) { rootTrace.record('continuation.failed', { threadId, message: error.message }); }

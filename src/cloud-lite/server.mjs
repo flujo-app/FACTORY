@@ -51,8 +51,21 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
       if (request.url === '/operator/command' && actor.role === 'operator' && request.method === 'POST') {
         if (!body.id || !board.inventory().some(x => x.id === body.recipient)) throw new Error('Select a known agent and stable command id.');
         if (!['message','stop'].includes(body.action) || body.action === 'message' && typeof body.message !== 'string') throw new Error('Select a stop or text message command.');
+        let expectedThreadId = body.expectedThreadId; let expectedTurnId = body.expectedTurnId;
+        if (body.action === 'stop' && (expectedThreadId === undefined || expectedTurnId === undefined)) {
+          const native = board.inventory().find(value => value.id === body.recipient)?.nativeRuntime;
+          if (!native) throw new Error('Legacy stop command cannot be bound without a registered native thread.');
+          if (expectedThreadId !== undefined && expectedThreadId !== native.threadId
+            || expectedTurnId !== undefined && expectedTurnId !== (native.turnId ?? null)) throw new Error('Supplied stop target differs from the current native thread/turn.');
+          expectedThreadId = native.threadId; expectedTurnId = native.turnId ?? null;
+        }
+        if (body.action === 'stop' && (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedThreadId ?? '')
+          || expectedTurnId !== null && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedTurnId ?? ''))) {
+          throw new Error('Stop commands must bind the exact expected native thread and turn.');
+        }
         const original = board.db.prepare('SELECT body FROM cloud_lite_commands WHERE id=?').get(body.id);
-        const serialized = JSON.stringify({ action: body.action, message: body.message });
+        const serialized = JSON.stringify({ action: body.action, message: body.message,
+          ...(body.action === 'stop' ? { expectedThreadId, expectedTurnId } : {}) });
         if (original && original.body !== serialized) throw new Error('Command id belongs to different bytes.');
         board.db.exec('BEGIN IMMEDIATE');
         try {
