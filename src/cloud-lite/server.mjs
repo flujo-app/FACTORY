@@ -69,11 +69,16 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         if (original && original.body !== serialized) throw new Error('Command id belongs to different bytes.');
         board.db.exec('BEGIN IMMEDIATE');
         try {
-          // A newly requested command supersedes older queued work regardless
-          // of action. Retrying an existing stable id never cancels newer work.
+          // A new command supersedes older queued work and revokes any older
+          // stop proof, including a stop already acknowledged by the runtime.
+          // Retrying an existing stable id never cancels newer work.
           if (!original) {
             const cancelled = Date.now();
-            board.db.prepare('INSERT OR IGNORE INTO cloud_lite_command_cancellations SELECT id,?,? FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL').run(body.id, cancelled, body.recipient);
+            const prior = board.db.prepare('SELECT id,body,acknowledged FROM cloud_lite_commands WHERE recipient=?').all(body.recipient);
+            for (const command of prior) {
+              if (command.acknowledged !== null && JSON.parse(command.body).action !== 'stop') continue;
+              board.db.prepare('INSERT OR IGNORE INTO cloud_lite_command_cancellations VALUES(?,?,?)').run(command.id, body.id, cancelled);
+            }
             board.db.prepare('DELETE FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id IN (SELECT command_id FROM cloud_lite_command_cancellations WHERE superseded_by=?)').run(body.recipient, body.id);
             board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE recipient=? AND acknowledged IS NULL').run(cancelled, body.recipient);
           }
@@ -83,7 +88,17 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         return send(200, { recorded: true });
       }
       if (request.url === '/commands' && actor.role !== 'operator') {
-        if (body.acknowledge) board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE id=? AND recipient=?').run(Date.now(), body.acknowledge, actor.id);
+        if (body.acknowledge) {
+          const command = board.db.prepare('SELECT body FROM cloud_lite_commands WHERE id=? AND recipient=?').get(body.acknowledge, actor.id);
+          const cancelled = board.db.prepare('SELECT 1 FROM cloud_lite_command_cancellations WHERE command_id=?').get(body.acknowledge);
+          if (!command || cancelled) return send(200, { acknowledged: false, cancelled: true });
+          if (JSON.parse(command.body).action === 'stop'
+            && !board.db.prepare('SELECT 1 FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id=?').get(actor.id, body.acknowledge)) {
+            return send(200, { acknowledged: false, cancelled: false, receiptAccepted: false });
+          }
+          const result = board.db.prepare('UPDATE cloud_lite_commands SET acknowledged=? WHERE id=? AND recipient=? AND acknowledged IS NULL').run(Date.now(), body.acknowledge, actor.id);
+          return send(200, { acknowledged: result.changes === 1, cancelled: false, receiptAccepted: true });
+        }
         return send(200, { commands: board.db.prepare('SELECT id,body FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL').all(actor.id).map(x => ({ id: x.id, ...JSON.parse(x.body) })),
           inboxVersion: board.db.prepare('SELECT count(*) AS count FROM messages WHERE recipient=?').get(actor.id).count });
       }

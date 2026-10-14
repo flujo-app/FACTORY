@@ -72,7 +72,7 @@ export async function runCloudLiteMachine(config) {
     traces.set(agent.id, new CloudLiteTrace({ file: `/data/factory/${agent.id}.jsonl`, url: boardUrl, token: agent.token, remoteSequence: position.sequence,
       secrets: [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials)] }));
   }
-  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
+  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const revokedStopCommands = new Set(); const pendingStopCommands = new Map(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
   const rpc = new CodexRpc({ env: { PATH: process.env.PATH, HOME: '/data', CODEX_HOME: home, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' }, cwd: repositoryDirectory,
     onStderr: text => rootTrace.record('codex.stderr', { text }),
     onRequest: async (method, params) => {
@@ -188,19 +188,28 @@ export async function runCloudLiteMachine(config) {
               await stopControllers.get(threadId).stop(command.id, {
                 expectedThreadId: command.expectedThreadId, expectedTurnId: command.expectedTurnId,
               });
+              if (revokedStopCommands.has(command.id)) return;
+              const acknowledgement = await request('/commands', { acknowledge: command.id }, agent.token);
+              if (!acknowledgement.acknowledged) {
+                revokedStopCommands.add(command.id);
+                return;
+              }
               stoppedThreads.add(threadId);
               states.set(threadId, { status: 'stopped', completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
               traces.get(agentId).record('supervisor.command', { id: command.id, action: 'stop' });
               await traces.get(agentId).flush();
-              await request('/commands', { acknowledge: command.id }, agent.token);
             })().catch(() => {
               rootTrace.record('operator.stop.failed', { agent: agentId, commandId: command.id, category: 'native_stop_unconfirmed' });
               void rootTrace.flush().catch(() => {});
-            });
+            }).finally(() => { if (pendingStopCommands.get(threadId) === command.id) pendingStopCommands.delete(threadId); });
+            pendingStopCommands.set(threadId, command.id);
             stopTasks.set(command.id, stopTask);
           }
           continue;
         } else if (command.action === 'message') {
+          const pendingStop = pendingStopCommands.get(threadId);
+          if (pendingStop) revokedStopCommands.add(pendingStop);
+          stopControllers.get(threadId)?.invalidateReceipts();
           stoppingThreads.delete(threadId);
           stoppedThreads.delete(threadId);
           const turnId = turns.get(threadId);

@@ -1,6 +1,8 @@
 import { FactoryControl } from '../control.mjs';
 import { agentInventory, canMessage, hash, redact } from './protocol.mjs';
 
+class NativeStopReceiptRejected extends Error {}
+
 function decodeNativeFailure(value) {
   let failure = value;
   for (let attempt = 0; typeof failure === 'string' && attempt < 2; attempt++) {
@@ -25,6 +27,7 @@ export class CloudLiteBoard {
       CREATE TABLE IF NOT EXISTS cloud_lite_validations(resource TEXT NOT NULL, revision TEXT NOT NULL, machine TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(resource,revision));
       CREATE TABLE IF NOT EXISTS cloud_lite_native_runtime(agent_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, event_seq INTEGER NOT NULL, thread_lifecycle TEXT NOT NULL, thread_status TEXT, turn_id TEXT, turn_status TEXT, failure TEXT, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipts(agent_id TEXT NOT NULL, command_id TEXT NOT NULL, thread_id TEXT NOT NULL, turn_id TEXT, thread_status TEXT NOT NULL, turn_status TEXT, event_seq INTEGER NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(agent_id,command_id));
+      CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipt_rejections(source TEXT NOT NULL, source_seq INTEGER NOT NULL, PRIMARY KEY(source,source_seq));
       CREATE TABLE IF NOT EXISTS cloud_lite_run(id INTEGER PRIMARY KEY CHECK(id=1), plan TEXT NOT NULL, digest TEXT NOT NULL);`);
     if (plan) {
       const previous = this.db.prepare('SELECT digest FROM cloud_lite_run WHERE id=1').get();
@@ -197,14 +200,23 @@ export class CloudLiteBoard {
         const old = this.db.prepare('SELECT kind,body FROM cloud_lite_traces WHERE source=? AND source_seq=?').get(actor.id, event.seq);
         if (old && (old.kind !== event.kind || old.body !== body)) throw new Error('A trace sequence cannot identify different bytes.');
         this.db.prepare('INSERT OR IGNORE INTO cloud_lite_traces(source,source_seq,kind,body,observed) VALUES(?,?,?,?,?)').run(actor.id, event.seq, event.kind, body, Date.now());
-        if (event.kind === 'native.operator.stop.completed') this.recordNativeStopReceipt(actor, event.seq, JSON.parse(body));
+        if (event.kind === 'native.operator.stop.completed') {
+          const rejected = this.db.prepare('SELECT 1 FROM cloud_lite_native_stop_receipt_rejections WHERE source=? AND source_seq=?').get(actor.id, event.seq);
+          if (!rejected) {
+            try { this.recordNativeStopReceipt(actor, event.seq, JSON.parse(body)); }
+            catch (error) {
+              if (!(error instanceof NativeStopReceiptRejected)) throw error;
+              this.db.prepare('INSERT OR IGNORE INTO cloud_lite_native_stop_receipt_rejections VALUES(?,?)').run(actor.id, event.seq);
+            }
+          }
+        }
         else this.observeNativeRuntime(actor, event.seq, event.kind, JSON.parse(body));
       }
       return { acknowledged: events.at(-1)?.seq ?? 0 };
     });
   }
   recordNativeStopReceipt(actor, eventSequence, body) {
-    if (!actor || actor.role === 'operator' || typeof actor.id !== 'string') throw new Error('Operator stop receipts require an authenticated agent.');
+    if (!actor || actor.role === 'operator' || typeof actor.id !== 'string') throw new NativeStopReceiptRejected('Operator stop receipts require an authenticated agent.');
     const params = body?.params ?? body;
     const threadId = params?.threadId;
     const commandId = params?.commandId;
@@ -220,25 +232,25 @@ export class CloudLiteBoard {
       || expectedTurnId !== null && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedTurnId ?? '')
       || !['idle','archived'].includes(threadStatus)
       || turnId !== undefined && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(turnId)
-      || turnStatus !== undefined && !['completed','interrupted','failed'].includes(turnStatus)) throw new TypeError('Native stop receipt must contain stable identity and a safe inactive state.');
+      || turnStatus !== undefined && !['completed','interrupted','failed'].includes(turnStatus)) throw new NativeStopReceiptRejected('Native stop receipt must contain stable identity and a safe inactive state.');
     const session = this.db.prepare('SELECT session FROM cloud_lite_agents WHERE id=?').get(actor.id);
-    if (!session || session.session !== threadId) throw new Error('Native stop receipt does not match the registered thread.');
+    if (!session || session.session !== threadId) throw new NativeStopReceiptRejected('Native stop receipt does not match the registered thread.');
     const issued = this.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(commandId);
     const command = issued ? JSON.parse(issued.body) : null;
     if (!issued || issued.recipient !== actor.id || command?.action !== 'stop'
       || command.expectedThreadId !== expectedThreadId || command.expectedTurnId !== expectedTurnId) {
-      throw new Error('Native stop receipt does not match an issued stop command for this agent and target.');
+      throw new NativeStopReceiptRejected('Native stop receipt does not match an issued stop command for this agent and target.');
     }
-    if ((turnId ?? null) !== expectedTurnId) throw new Error('Native stop receipt turn differs from the issued command target.');
+    if ((turnId ?? null) !== expectedTurnId) throw new NativeStopReceiptRejected('Native stop receipt turn differs from the issued command target.');
     if (this.db.prepare('SELECT 1 FROM cloud_lite_command_cancellations WHERE command_id=?').get(commandId)) {
-      throw new Error('Native stop receipt belongs to a superseded command.');
+      throw new NativeStopReceiptRejected('Native stop receipt belongs to a superseded command.');
     }
     const native = this.db.prepare('SELECT * FROM cloud_lite_native_runtime WHERE agent_id=?').get(actor.id);
-    if (!native || native.thread_id !== threadId || native.thread_status !== threadStatus || native.turn_status === 'inProgress') throw new Error('Native stop receipt is stale or the thread remains active.');
-    if (turnId && (native.turn_id !== turnId || native.turn_status !== turnStatus)) throw new Error('Native stop receipt does not match the latest terminal turn.');
+    if (!native || native.thread_id !== threadId || native.thread_status !== threadStatus || native.turn_status === 'inProgress') throw new NativeStopReceiptRejected('Native stop receipt is stale or the thread remains active.');
+    if (turnId && (native.turn_id !== turnId || native.turn_status !== turnStatus)) throw new NativeStopReceiptRejected('Native stop receipt does not match the latest terminal turn.');
     const old = this.db.prepare('SELECT * FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id=?').get(actor.id, commandId);
     if (old) {
-      if (old.thread_id !== threadId || old.turn_id !== (turnId ?? null) || old.thread_status !== threadStatus || old.turn_status !== (turnStatus ?? null)) throw new Error('Stable operator stop identity cannot identify different proof.');
+      if (old.thread_id !== threadId || old.turn_id !== (turnId ?? null) || old.thread_status !== threadStatus || old.turn_status !== (turnStatus ?? null)) throw new NativeStopReceiptRejected('Stable operator stop identity cannot identify different proof.');
       return { recorded: false, duplicate: true };
     }
     this.db.prepare('INSERT INTO cloud_lite_native_stop_receipts VALUES(?,?,?,?,?,?,?,?)')
