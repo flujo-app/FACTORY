@@ -11,6 +11,7 @@ import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { CloudLiteTrace } from '../src/cloud-lite/trace.mjs';
 import { NativeOperatorStop } from '../src/cloud-lite/operator-stop.mjs';
 import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
+import { isCurrentNativeTurn, nativeStopTurn } from '../src/cloud-lite/runtime.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
 const plan = () => validateCloudLitePlan({ runId: 'lite-test', app: 'factory-lite-test', repository: 'mario-andreschak/FLUJO', goal: 'Analyze and merge existing PRs', machines: 10, agentsPerMachine: 10 });
@@ -433,6 +434,29 @@ test('native turn projection keeps the active turn across a late prior completio
   } finally { board.close(); }
 });
 
+test('runtime stop targeting recovers terminal-only turn identity and ignores a late prior completion', async () => {
+  const threadId = '01a13916-1da9-76a1-0a6e-af0c060ec3a4';
+  const turnA = '01a13917-1da9-76a1-0a6e-af0c060ec3a4';
+  const turnB = '01a13918-1da9-76a1-0a6e-af0c060ec3a4';
+  const turns = new Map(); const terminalTurns = new Map();
+  terminalTurns.set(threadId, { id: turnA, status: 'completed' });
+  assert.deepEqual(nativeStopTurn(turns, terminalTurns, threadId), { id: turnA, status: 'completed' });
+  const events = [];
+  const controller = new NativeOperatorStop({ threadId,
+    rpc: { request: async method => { assert.equal(method, 'thread/read'); return { thread: { id: threadId, status: { type: 'idle' } } }; } },
+    getTurn: () => nativeStopTurn(turns, terminalTurns, threadId),
+    trace: (kind, body) => events.push({ kind, body }), flush: async () => {},
+  });
+  const receipt = await controller.stop('recovered-terminal-stop', { expectedThreadId: threadId, expectedTurnId: turnA });
+  assert.equal(receipt.turn.id, turnA); assert.equal(receipt.turn.status, 'completed');
+  assert.deepEqual(events.map(event => event.kind), ['thread/status/changed', 'native.operator.stop.completed']);
+  turns.set(threadId, turnB);
+  terminalTurns.delete(threadId);
+  assert.equal(isCurrentNativeTurn(turns, threadId, turnA), false);
+  assert.deepEqual(nativeStopTurn(turns, terminalTurns, threadId), { id: turnB, status: 'inProgress' });
+  assert.equal(isCurrentNativeTurn(turns, threadId, turnB), true);
+});
+
 test('native operator stop emits a receipt only after matching interrupt and inactive readback', async t => {
   const threadId = '01a13920-1da9-76a1-0a6e-af0c060ec3a4';
   const turnId = '01a13921-1da9-76a1-0a6e-af0c060ec3a4';
@@ -545,17 +569,28 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     const nextStop = await post('/operator/command', { id: nextStopId, recipient: actor.id, action: 'stop', expectedThreadId: threadId, expectedTurnId: turnId });
     assert.equal(nextStop.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
-    const cancelledReceipt = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
+    const nextReceipt = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
+      commandId: nextStopId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
+    } }] }, credentials[actor.id]);
+    assert.equal(nextReceipt.status, 200);
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt.commandId, nextStopId);
+    const message = await post('/operator/command', { id: 'message-only', recipient: actor.id, action: 'message', message: 'continue' });
+    assert.equal(message.status, 200);
+    assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
+    assert.equal(board.db.prepare('SELECT superseded_by FROM cloud_lite_command_cancellations WHERE command_id=?').get(nextStopId).superseded_by, 'message-only');
+    const cancelledReceipt = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
       commandId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(cancelledReceipt.status, 400);
-    const message = await post('/operator/command', { id: 'message-only', recipient: actor.id, action: 'message', message: 'continue' });
-    assert.equal(message.status, 200);
-    const forged = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
+    const staleNextReceipt = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
+      commandId: nextStopId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
+    } }] }, credentials[actor.id]);
+    assert.equal(staleNextReceipt.status, 400);
+    const forged = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
       commandId: 'message-only', expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(forged.status, 400);
-    const unrelated = await post('/trace', { events: [{ seq: 7, kind: 'native.operator.stop.completed', body: {
+    const unrelated = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
       commandId: 'never-issued', expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(unrelated.status, 400);
@@ -567,15 +602,15 @@ test('native stop receipt is bound to an issued command, registered idle turn, a
     } }] }, credentials[actor.id]);
     assert.equal(mismatchedTurn.status, 400);
     const newTurn = '01a1392a-1da9-76a1-0a6e-af0c060ec3a4';
-    const resumed = await post('/trace', { events: [{ seq: 7, kind: 'native.turn.started', body: { threadId, turn: { id: newTurn } } }] }, credentials[actor.id]);
+    const resumed = await post('/trace', { events: [{ seq: 8, kind: 'native.turn.started', body: { threadId, turn: { id: newTurn } } }] }, credentials[actor.id]);
     assert.equal(resumed.status, 200);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.operatorStopReceipt, undefined);
-    const stale = await post('/trace', { events: [{ seq: 8, kind: 'native.operator.stop.completed', body: {
+    const stale = await post('/trace', { events: [{ seq: 9, kind: 'native.operator.stop.completed', body: {
       commandId, expectedThreadId: threadId, expectedTurnId: turnId, threadId, threadStatus: 'idle', turn: { id: turnId, status: 'interrupted' },
     } }] }, credentials[actor.id]);
     assert.equal(stale.status, 400);
-    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=7').get(actor.id).n, 1);
-    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=8').get(actor.id).n, 0);
+    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=8').get(actor.id).n, 1);
+    assert.equal(board.db.prepare('SELECT count(*) AS n FROM cloud_lite_traces WHERE source=? AND source_seq=9').get(actor.id).n, 0);
     assert.equal(board.snapshot().agents.find(value => value.id === actor.id).nativeRuntime.turnId, newTurn);
   } finally { await coordinator.close(); }
 });

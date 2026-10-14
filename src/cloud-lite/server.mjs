@@ -69,9 +69,9 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         if (original && original.body !== serialized) throw new Error('Command id belongs to different bytes.');
         board.db.exec('BEGIN IMMEDIATE');
         try {
-          // A newly requested stop supersedes earlier queued work. Retrying its
-          // durable id does not cancel a later explicit resume/message command.
-          if (!original && body.action === 'stop') {
+          // A newly requested command supersedes older queued work regardless
+          // of action. Retrying an existing stable id never cancels newer work.
+          if (!original) {
             const cancelled = Date.now();
             board.db.prepare('INSERT OR IGNORE INTO cloud_lite_command_cancellations SELECT id,?,? FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL').run(body.id, cancelled, body.recipient);
             board.db.prepare('DELETE FROM cloud_lite_native_stop_receipts WHERE agent_id=? AND command_id IN (SELECT command_id FROM cloud_lite_command_cancellations WHERE superseded_by=?)').run(body.recipient, body.id);

@@ -16,6 +16,16 @@ const turnStatuses = new Set(['inProgress','completed','interrupted','failed']);
 
 function nativeThreadStatus(value) { return threadStatuses.has(value) ? value : 'unknown'; }
 function nativeTurnStatus(value) { return turnStatuses.has(value) ? value : 'unknown'; }
+export function nativeStopTurn(turns, terminalTurns, threadId) {
+  const id = turns.get(threadId) ?? terminalTurns.get(threadId)?.id;
+  if (!id) return null;
+  const terminal = terminalTurns.get(threadId);
+  return { id, status: terminal?.id === id ? terminal.status : 'inProgress' };
+}
+export function isCurrentNativeTurn(turns, threadId, notificationTurnId) {
+  const current = turns.get(threadId);
+  return !notificationTurnId || !current || notificationTurnId === current;
+}
 export async function runCloudLiteMachine(config) {
   const { plan, index, credentials, operatorToken, initialAuth, githubToken } = config;
   mkdirSync('/data/factory', { recursive: true, mode: 0o700 });
@@ -91,6 +101,7 @@ export async function runCloudLiteMachine(config) {
       if (threadId) traces.get(agent).record('native.turn.started', { threadId, turn: { ...(turnId ? { id: turnId } : {}), status: 'inProgress' } });
     }
     if (value.method === 'turn/completed') {
+      if (!isCurrentNativeTurn(turns, threadId, turnId)) return;
       const status = nativeTurnStatus(turn.status);
       terminalTurns.set(threadId, { id: turnId, status });
       states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
@@ -143,12 +154,8 @@ export async function runCloudLiteMachine(config) {
     }
     const threadId = result.thread.id; threadAgents.set(threadId, agent.id);
     stopControllers.set(threadId, new NativeOperatorStop({ rpc, threadId,
-      getTurn: () => {
-        const turnId = turns.get(threadId);
-        if (!turnId) return null;
-        const terminal = terminalTurns.get(threadId);
-        return { id: turnId, status: terminal?.id === turnId ? terminal.status : 'inProgress' };
-      }, trace: (kind, body) => traces.get(agent.id).record(kind, body), flush: () => traces.get(agent.id).flush() }));
+      getTurn: () => nativeStopTurn(turns, terminalTurns, threadId),
+      trace: (kind, body) => traces.get(agent.id).record(kind, body), flush: () => traces.get(agent.id).flush() }));
     await request('/operator/session', { agent: agent.id, session: threadId }, operatorToken);
     traces.get(agent.id).record('agent.enrolled', { threadId, agentId: agent.id, machine, parentId: agent.id === rootId ? null : rootId });
     // Recovery observes existing live work; it never replays a retained running turn.
