@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { safeReceipt } from './receipts.mjs';
+import { assertWorkflowAcceptance } from './workflows/gates.mjs';
 import { consumeGitRefusalProof } from './git-effect.mjs';
 import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
@@ -229,11 +230,20 @@ export class FactoryControl {
   }
   close() { this.db.close(); }
   transaction(operation) {
+    if (this.transactionDepth) {
+      const savepoint = `factory_nested_${this.transactionDepth++}`;
+      this.db.exec(`SAVEPOINT ${savepoint}`);
+      try { const result = operation(); this.db.exec(`RELEASE ${savepoint}`); return result; }
+      catch (error) { this.db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`); throw error; }
+      finally { this.transactionDepth--; }
+    }
     this.db.exec('BEGIN IMMEDIATE');
+    this.transactionDepth = 1;
     try { const result = operation(); this.db.exec('COMMIT'); return result; }
     // A COMMIT may succeed before its acknowledgment fails. A subsequent
     // ROLLBACK failure must not replace the causal error; callers inspect state.
     catch (error) { try { this.db.exec('ROLLBACK'); } catch {} throw error; }
+    finally { this.transactionDepth = 0; }
   }
   event(type, subject, details = {}) { this.db.prepare('INSERT INTO events(type,subject,details,observed) VALUES(?,?,?,?)').run(type, subject, canonical(details), this.clock()); }
   control() {
@@ -1030,10 +1040,20 @@ export class FactoryControl {
       this.active(); const task=this.task(taskId), reviewer=this.db.prepare("SELECT * FROM cells WHERE id=? AND status='ready' AND role='verifier'").get(id(reviewerId));
       if (!reviewer || reviewerId===task.owner) fail('REVIEWER','Separate verifier cell is required.');
       if (task.status!=='review') fail('TASK','Task is not awaiting review.');
+      assertWorkflowAcceptance(this, task, reviewerId, accepted);
       if (evidence(task.candidate.path).sha256!==task.candidate.sha256) fail('EVIDENCE','Submitted candidate changed.');
       const review={...record,reviewerId,accepted,candidateDigest:task.candidate.sha256,specDigest:task.spec_digest,attempt:task.epoch};
       this.db.prepare('UPDATE tasks SET status=?,review=? WHERE id=?').run(accepted?'verified':'rejected',canonical(review),taskId);
       this.event('candidate_reviewed',taskId,review); return this.task(taskId);
+    });
+  }
+  reviseTask(taskId, candidateDigest) {
+    return this.transaction(() => {
+      this.active(); const task = this.task(taskId);
+      if (task.status !== 'rejected' || task.candidate?.sha256 !== candidateDigest || this.openTaskEffects(taskId).length) fail('REVISION', 'Only the rejected, settled candidate can be revised.');
+      this.db.prepare("UPDATE tasks SET status='ready',owner=NULL,token_hash=NULL,expires=NULL,candidate=NULL,review=NULL WHERE id=?").run(taskId);
+      this.event('revision_requested', taskId, { candidateDigest, attempt: task.epoch });
+      return this.task(taskId);
     });
   }
   claimIntegration(projectId, cellId='root', ttlMs=60000) {

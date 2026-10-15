@@ -21,6 +21,23 @@ cd /opt/factory
 npm install --omit=dev --ignore-scripts --no-audit --no-fund
 npm install --prefix /opt/flujo-bash --no-audit --no-fund @mario.andreschak/mcp-bash@3.46.2
 export HOME=/data CODEX_HOME=/data/codex
+node --input-type=module - <<'FACTORY_PIN_SOURCE'
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+const config = JSON.parse(Buffer.from(process.env.FACTORY_CLOUD_BOOTSTRAP_B64, 'base64').toString());
+if (config.plan.repositoryRevision) {
+  if (!/^[a-f0-9]{40}$/.test(config.plan.repositoryRevision)) throw new Error('Invalid source revision.');
+  const cwd = '/data/repository', env = { ...process.env, GH_TOKEN: config.githubToken, GIT_TERMINAL_PROMPT: '0' };
+  const run = (command,args,options={}) => execFileSync(command,args,{env,stdio:['ignore','pipe','pipe'],...options});
+  run('gh',['auth','setup-git']);
+  if (!existsSync(cwd + '/.git')) {
+    run('git',['clone','https://github.com/' + config.plan.repository + '.git',cwd]);
+    run('git',['fetch','origin',config.plan.repositoryRevision],{cwd});
+    run('git',['checkout','--detach',config.plan.repositoryRevision],{cwd});
+  }
+  if (run('git',['rev-parse','HEAD'],{cwd}).toString().trim() !== config.plan.repositoryRevision) throw new Error('Retained repository differs from the frozen comparison source.');
+}
+FACTORY_PIN_SOURCE
 exec node bin/factory-cloud-runtime.mjs
 `;
 }

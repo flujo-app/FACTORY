@@ -71,6 +71,11 @@ export async function runCloudLiteMachine(config) {
     catch (error) { throw new Error(`${command} failed (${error.code}).`); }
   };
   if (!existsSync(join(repositoryDirectory, '.git'))) await run('git', ['clone', `https://github.com/${plan.repository}.git`, repositoryDirectory]);
+  if (plan.repositoryRevision) {
+    await run('git', ['fetch', 'origin', plan.repositoryRevision], repositoryDirectory);
+    const pinned = (await run('git', ['rev-parse', `${plan.repositoryRevision}^{commit}`], repositoryDirectory)).trim();
+    if (pinned !== plan.repositoryRevision) throw new Error('Repository snapshot identity mismatch.');
+  }
   await run('git', ['config', 'user.name', 'FACTORY swarm'], repositoryDirectory);
   await run('git', ['config', 'user.email', 'flujo.com.co@gmail.com'], repositoryDirectory);
   await run('gh', ['auth', 'setup-git'], repositoryDirectory);
@@ -83,7 +88,7 @@ export async function runCloudLiteMachine(config) {
     traces.set(agent.id, new CloudLiteTrace({ file: `/data/factory/${agent.id}.jsonl`, url: boardUrl, token: agent.token, remoteSequence: position.sequence,
       secrets: [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials)] }));
   }
-  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const revokedStopCommands = new Set(); const pendingStopCommands = new Map(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
+  const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const workflowVersions = new Map(); const consumedVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const revokedStopCommands = new Set(); const pendingStopCommands = new Map(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
   const rpc = new CodexRpc({ env: { PATH: process.env.PATH, HOME: '/data', CODEX_HOME: home, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' }, cwd: repositoryDirectory,
     onStderr: text => rootTrace.record('codex.stderr', { text }),
     onRequest: async (method, params) => {
@@ -105,6 +110,7 @@ export async function runCloudLiteMachine(config) {
     const turn = value.params?.turn ?? {};
     const turnId = turn.id ?? turns.get(threadId);
     if (value.method === 'turn/started') {
+      if (plan.workflow) consumedVersions.set(threadId, { inboxVersion: inboxVersions.get(threadId) ?? 0, workflowVersion: workflowVersions.get(threadId) ?? 0 });
       states.delete(threadId);
       terminalTurns.delete(threadId);
       turns.set(threadId, turnId);
@@ -115,7 +121,8 @@ export async function runCloudLiteMachine(config) {
       if (!isCurrentNativeTurn(turns, threadId, turnId)) return;
       const status = nativeTurnStatus(turn.status);
       terminalTurns.set(threadId, { id: turnId, status });
-      states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0 });
+      states.set(threadId, { status: stoppedThreads.has(threadId) ? 'stopped' : status, completed: Date.now(), inboxVersion: inboxVersions.get(threadId) ?? 0,
+        ...(plan.workflow ? consumedVersions.get(threadId) ?? { inboxVersion: 0, workflowVersion: 0 } : {}) });
       if (threadId) {
         const errorCode = turn.error?.code;
         traces.get(agent).record('native.turn.completed', { threadId, turn: { ...(turnId ? { id: turnId } : {}), status,
@@ -137,7 +144,7 @@ export async function runCloudLiteMachine(config) {
   const proxy = fileURLToPath(new URL('../../bin/factory-cloud-mcp.mjs', import.meta.url));
   for (const agent of bootstrap.agents) {
     const directory = join('/data/worktrees', agent.id); mkdirSync('/data/worktrees', { recursive: true });
-    if (!existsSync(directory)) await run('git', ['worktree', 'add', '--detach', directory, 'HEAD'], repositoryDirectory);
+    if (!existsSync(directory)) await run('git', ['worktree', 'add', '--detach', directory, plan.repositoryRevision ?? 'HEAD'], repositoryDirectory);
     const sessionFile = `/data/factory/${agent.id}.session.json`;
     const configOverride = { mcp_servers: { factory: { command: process.execPath, args: [proxy], env: { FACTORY_BOARD_URL: boardUrl, FACTORY_BOARD_TOKEN: agent.token, FACTORY_WORKTREE: directory }, required: true } },
       'features.apps': false, 'features.plugins': false, 'features.multi_agent': false,
@@ -177,7 +184,8 @@ export async function runCloudLiteMachine(config) {
       ...(observedThreadStatus ? { threadStatus: nativeThreadStatus(observedThreadStatus) } : {}) });
     if (current?.thread.status?.type !== 'active') {
       const recoveryNote = unavailableSession ? `The prior prepared session ${unavailableSession} has no persisted rollout. Reconcile your existing FACTORY claims, inbox, checkout and GitHub state before continuing; do not replay previous delivery operations.\n` : '';
-      const input = recoveryNote + (agent.role === 'orchestrator' ? plan.goal : `Work under ${rootId} toward this goal. Check inbox and shared ownership first:\n${plan.goal}`);
+      const workflowNote = plan.workflow ? `\nUse the verified workflow tools for work lifecycle. The last worker on each machine (${machine}-a${plan.agentsPerMachine - 1}) is its independent verifier; other workers implement. Orchestrators create immutable workflow tasks with original problem, acceptance, exact baseline, assignments, dependencies, and executable gates scoped to development/publication/release/live policy. Implementers claim, upload immutable artifact bytes (Git bundle/source), and submit a candidate. Reviewers use the candidate review packet and return findings without editing it. The supervisor executes objective gates on that candidate. Revise rejected candidates. Acceptance is derived by the controller, and delivery still uses repository policy. Read incremental workflow events and next actions. When no actionable work remains, finish the turn and wait for a new event; no repeated availability updates. Query curated knowledge only for a concrete gap.\n` : '';
+      const input = recoveryNote + workflowNote + (agent.role === 'orchestrator' ? plan.goal : `Work under ${rootId} toward this goal. Check inbox and shared ownership first:\n${plan.goal}`);
       await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: input }], effort: plan.reasoningEffort });
     }
   }
@@ -191,6 +199,7 @@ export async function runCloudLiteMachine(config) {
       const agent = bootstrap.agents.find(x => x.id === agentId);
       const incoming = await request('/commands', {}, agent.token);
       inboxVersions.set(threadId, incoming.inboxVersion ?? 0);
+      workflowVersions.set(threadId, incoming.workflowVersion ?? 0);
       for (const command of incoming.commands) {
         if (command.action === 'stop') {
           stoppingThreads.add(threadId);
@@ -246,8 +255,9 @@ export async function runCloudLiteMachine(config) {
     for (const [threadId, state] of states) {
       const agentId = threadAgents.get(threadId);
       const newMail = (inboxVersions.get(threadId) ?? 0) > state.inboxVersion;
-      const leaderFollowup = agentId === rootId && Date.now() - state.completed >= 120000;
-      if (stopping || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup) continue;
+      const newWorkflowEvent = plan.workflow && (workflowVersions.get(threadId) ?? 0) > (state.workflowVersion ?? 0);
+      const leaderFollowup = !plan.workflow && agentId === rootId && Date.now() - state.completed >= 120000;
+      if (stopping || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup && !newWorkflowEvent) continue;
       states.delete(threadId);
       try { await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: 'Continue the active goal. Check the FACTORY inbox and current claims, report useful progress and evidence, and take the next available action. Coordinate with your orchestrator and avoid duplicate work.' }], effort: plan.reasoningEffort }); }
       catch (error) { rootTrace.record('continuation.failed', { threadId, message: error.message }); }

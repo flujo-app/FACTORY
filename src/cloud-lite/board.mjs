@@ -1,5 +1,7 @@
 import { FactoryControl } from '../control.mjs';
 import { agentInventory, canMessage, hash, redact } from './protocol.mjs';
+import { FactoryWorkflow } from '../workflows/engine.mjs';
+import { callWorkflowTool, workflowTools } from '../workflows/tools.mjs';
 
 class NativeStopReceiptRejected extends Error {}
 
@@ -36,7 +38,7 @@ export class CloudLiteBoard {
       if (!this.db.prepare('SELECT id FROM control WHERE id=1').get()) {
         this.control.initialize({ mission: plan.goal, budgetCents: 0, maxCells: plan.machines * plan.agentsPerMachine + 1, maxDepth: 2 });
         for (const agent of agentInventory(plan)) {
-          this.control.reserveCell({ cellId: agent.id, parentId: agent.parentId, role: agent.role === 'orchestrator' ? 'coordinator' : 'developer', budgetCents: 0, purpose: plan.goal });
+          this.control.reserveCell({ cellId: agent.id, parentId: agent.parentId, role: agent.role === 'orchestrator' ? 'coordinator' : plan.workflow && agent.id.endsWith(`-a${plan.agentsPerMachine - 1}`) ? 'verifier' : 'developer', budgetCents: 0, purpose: plan.goal });
           this.control.enrollCell(agent.id);
         }
       }
@@ -48,6 +50,8 @@ export class CloudLiteBoard {
         this.db.prepare('INSERT OR IGNORE INTO cloud_lite_agents(id,machine,role,token_hash) VALUES(?,?,?,?)').run(agent.id, agent.machine, agent.role, hash(token));
       }
     }
+    const savedPlan = this.db.prepare('SELECT plan FROM cloud_lite_run WHERE id=1').get();
+    if (savedPlan && JSON.parse(savedPlan.plan).workflow === 'verified-v1') this.workflow = new FactoryWorkflow(database, { control: this.control });
   }
   authenticate(token) {
     if (this.operatorHash && hash(token) === this.operatorHash) return { id: 'operator', role: 'operator' };
@@ -148,10 +152,22 @@ export class CloudLiteBoard {
     return { recorded: true };
   }
   snapshot() { return { plan: JSON.parse(this.db.prepare('SELECT plan FROM cloud_lite_run WHERE id=1').get().plan),
+    ...(this.workflow ? { workflows: this.workflow.listTasks(), workflowSequence: this.workflow.events({limit:1}).through } : {}),
     agents: this.inventory(), claims: this.db.prepare('SELECT * FROM cloud_lite_claims ORDER BY updated DESC').all().map(r => ({ ...r, details: JSON.parse(r.details) })),
     validations: this.db.prepare('SELECT * FROM cloud_lite_validations ORDER BY updated').all().map(r => ({ ...r, evidence: JSON.parse(r.evidence) })),
     traceSequence: this.db.prepare('SELECT max(seq) AS n FROM cloud_lite_traces').get().n ?? 0 }; }
   call(actor, name, args = {}) {
+    if (workflowTools.some(tool => tool.name === name)) {
+      if (!this.workflow) throw new Error('This fleet uses the baseline workflow profile.');
+      return callWorkflowTool(this.workflow, actor.id === 'operator' ? 'root' : actor.id, name, args, {
+        supervisor: actor.role === 'operator', authorize: task => {
+          if (actor.role === 'operator') return;
+          for (const member of [task.assignee,task.reviewerId]) {
+            if (this.db.prepare('SELECT machine FROM cloud_lite_agents WHERE id=?').get(member)?.machine !== actor.machine) throw new Error('An orchestrator assigns only its own machine; the supervisor may coordinate cross-machine work.');
+          }
+        },
+      });
+    }
     if (name === 'factory_status') return this.snapshot();
     if (name === 'factory_identity') return actor;
     if (name === 'factory_inbox') return { messages: this.control.inbox(actor.id) };
@@ -285,4 +301,4 @@ export const cloudBoardTools = [
   ['factory_validation_request', 'Request or read supervisor Windows/Linux local CI parity for an exact claimed Git revision before GitHub delivery.', { resource: { type: 'string' }, revision: { type: 'string' } }, ['resource','revision']],
   ['factory_cleanup', 'Delete task files/caches inside your own worktree through upstream FLUJO Bash MCP.', { paths: { type: 'array', items: { type: 'string' } } }, ['paths']],
 ].map(([name, description, properties = {}, required = []]) => ({ name, description,
-  inputSchema: { type: 'object', properties, required, additionalProperties: false } }));
+  inputSchema: { type: 'object', properties, required, additionalProperties: false } })).concat(workflowTools);

@@ -30,6 +30,10 @@
   ],
   "exports": {
     ".": "./src/public-sdk.mjs",
+    "./workflows": {
+      "types": "./src/workflows/index.d.mts",
+      "default": "./src/workflows/index.mjs"
+    },
     "./observatory": {
       "types": "./src/observatory-client.d.mts",
       "default": "./src/observatory-client.mjs"

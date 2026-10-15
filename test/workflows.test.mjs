@@ -1,0 +1,85 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { Factory, FactoryWorkflow, runVerification, createWorkflowClient, createWorkflowComparison, summarizeWorkflowComparison } from '../src/public-sdk.mjs';
+import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
+
+// Keep generated evidence for the invoking harness; cleanup is performed through FLUJO Bash MCP.
+function fixture() {
+  const parent = process.env.FACTORY_TEST_TMP ?? tmpdir(); mkdirSync(parent, { recursive: true });
+  const root = mkdtempSync(join(parent, 'factory-workflow-')), cwd = join(root,'source'); mkdirSync(cwd);
+  const git = (...args) => execFileSync('git', args, { cwd, encoding:'utf8', windowsHide: true }).trim();
+  git('init'); git('config','user.email','workflow-test@example.invalid'); git('config','user.name','Workflow test');
+  writeFileSync(join(cwd,'check.mjs'), "console.log('TAP version 13\\nok 1 - actual behavior\\n1..1\\n# tests 1\\n# pass 1\\n# fail 0\\n# cancelled 0');\n");
+  git('add','.'); git('commit','-m','Frozen verifier fixture');
+  const source = { repository:'example/repository', baseline:git('rev-parse','HEAD'), commit:git('rev-parse','HEAD'), tree:git('rev-parse','HEAD^{tree}') };
+  const database = join(root,'control.sqlite'); new Factory(database).createSwarm({ mission:'Verify original behavior', agents:[{id:'builder'},{id:'reviewer',role:'verifier'}] });
+  const workflow = new FactoryWorkflow(database);
+  const artifact = workflow.artifacts.put('portable candidate');
+  const task = { taskId:'repair', projectId:'repo', branch:'codex/repair', problem:'Preserve behavior', acceptance:'Independent review and actual check', baseline:source.baseline,
+    assignee:'builder', reviewerId:'reviewer', gates:[{id:'tests',command:'$node',args:['check.mjs'],adapter:'node-tap',scope:'development'}] };
+  const submission = { submissionId:'candidate-one', source, artifacts:[{...artifact,name:'source',kind:'source'}], summary:'Frozen source' };
+  return { root,cwd,database,workflow,task,submission };
+}
+
+test('public workflow executes a frozen candidate, separates review, resumes and accepts only matching evidence', async t => {
+  const f = fixture(); t.after(() => f.workflow.close());
+  f.workflow.createTask(f.task); f.workflow.claim('repair','builder'); f.workflow.submit('repair','builder',f.submission);
+  assert.equal(f.workflow.getTask('repair').status,'review');
+  assert.throws(() => f.workflow.review('candidate-one','builder',{accepted:true,findings:[],rationale:'self approval'}), /role|reviewer/);
+  assert.throws(() => f.workflow.control.reviewTask('repair','reviewer',{accepted:true,evidencePath:f.workflow.artifacts.path(f.submission.artifacts[0].ref)}), /workflow review/);
+  const run = await runVerification(f.workflow,{runId:'check-one',candidateId:'candidate-one',gateId:'tests',cwd:f.cwd});
+  assert.equal(run.result.outcome,'passed'); assert.equal(f.workflow.getTask('repair').status,'review');
+  f.workflow.review('candidate-one','reviewer',{accepted:true,findings:[],rationale:'Original requirements covered.'});
+  assert.equal(f.workflow.getTask('repair').status,'accepted');
+  f.workflow.close(); f.workflow = new FactoryWorkflow(f.database);
+  assert.equal(f.workflow.getTask('repair').status,'accepted');
+  const knowledge = f.workflow.curateKnowledge({id:'recipe',title:'Verified recipe',content:'Use the accepted artifact',applicability:'This repository revision',candidateId:'candidate-one',sources:[{ref:f.submission.artifacts[0].ref,location:'source'}]},'reviewer');
+  assert.equal(knowledge.version,1); assert.equal(f.workflow.searchKnowledge('recipe')[0].candidateId,'candidate-one');
+});
+
+test('revision rejects stale reviews and preserves original requirements and findings', t => {
+  const f = fixture(); t.after(() => f.workflow.close()); f.workflow.createTask({...f.task,gates:[]});
+  f.workflow.claim('repair','builder'); f.workflow.submit('repair','builder',f.submission);
+  f.workflow.review('candidate-one','reviewer',{accepted:false,findings:[{id:'edge',description:'Handle edge case',requirement:'Preserve behavior'}],rationale:'Missing edge case'});
+  assert.equal(f.workflow.getTask('repair').status,'revision_required');
+  f.workflow.revise('repair','builder'); f.workflow.claim('repair','builder');
+  const second = f.workflow.submit('repair','builder',{...f.submission,submissionId:'candidate-two',resolvedFindings:['edge']});
+  assert.equal(second.supersedes,'candidate-one');
+  assert.throws(() => f.workflow.review('candidate-one','reviewer',{accepted:true,findings:[],rationale:'Late approval'}), /superseded/);
+  assert.equal(f.workflow.reviewPacket('candidate-two').problem,f.task.problem);
+  f.workflow.review('candidate-two','reviewer',{accepted:true,findings:[],rationale:'Edge case resolved'});
+  assert.equal(f.workflow.getTask('repair').status,'accepted');
+});
+
+test('real HTTP cloud tools bind actors and refuse worker-forged validation', async t => {
+  const f = fixture(); t.after(() => f.workflow.close());
+  const plan = {runId:'workflow-test',app:'workflow-test',repository:'example/repository',goal:'Check workflow',machines:1,agentsPerMachine:4,workflow:'verified-v1'};
+  const credentials = Object.fromEntries([0,1,2,3].map(i=>[`m0-a${i}`,`private-agent-token-${i}`]));
+  const coordinator = await startCloudLiteCoordinator({database:join(f.root,'cloud.sqlite'),plan,credentials,operatorToken:'private-operator-token',auth:{accessToken:'test',chatgptAccountId:'test'},githubToken:'test',host:'127.0.0.1',port:0});
+  t.after(()=>coordinator.close());
+  const url = `http://127.0.0.1:${coordinator.server.address().port}`;
+  const operator = createWorkflowClient({url,token:'private-operator-token',operator:true}), worker = createWorkflowClient({url,token:credentials['m0-a1']});
+  await operator.createTask({...f.task,assignee:'m0-a1',reviewerId:'m0-a3'});
+  await assert.rejects(worker.createTask({...f.task,taskId:'forged',assignee:'m0-a1',reviewerId:'m0-a3'}),/role/);
+  const bytes = Buffer.alloc(300000, 71), uploaded = await worker.upload(bytes);
+  assert.deepEqual(await operator.download(uploaded.ref),bytes);
+  await worker.call('factory_workflow',{action:'claim',taskId:'repair'});
+  await worker.call('factory_workflow',{action:'submit',taskId:'repair',input:{...f.submission,artifacts:[{...uploaded,name:'candidate',kind:'source'}]}});
+  const forged = await fetch(url+'/operator/workflow/verification',{method:'POST',headers:{Authorization:`Bearer ${credentials['m0-a1']}`,'Content-Type':'application/json'},body:JSON.stringify({candidateId:'candidate-one',gateId:'tests',result:{outcome:'passed'}})});
+  assert.equal(forged.status,404); assert.equal((await operator.task('repair')).status,'review');
+  const events = await worker.events({after:0,limit:1}); assert.ok(events.cursor>0);
+});
+
+test('comparison keeps all inputs matched, isolates arms and counts interrupted work separately', () => {
+  const rev='a'.repeat(40),sha='b'.repeat(64);
+  const plan=createWorkflowComparison({id:'matched-test',baseline:{revision:rev,bundleSha256:sha},improved:{revision:'c'.repeat(40),bundleSha256:'d'.repeat(64)},task:{repository:'example/repo',revision:rev,goal:'Repair behavior',acceptance:'Same criteria'},model:'gpt-6-luna',validationPolicy:'Local only',evaluatorRevision:rev});
+  assert.equal(plan.arms[0].plan.workflow,undefined); assert.equal(plan.arms[1].plan.workflow,'verified-v1');
+  assert.notEqual(plan.arms[0].namespace,plan.arms[1].namespace);
+  assert.equal(plan.arms[0].plan.repositoryRevision,plan.arms[1].plan.repositoryRevision);
+  const report=summarizeWorkflowComparison(plan,[{arm:'baseline',taskId:'one',outcome:'interrupted'},{arm:'improved',taskId:'one',outcome:'pending'}]);
+  assert.equal(report.results.baseline.failed,0); assert.equal(report.results.baseline.interrupted,1); assert.equal(report.results.baseline.providerCost,null);
+});

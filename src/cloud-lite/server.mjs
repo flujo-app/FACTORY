@@ -41,6 +41,11 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         return send(200, { events: board.events(after, through), refreshRequested });
       }
       if (request.url === '/operator/status' && actor.role === 'operator') return send(200, { ...board.snapshot(), refreshRequested });
+      if (request.url === '/operator/workflow' && actor.role === 'operator' && request.method === 'POST') return send(200, board.call(actor, body.name, body.arguments));
+      if (request.url === '/operator/workflow/verification' && actor.role === 'operator' && request.method === 'POST') {
+        if (!board.workflow) throw new Error('Verified workflow profile required.');
+        return send(200, board.workflow.recordVerification(body.candidateId, body.gateId, body.result));
+      }
       if (request.url === '/operator/session' && actor.role === 'operator' && request.method === 'POST') return send(200,board.registerSession(body.agent,body.session));
       if (request.url === '/operator/validation' && actor.role === 'operator' && request.method === 'POST') {
         if (!['passed','failed','running','held'].includes(body.status)) throw new Error('Invalid supervisor validation status.');
@@ -125,7 +130,8 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
           return send(200, { acknowledged: result.changes === 1, cancelled: false, receiptAccepted: true });
         }
         return send(200, { commands: board.db.prepare('SELECT id,body FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL ORDER BY rowid').all(actor.id).map(x => ({ id: x.id, ...JSON.parse(x.body) })),
-          inboxVersion: board.db.prepare('SELECT count(*) AS count FROM messages WHERE recipient=?').get(actor.id).count });
+          inboxVersion: board.db.prepare('SELECT count(*) AS count FROM messages WHERE recipient=?').get(actor.id).count,
+          ...(board.workflow ? { workflowVersion: board.db.prepare('SELECT COALESCE(max(seq),0) AS n FROM workflow_events WHERE actor=?').get(actor.id).n } : {}) });
       }
       if (request.url === '/trace' && actor.role !== 'operator' && request.method === 'POST') return send(200, board.trace(actor, body.events));
       if (request.url === '/trace-position' && actor.role !== 'operator') return send(200, {

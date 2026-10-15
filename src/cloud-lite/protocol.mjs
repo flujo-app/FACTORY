@@ -15,6 +15,9 @@ export function validateCloudLitePlan(input) {
   if (!/^[a-z]{3}$/.test(plan.region)) throw new TypeError('Invalid region.');
   if (!/^[\w.-]+\/[\w.-]+$/.test(plan.repository ?? '')) throw new TypeError('A GitHub owner/repository is required.');
   if (typeof plan.goal !== 'string' || !plan.goal.trim()) throw new TypeError('A goal is required.');
+  if (plan.workflow !== undefined && plan.workflow !== 'verified-v1') throw new TypeError('Unsupported workflow profile.');
+  if (plan.workflow && plan.agentsPerMachine < 3) throw new TypeError('Verified workflows require a coordinator, implementer and independent verifier.');
+  if (plan.repositoryRevision !== undefined && !/^[0-9a-f]{40}$/.test(plan.repositoryRevision)) throw new TypeError('repositoryRevision must be an immutable commit.');
   return plan;
 }
 export function agentInventory(plan) {
