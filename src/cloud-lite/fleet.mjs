@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 
 const TRACE_PAGE_SIZE = 100;
 const DEFAULT_OBSERVATION_PAGES = 5;
@@ -448,12 +449,14 @@ export class FactoryCloudLiteFleet {
     if (machineIds !== undefined && (!Array.isArray(machineIds) || !machineIds.length || new Set(machineIds).size !== machineIds.length || selected.length !== machineIds.length)) throw new Error('Select original journal-owned Machine identities.');
     await this.quiesce({ attempt: `collection-${attempt}` });
     const artifacts = join(this.directory, 'artifacts'); mkdirSync(artifacts, { recursive: true, mode: 0o700 });
-    const collector = readFileSync(fileURLToPath(new URL('./collect.mjs', import.meta.url))).toString('base64');
+    // Fly's exec endpoint can reject a large command while flyctl still exits
+    // zero. Compress the embedded module before the two transport encodings.
+    const collector = gzipSync(readFileSync(fileURLToPath(new URL('./collect.mjs', import.meta.url)))).toString('base64');
     const receipts = [...(this.state.artifacts ?? [])].filter(receipt => !selected.some(machine => machine.id === receipt.machineId)); const failures = []; let next = 0;
     const capture = async machine => {
       this.event('artifacts.started', { machineId: machine.id });
       const job = `/data/factory/collection-${this.state.plan.runId}-${attempt}.json`;
-      const worker = `import {writeFileSync,renameSync} from 'node:fs'; const save=value=>{writeFileSync('${job}.next',JSON.stringify({...value,includeGitObjects:${includeGitObjects}}),{mode:384});renameSync('${job}.next','${job}');}; try {const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,${collector}'); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}',includeGitObjects:${includeGitObjects}});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
+      const worker = `import {writeFileSync,renameSync} from 'node:fs'; import {gunzipSync} from 'node:zlib'; const save=value=>{writeFileSync('${job}.next',JSON.stringify({...value,includeGitObjects:${includeGitObjects}}),{mode:384});renameSync('${job}.next','${job}');}; try {const source=gunzipSync(Buffer.from('${collector}','base64')).toString('base64'); const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,'+source); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}',includeGitObjects:${includeGitObjects}});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
       const launch = `const fs=require('node:fs'); const job='${job}'; if(fs.existsSync(job)){console.log(fs.readFileSync(job,'utf8'));}else{fs.writeFileSync(job,JSON.stringify({state:'preparing',includeGitObjects:${includeGitObjects}}),{flag:'wx',mode:384});const out=fs.openSync(job+'.log','a',384);const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',Buffer.from('${Buffer.from(worker).toString('base64')}','base64').toString()],{detached:true,stdio:['ignore',out,out]});fs.writeFileSync(job,JSON.stringify({state:'running',pid:child.pid,includeGitObjects:${includeGitObjects}}),{mode:384});child.unref();fs.closeSync(out);console.log(fs.readFileSync(job,'utf8'));}`;
       // Dispatch only a durable detached job; Fly exec's observation timeout
       // must never be interpreted as permission to start another copy.
@@ -470,6 +473,7 @@ export class FactoryCloudLiteFleet {
           await new Promise(resolve => setTimeout(resolve, 30000)); continue;
         }
         const state = JSON.parse(raw.trim().split('\n').findLast(line => line.startsWith('{')));
+        if (state.state === 'missing') throw new Error(`Original collection job is missing at ${job}; reconcile dispatch before retrying.`);
         if ((state.includeGitObjects ?? true) !== includeGitObjects) throw new Error('Original collection content differs; select a new explicit capture attempt.');
         if (state.state === 'completed') { receipt = state; break; }
         if (state.state !== 'running') throw new Error(`Original collection job is ${state.state}; inspect ${job} before selecting another attempt.`);
