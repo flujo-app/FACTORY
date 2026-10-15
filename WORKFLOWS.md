@@ -75,6 +75,9 @@ The checkout must match the frozen commit, tree and portable `git-archive`, and
 remain clean before and after the check. The archive must contain every tracked
 blob unchanged. Capture rejects source
 hidden or rewritten by `export-ignore`/`export-subst`, and unresolved submodules.
+Archive permissions are deterministic. The runner checks actual checkout bytes,
+file/symlink types and, on POSIX, executable modes against that reviewed tree
+before and after the gate. Windows does not expose POSIX executable mode bits.
 Include required dependency preparation
 in the declared gate command. The service does not invent installation or release
 steps. Development gates are the default; publication, release and live checks

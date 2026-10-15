@@ -4,7 +4,7 @@ import { createHmac } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
 import { sourceIdentity, interpretVerification } from './verifier.mjs';
 import { redact } from '../cloud-lite/protocol.mjs';
-import { gitArchive } from './source.mjs';
+import { gitArchive, assertCheckoutSource } from './source.mjs';
 import { sha256, canonical } from './artifacts.mjs';
 
 const requestPath = process.argv[2];
@@ -31,6 +31,7 @@ try {
   git(['clone','--shared','--no-checkout',run.cwd,executionCwd]);
   git(['-C',executionCwd,'checkout','--detach',run.source.commit]);
   if(run.sourceRef!=='sha256:'+sha256(gitArchive(executionCwd,run.source.commit)))throw new Error('Isolated execution source differs from the artifact.');
+  assertCheckoutSource(executionCwd,run.source.commit);
   diagnostics = await new Promise(resolve => {
     const child = spawn(run.gate.command === '$node' ? process.execPath : run.gate.command, run.gate.args, { cwd: executionCwd, env:environment, shell: false, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
     let stdout = '', stderr = '', overflow = false, timedOut = false, timer;
@@ -46,6 +47,7 @@ try {
   });
   result = interpretVerification(run.gate, diagnostics);
   const after = sourceIdentity(executionCwd);
+  assertCheckoutSource(executionCwd,run.source.commit);
   if (after.dirty || after.commit !== run.source.commit || after.tree !== run.source.tree) result = { outcome: 'failed', reason: 'Verifier changed the frozen source or left untracked source files.' };
   if (diagnostics.overflow) result = { outcome: 'failed', reason: 'Diagnostic output exceeded the retained evidence limit.' };
 } catch (error) { result = { outcome: 'failed', reason: error.message }; }

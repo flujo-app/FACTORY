@@ -1,19 +1,33 @@
 import { execFileSync } from 'node:child_process';
 import { sha256 } from './artifacts.mjs';
 import { sourceIdentity } from './verifier.mjs';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readlinkSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 
 // Git archive honors export-ignore/export-subst and local attributes. Review bytes
 // must still contain every tracked blob, unchanged, before they can authorize execution.
-function assertCompleteArchive(cwd, commit, archive) {
+function trackedBlobs(cwd, commit) {
   const entries = execFileSync('git', ['-c','core.longpaths=true','-C',cwd,'ls-tree','-rz',commit], {windowsHide:true,maxBuffer:128*1024*1024}).toString('utf8').split('\0').filter(Boolean);
-  const expected = new Map(entries.map(entry => {
+  return new Map(entries.map(entry => {
     const match = /^(\d+) (\w+) ([a-f0-9]+)\t([\s\S]+)$/.exec(entry);
     if (!match || match[2] !== 'blob') throw new Error('Portable verification does not support unresolved submodule source.');
     return [match[4], {mode:match[1],hash:match[3]}];
   }));
+}
+const blobHash=bytes=>createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+export function assertCheckoutSource(cwd,commit) {
+  for(const [name,entry] of trackedBlobs(cwd,commit)) {
+    const path=resolve(cwd,name);
+    if(!path.startsWith(resolve(cwd)+sep))throw new Error('Invalid tracked source path.');
+    const info=lstatSync(path),symbolic=entry.mode==='120000';
+    if(symbolic!==info.isSymbolicLink() || !symbolic&&!info.isFile())throw new Error('Materialized source type differs from the reviewed Git tree.');
+    const bytes=symbolic?readlinkSync(path,{encoding:'buffer'}):readFileSync(path);
+    if(blobHash(bytes)!==entry.hash || !symbolic&&process.platform!=='win32'&&(info.mode&0o111)!==(parseInt(entry.mode,8)&0o111))throw new Error('Materialized source bytes or executable mode differ from the reviewed Git tree.');
+  }
+}
+function assertCompleteArchive(cwd, commit, archive) {
+  const expected=trackedBlobs(cwd,commit);
   let extended = {};
   for (let offset=0; offset+512<=archive.length;) {
     const header=archive.subarray(offset,offset+512); offset+=512;
@@ -38,8 +52,10 @@ function assertCompleteArchive(cwd, commit, archive) {
     const link=extended.linkpath??string(157,100); extended={};
     if(type==='5') continue;
     const entry=expected.get(name),content=type==='2'?Buffer.from(link):bytes;
+    const mode=parseInt(string(100,8).trim(),8)&0o777;
     if(!entry || !['','0','2'].includes(type) || (entry.mode==='120000')!==(type==='2')
-      || createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex')!==entry.hash) throw new Error('Portable source archive differs from tracked Git blobs; export attributes cannot hide or rewrite verifier inputs.');
+      || mode!==(type==='2'?0o777:parseInt(entry.mode,8)&0o777)
+      || blobHash(content)!==entry.hash) throw new Error('Portable source archive differs from tracked Git blobs; export attributes cannot hide or rewrite verifier inputs.');
     expected.delete(name);
   }
   if(expected.size) throw new Error('Portable source archive omits tracked Git blobs; disable export-ignore for verified source.');
@@ -47,7 +63,7 @@ function assertCompleteArchive(cwd, commit, archive) {
 
 export function gitArchive(cwd, commit) {
   if (!/^[a-f0-9]{40}$/.test(commit ?? '')) throw new TypeError('An exact source commit is required.');
-  const archive=execFileSync('git', ['-c','core.longpaths=true','-c','core.autocrlf=false','-c','core.eol=lf','-C', cwd, 'archive', '--format=tar', commit], { windowsHide: true, maxBuffer: 128 * 1024 * 1024 });
+  const archive=execFileSync('git', ['-c','core.longpaths=true','-c','core.autocrlf=false','-c','core.eol=lf','-c','tar.umask=0022','-C', cwd, 'archive', '--format=tar', commit], { windowsHide: true, maxBuffer: 128 * 1024 * 1024 });
   assertCompleteArchive(cwd,commit,archive); return archive;
 }
 /** Capture the exact tree that executable verification will check, with portable bytes for reviewers. */

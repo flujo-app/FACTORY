@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Factory, FactoryWorkflow, FactoryWorkflowSupervisor, runVerification, createWorkflowClient, createWorkflowComparison, summarizeWorkflowComparison, captureGitSource } from '../src/public-sdk.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
+import { assertCheckoutSource } from '../src/workflows/source.mjs';
 
 // Keep generated evidence for the invoking harness; cleanup is performed through FLUJO Bash MCP.
 function fixture() {
@@ -42,7 +43,12 @@ test('portable source rejects export omissions and substitutions and preserves l
   const nested=join(f.cwd,'a'.repeat(60),'b'.repeat(60));mkdirSync(nested,{recursive:true});
   writeFileSync(join(nested,'source.txt'),'complete source\n');
   git('-c','core.longpaths=true','add','.');git('-c','core.longpaths=true','commit','-m','Complete portable source');
-  assert.ok(capture().bundle);
+  const complete=capture(); assert.ok(complete.bundle);
+  git('config','tar.umask','0777');
+  assert.equal(capture().artifact.ref,complete.artifact.ref,'local tar configuration cannot strip reviewed executable metadata');
+  git('config','core.autocrlf','true');
+  writeFileSync(join(f.cwd,'check.mjs'),'// $Format:%H$\r\n');
+  assert.throws(()=>assertCheckoutSource(f.cwd,complete.source.commit),/Materialized source bytes/,'Git normalization cannot hide actual checkout byte differences');
 });
 
 test('interrupted artifact writes cannot publish or poison a content reference', () => {
