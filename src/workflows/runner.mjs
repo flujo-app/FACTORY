@@ -12,6 +12,7 @@ const run = JSON.parse(readFileSync(requestPath,'utf8'));
 const receiptKey = await new Promise((resolve,reject)=>{
   const timeout=setTimeout(()=>reject(new Error('Trusted runner channel unavailable.')),5000);
   process.once('message',message=>{clearTimeout(timeout); if(!/^[a-f0-9]{64}$/.test(message?.receiptKey??''))reject(new Error('Invalid runner credential.'));else resolve(message.receiptKey);});
+  process.send?.({ready:true});
 });
 // Exclusive admission survives crashes. A second launcher must reconcile, never repeat effects.
 const lock = openSync(requestPath + '.started', 'wx', 0o600); closeSync(lock);

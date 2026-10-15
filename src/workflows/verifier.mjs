@@ -69,7 +69,9 @@ export function startVerification(workflow, { runId, candidateId, gateId, cwd, a
   try {
     const {receiptKey,...request}=run; durableJSON(requestPath, request);
     const child = spawn(process.execPath, [fileURLToPath(new URL('./runner.mjs', import.meta.url)), requestPath], { stdio: ['ignore','ignore','ignore','ipc'], detached: true, windowsHide: true });
-    child.send({receiptKey},()=>{if(child.connected)child.disconnect();});
+    child.once('message',message=>{
+      if(message?.ready===true && child.connected) child.send({receiptKey},()=>{if(child.connected)child.disconnect();});
+    });
     child.once('error', () => { /* Persisted admission remains unknown until reconciled. */ }); child.unref();
     run.pid = child.pid ?? null; run.status = child.pid ? 'running' : 'unknown';
     workflow.db.prepare('UPDATE workflow_runs SET body=? WHERE id=?').run(JSON.stringify(run), runId);

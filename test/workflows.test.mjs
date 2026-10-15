@@ -25,6 +25,45 @@ function fixture() {
   return { root,cwd,database,workflow,task,submission };
 }
 
+test('portable source rejects export omissions and substitutions and preserves long nested paths', t => {
+  const f=fixture(); t.after(()=>f.workflow.close());
+  const git=(...args)=>execFileSync('git',args,{cwd:f.cwd,encoding:'utf8',windowsHide:true}).trim();
+  const capture=()=>captureGitSource(f.workflow.artifacts,f.cwd,{repository:'example/repository',baseline:f.submission.source.baseline});
+  writeFileSync(join(f.cwd,'.gitattributes'),'check.mjs export-ignore\n');
+  git('add','.');git('commit','-m','Omitted tracked input');
+  assert.throws(capture,/omits tracked Git blobs/);
+  writeFileSync(join(f.cwd,'.gitattributes'),'check.mjs export-subst\n');
+  writeFileSync(join(f.cwd,'check.mjs'),'// $Format:%H$\n');
+  git('add','.');git('commit','-m','Rewritten tracked input');
+  assert.throws(capture,/differs from tracked Git blobs/);
+  writeFileSync(join(f.cwd,'.gitattributes'),'');
+  // Multi-component long names force Git's PAX metadata without exceeding a
+  // filesystem component's size limit.
+  const nested=join(f.cwd,'a'.repeat(60),'b'.repeat(60));mkdirSync(nested,{recursive:true});
+  writeFileSync(join(nested,'source.txt'),'complete source\n');
+  git('-c','core.longpaths=true','add','.');git('-c','core.longpaths=true','commit','-m','Complete portable source');
+  assert.ok(capture().bundle);
+});
+
+test('interrupted artifact writes cannot publish or poison a content reference', () => {
+  const directory=mkdtempSync(join(process.env.FACTORY_TEST_TMP??tmpdir(),'factory-artifact-fault-'));
+  const module=new URL('../src/workflows/artifacts.mjs',import.meta.url).href;
+  execFileSync(process.execPath,['--input-type=module','-e',`
+    import fs from 'node:fs'; import assert from 'node:assert/strict';
+    import {syncBuiltinESMExports} from 'node:module';
+    const {FactoryArtifactStore,sha256}=await import(${JSON.stringify(module)});
+    const store=new FactoryArtifactStore(${JSON.stringify(directory)}), bytes=Buffer.from('complete immutable artifact');
+    const original=fs.writeFileSync;
+    fs.writeFileSync=(fd,data)=>{original(fd,data.subarray(0,4));throw new Error('injected interrupted write');};
+    syncBuiltinESMExports();
+    assert.throws(()=>store.put(bytes),/injected/);
+    assert.equal(fs.existsSync(store.path('sha256:'+sha256(bytes))),false);
+    fs.writeFileSync=original;syncBuiltinESMExports();
+    const saved=store.put(bytes);assert.deepEqual(store.get(saved.ref),bytes);
+    assert.equal(fs.readdirSync(store.directory).filter(name=>name.startsWith('.pending-')).length,0);
+  `],{windowsHide:true,stdio:'pipe'});
+});
+
 test('public workflow executes a frozen candidate, separates review, resumes and accepts only matching evidence', async t => {
   const f = fixture(); t.after(() => f.workflow.close());
   f.workflow.createTask(f.task); f.workflow.claim('repair','builder'); f.workflow.submit('repair','builder',f.submission);

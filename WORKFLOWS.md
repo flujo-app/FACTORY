@@ -72,7 +72,10 @@ a complete Jest-style summary. Use `exit-code` for compilers/linters whose exit
 status is their authoritative outcome, not to conceal test failures.
 
 The checkout must match the frozen commit, tree and portable `git-archive`, and
-remain clean before and after the check. Include required dependency preparation
+remain clean before and after the check. The archive must contain every tracked
+blob unchanged. Capture rejects source
+hidden or rewritten by `export-ignore`/`export-subst`, and unresolved submodules.
+Include required dependency preparation
 in the declared gate command. The service does not invent installation or release
 steps. Development gates are the default; publication, release and live checks
 require explicit trusted supervisor policy.
@@ -99,7 +102,10 @@ the original coordination behavior.
 Authenticated workers use `factory_workflow`, `factory_artifact`,
 `factory_workflow_events`, `factory_knowledge` and `factory_workflow_templates`.
 Their credential binds their identity. Only the operator can import objective
-verification. The public `createWorkflowClient({url,token,operator:true})` exposes
+verification results. Operator imports are trusted assertions; the authority does
+not independently authenticate a remote runner's HMAC. Keep operator credentials
+inside the trusted verifier service. Worker credentials cannot import results.
+The public `createWorkflowClient({url,token,operator:true})` exposes
 task inspection/assignment, review packets, artifact transfers, pause/resume,
 verification import and stable-ID commands. Ambiguous HTTP delivery is
 `OUTCOME_UNKNOWN`: reconcile the original operation identity.

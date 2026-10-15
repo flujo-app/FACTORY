@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, readFileSync, lstatSync, realpathSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, readFileSync, lstatSync, realpathSync, linkSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -32,10 +32,15 @@ export class FactoryArtifactStore {
   put(bytes) {
     bytes = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
     const ref = 'sha256:' + sha256(bytes), path = this.path(ref);
-    let fd;
-    try { fd = openSync(path, 'wx', 0o600); writeFileSync(fd, bytes); fsyncSync(fd); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    finally { if (fd !== undefined) closeSync(fd); }
+    if(!existsSync(path)) {
+      const temporary=resolve(this.directory,`.pending-${randomUUID()}`);
+      let fd;
+      try {
+        fd=openSync(temporary,'wx',0o600); writeFileSync(fd,bytes); fsyncSync(fd); closeSync(fd); fd=undefined;
+        // Hard-link admission is atomic and cannot overwrite an existing digest.
+        try { linkSync(temporary,path); } catch(error) { if(error.code!=='EEXIST') throw error; }
+      } finally { if(fd!==undefined)closeSync(fd); if(existsSync(temporary))unlinkSync(temporary); }
+    }
     if (!this.get(ref).equals(bytes)) throw new Error('Artifact hash collision or corrupted storage.');
     return { ref, size: bytes.length };
   }
