@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { safeReceipt } from './receipts.mjs';
-import { assertWorkflowAcceptance } from './workflows/gates.mjs';
+import { assertWorkflowAcceptance, assertWorkflowTransition } from './workflows/gates.mjs';
 import { consumeGitRefusalProof } from './git-effect.mjs';
 import { consumeProviderRetirementProof } from './provider-retirement.mjs';
 import { validateNativeMission, nativeMissionRequest, nativeMissionEffectKey } from './native-mission-contract.mjs';
@@ -521,6 +521,7 @@ export class FactoryControl {
     return this.transaction(() => this.#claimTask(taskId,cellId,ttlMs));
   }
   #claimTask(taskId,cellId,ttlMs) {
+      assertWorkflowTransition(this, taskId, 'claim', cellId);
       const control = this.active(); const task = this.db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
       const cell = this.db.prepare("SELECT * FROM cells WHERE id=? AND status='ready'").get(cellId);
       if (!cell || !['developer','coordinator'].includes(cell.role)) fail('CELL','Ready developer/coordinator is required.');
@@ -1032,7 +1033,7 @@ export class FactoryControl {
     return row;
   }
   renew(lease, ttlMs=60000) { integer(ttlMs,'ttlMs',1); return this.transaction(() => { this.authority(lease); const expires=this.clock()+ttlMs; if (lease.scope==='task') this.db.prepare('UPDATE tasks SET expires=? WHERE id=?').run(expires,lease.scopeId); else this.db.prepare('UPDATE integrations SET expires=? WHERE project_id=?').run(expires,lease.scopeId); return {...lease,expires}; }); }
-  submit(lease, { artifactPath }) { const candidate=evidence(artifactPath); return this.transaction(() => { this.authority(lease); if (lease.scope!=='task' || this.openTaskEffects(lease.scopeId).length) fail('UNRECONCILED','Task effects must be settled before submission.'); this.db.prepare('UPDATE tasks SET status=?,candidate=?,token_hash=NULL WHERE id=?').run('review',canonical(candidate),lease.scopeId); this.event('candidate_submitted',lease.scopeId,candidate); return this.task(lease.scopeId); }); }
+  submit(lease, { artifactPath }) { const candidate=evidence(artifactPath); return this.transaction(() => { this.authority(lease); assertWorkflowTransition(this, lease.scopeId, 'submit', candidate); if (lease.scope!=='task' || this.openTaskEffects(lease.scopeId).length) fail('UNRECONCILED','Task effects must be settled before submission.'); this.db.prepare('UPDATE tasks SET status=?,candidate=?,token_hash=NULL WHERE id=?').run('review',canonical(candidate),lease.scopeId); this.event('candidate_submitted',lease.scopeId,candidate); return this.task(lease.scopeId); }); }
   reviewTask(taskId, reviewerId, { accepted, evidencePath }) {
     const record=evidence(evidencePath);
     if (typeof accepted!=='boolean') fail('INVALID','Review verdict must be boolean.');

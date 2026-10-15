@@ -7,12 +7,13 @@ import { mkdirSync } from 'node:fs';
 const mcp = fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
 
 /** Build a normal provider CLI command with its native tools and only FACTORY's MCP server. */
-export function liteWorkerCommand({ provider, database, prompt, cwd = process.cwd() } = {}) {
+export function liteWorkerCommand({ provider, database, prompt, agentId, cwd = process.cwd() } = {}) {
   if (!['codex', 'claude'].includes(provider)) throw new TypeError('provider must be codex or claude');
   if (typeof database !== 'string' || !database.trim()) throw new TypeError('database path is required');
   if (prompt !== undefined && (typeof prompt !== 'string' || !prompt.trim())) throw new TypeError('prompt must be nonempty');
   const db = resolve(database);
-  const server = { command: process.execPath, args: [mcp, db] };
+  if(agentId!==undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(agentId)) throw new TypeError('Invalid bound agent identity.');
+  const server = { command: process.execPath, args: [mcp, db, ...(agentId ? ['--actor',agentId] : [])] };
   if (provider === 'claude') return {
     command: 'claude', cwd, args: ['--dangerously-skip-permissions', '--strict-mcp-config',
       '--mcp-config', JSON.stringify({ mcpServers: { factory: server } }), ...(prompt === undefined ? [] : [prompt])],

@@ -10,12 +10,17 @@ export class CloudLiteTrace {
     this.sync = sync; this.pendingDurability = new Set();
     this.ackFile = `${file}.ack`;
     const localAck = existsSync(this.ackFile) ? Number(readFileSync(this.ackFile, 'utf8')) : 0;
-    this.ack = Math.max(Number.isSafeInteger(localAck) ? localAck : 0, remoteSequence);
+    if (!Number.isSafeInteger(remoteSequence) || remoteSequence < 0) throw new TypeError('Invalid authoritative trace position.');
+    // The receiver's durable position is authoritative; a local ACK cannot prove remote storage.
+    this.ack = remoteSequence;
     const original = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
     const retained = []; let damaged = 0;
     for (const line of original.toString('utf8').split('\n').filter(Boolean)) {
-      try { const event = JSON.parse(line); if (!Number.isSafeInteger(event.seq) || event.seq < 1) throw new Error('Invalid sequence.'); retained.push(event); }
-      catch { damaged++; }
+      let event;
+      try { event = JSON.parse(line); if (!Number.isSafeInteger(event.seq) || event.seq < 1) throw new Error('Invalid sequence.'); }
+      catch { damaged++; continue; }
+      if (retained.length && event.seq <= retained.at(-1).seq) throw new Error('Retained trace sequences are duplicated or reordered; reconcile the original file.');
+      retained.push(event);
     }
     this.sequence = Math.max(this.ack, retained.at(-1)?.seq ?? 0); this.queue = retained.filter(x => x.seq > this.ack).map(x => this.project(x));
     if (damaged) {

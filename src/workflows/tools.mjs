@@ -6,7 +6,7 @@ export const workflowTools = [
     taskId: { type: 'string' }, candidateId: { type: 'string' }, paused: { type: 'boolean' }, input: { type: 'object' },
   }],
   ['factory_workflow_events', 'Read filtered incremental workflow events. Persist the returned cursor, including empty pages.', {
-    after: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500 }, taskId: { type: 'string' }, types: { type: 'array', items: { type: 'string' } },
+    after: { anyOf:[{type:'integer',const:0},{type:'string'}] }, limit: { type: 'integer', minimum: 1, maximum: 500 }, taskId: { type: 'string' }, types: { type: 'array', items: { type: 'string' } },
   }],
   ['factory_artifact', 'Publish immutable portable bytes or read verified chunks by sha256 reference. Compose chunk refs for larger artifacts.', {
     action: { type: 'string', enum: ['put','read','describe','compose'] }, data: { type: 'string' }, ref: { type: 'string' }, refs: { type: 'array', maxItems: 512, items: { type: 'string' } }, offset: { type: 'integer' }, length: { type: 'integer' },

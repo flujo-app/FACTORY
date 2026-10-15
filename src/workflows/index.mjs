@@ -4,3 +4,5 @@ export { runVerification, startVerification, reconcileVerification, interpretVer
 export { listWorkflowTemplates, getWorkflowTemplate, buildWorkflowTask } from './templates.mjs';
 export { createWorkflowClient, classifyWorkflowRecovery } from './client.mjs';
 export { createWorkflowComparison, launchWorkflowComparison, summarizeWorkflowComparison } from './comparison.mjs';
+export { captureGitSource } from './source.mjs';
+export { FactoryWorkflowSupervisor } from './supervisor.mjs';

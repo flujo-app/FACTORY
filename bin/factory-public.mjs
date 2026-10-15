@@ -19,7 +19,7 @@ try {
   const input = mutating ? JSON.parse(source) : undefined;
   const factory = new Factory(database);
   const result = await ({ create: () => factory.createSwarm(input), agent: () => factory.addAgent(input),
-    workflow: () => callLocalWorkflowTool(database, input.tool, input.arguments),
+    workflow: () => callLocalWorkflowTool(database, input.tool, input.arguments, {actor:input.actor??'root',allowedScopes:input.allowedScopes??['development']}),
     task: () => factory.addTask(input), claim: () => factory.claimTask(input),
     'template-list': () => factory.listTemplates(),
     'template-read': () => factory.getTemplate(input.name),

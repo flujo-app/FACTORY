@@ -14,3 +14,16 @@ export function assertWorkflowAcceptance(control, task, reviewerId, accepted) {
     }
   }
 }
+
+export function assertWorkflowTransition(control, taskId, action, input) {
+  if (!control.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_tasks'").get()) return;
+  const row = control.db.prepare('SELECT body,current,paused FROM workflow_tasks WHERE id=?').get(taskId);
+  if (!row) return;
+  const spec = JSON.parse(row.body);
+  if (row.paused || spec.dependencies.some(dependency => !['verified','delivered'].includes(control.task(dependency).status))) throw new Error('Workflow task is paused or waiting for a dependency.');
+  if (action === 'claim' && spec.assignee !== input) throw new Error('Only the assigned workflow implementer may claim.');
+  if (action === 'submit') {
+    const candidate = control.db.prepare('SELECT body FROM workflow_candidates WHERE id=? AND task=?').get(row.current,taskId);
+    if (!candidate || JSON.parse(candidate.body).manifestRef !== 'sha256:' + input.sha256) throw new Error('Submit through the immutable workflow candidate registry.');
+  }
+}

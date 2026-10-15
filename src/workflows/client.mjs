@@ -7,8 +7,10 @@ export function createWorkflowClient({ url, token, operator = false, fetch: tran
     let response;
     try { response = await transport(url.replace(/\/$/,'') + route, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(30000) }); }
     catch (cause) { throw Object.assign(new Error('Delivery unconfirmed. Reconcile the original operation identity before retrying.', { cause }), { code: 'OUTCOME_UNKNOWN' }); }
-    const result = await response.json();
-    if (!response.ok) throw Object.assign(new Error(result.error ?? `Board returned ${response.status}.`), { code: response.status === 401 ? 'AUTH' : 'REJECTED', status: response.status });
+    let result;
+    try { result = await response.json(); }
+    catch (cause) { throw Object.assign(new Error('Response was incomplete; reconcile the original operation identity.', { cause }), { code: 'OUTCOME_UNKNOWN', status: response.status }); }
+    if (!response.ok) throw Object.assign(new Error(result.error ?? `Board returned ${response.status}.`), { code: response.status === 401 ? 'AUTH' : response.status >= 500 || typeof result.error !== 'string' ? 'OUTCOME_UNKNOWN' : 'REJECTED', status: response.status });
     return result;
   };
   const call = (name, args) => request(operator ? '/operator/workflow' : '/tool', { name, arguments: args });

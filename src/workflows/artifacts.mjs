@@ -1,12 +1,21 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, readFileSync, lstatSync, realpathSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-export function canonical(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
-  return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
+export function canonical(value, ancestors = new Set()) {
+  if (value === null || ['string','boolean'].includes(typeof value)) return JSON.stringify(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
+  if (typeof value !== 'object' || ancestors.has(value) || Object.getOwnPropertySymbols(value).length
+    || !Array.isArray(value) && ![Object.prototype,null].includes(Object.getPrototypeOf(value))) throw new TypeError('Artifacts require an acyclic JSON-compatible value.');
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const values=[]; for(let index=0;index<value.length;index++) { if (!Object.hasOwn(value,index)) throw new TypeError('Sparse JSON arrays are not supported.'); values.push(canonical(value[index],ancestors)); }
+      return '[' + values.join(',') + ']';
+    }
+    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonical(value[key],ancestors)).join(',') + '}';
+  } finally { ancestors.delete(value); }
 }
 export const contentDigest = value => sha256(canonical(value));
 
@@ -14,7 +23,7 @@ export const contentDigest = value => sha256(canonical(value));
 export class FactoryArtifactStore {
   constructor(directory) {
     if (!isAbsolute(directory ?? '')) throw new TypeError('Artifact directory must be absolute.');
-    this.directory = resolve(directory); mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    this.directory = resolve(directory); mkdirSync(this.directory, { recursive: true, mode: 0o700 }); this.directory = realpathSync(this.directory);
   }
   path(ref) {
     if (!/^sha256:[a-f0-9]{64}$/.test(ref ?? '')) throw new TypeError('Invalid artifact reference.');
@@ -33,7 +42,9 @@ export class FactoryArtifactStore {
   putJSON(value) { return this.put(canonical(value)); }
   importFile(path) { return this.put(readFileSync(path)); }
   get(ref) {
-    const bytes = readFileSync(this.path(ref));
+    const path = this.path(ref), info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error('Artifact references must resolve to regular owned files.');
+    const bytes = readFileSync(path);
     if ('sha256:' + sha256(bytes) !== ref) throw new Error('Artifact bytes no longer match their reference.');
     return bytes;
   }
@@ -42,6 +53,7 @@ export class FactoryArtifactStore {
   readChunk(ref, { offset = 0, length = 256 * 1024 } = {}) {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 256 * 1024) throw new TypeError('Invalid artifact range.');
     const bytes = this.get(ref);
+    if (offset > bytes.length) throw new TypeError('Artifact offset exceeds its size.');
     return { ref, offset, size: bytes.length, data: bytes.subarray(offset, offset + length).toString('base64'), done: offset + length >= bytes.length };
   }
 }

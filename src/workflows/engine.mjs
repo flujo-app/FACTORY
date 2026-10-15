@@ -2,6 +2,8 @@ import { resolve, dirname } from 'node:path';
 import { FactoryControl } from '../control.mjs';
 import { FactoryArtifactStore, contentDigest } from './artifacts.mjs';
 import { getWorkflowTemplate } from './templates.mjs';
+import { interpretVerification } from './verifier.mjs';
+import { randomUUID } from 'node:crypto';
 
 const parse = row => row ? JSON.parse(row.body) : null;
 const required = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${name} is required.`); return value; };
@@ -23,7 +25,9 @@ export class FactoryWorkflow {
       CREATE TABLE IF NOT EXISTS workflow_events(seq INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, task TEXT, actor TEXT, body TEXT NOT NULL, observed INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS workflow_knowledge(id TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(id,version));
       CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY, candidate TEXT NOT NULL, gate TEXT NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS workflow_meta(id INTEGER PRIMARY KEY CHECK(id=1), stream TEXT NOT NULL);
     `);
+    this.db.prepare('INSERT OR IGNORE INTO workflow_meta VALUES(1,?)').run(randomUUID());
   }
   close() { if (this.ownedControl) this.control.close(); }
   event(type, task, actor, body = {}) {
@@ -36,12 +40,16 @@ export class FactoryWorkflow {
   }
   createTask(input) {
     const { taskId, projectId, branch, problem, acceptance, baseline, assignee, reviewerId, parentTask = null,
-      dependencies = [], gates = [], template = { name: 'verified-task', revision: 1 }, context = {} } = input;
+      dependencies = [], gates = [], template = { name: 'verified-task', revision: 1 }, context = {}, verificationPolicy = { mode:'objective' } } = input;
     id(taskId); id(projectId); this.actor(assignee, ['developer','coordinator']); this.actor(reviewerId, ['verifier']);
     if (assignee === reviewerId) throw new Error('Implementer and reviewer must be independent.');
     required(problem, 'problem'); required(acceptance, 'acceptance'); required(baseline, 'baseline');
     const definition = getWorkflowTemplate(template.name);
     if (template.revision !== definition.revision) throw new TypeError('Unsupported template revision.');
+    const taskContext = template.name==='verified-task' ? {requirement:problem,acceptance,...context} : context;
+    for(const field of definition.requiredContext)if(!taskContext?.[field])throw new TypeError(`Template context requires ${field}.`);
+    if(!['objective','review-only'].includes(verificationPolicy.mode) || verificationPolicy.mode==='review-only' && (!verificationPolicy.reason || gates.length)
+      || verificationPolicy.mode==='objective' && !gates.length)throw new TypeError('Declare objective gates, or an explicit review-only policy with its reason.');
     list(dependencies).forEach(id); if (new Set(dependencies).size !== dependencies.length || dependencies.includes(taskId)) throw new TypeError('Dependencies must be unique and acyclic.');
     list(gates).forEach(gate => {
       id(gate.id); required(gate.command, 'gate command'); list(gate.args).forEach(arg => { if (typeof arg !== 'string') throw new TypeError('Command arguments must be strings.'); });
@@ -51,7 +59,7 @@ export class FactoryWorkflow {
       if (gate.minimumTests !== undefined && (!Number.isSafeInteger(gate.minimumTests) || gate.minimumTests < 1)) throw new TypeError('minimumTests must be positive.');
     });
     if (new Set(gates.map(g => g.id)).size !== gates.length) throw new TypeError('Gate identifiers must be unique.');
-    const body = JSON.parse(JSON.stringify({ taskId, projectId, branch, problem, acceptance, baseline, assignee, reviewerId, parentTask, dependencies, gates, template, context }));
+    const body = JSON.parse(JSON.stringify({ taskId, projectId, branch, problem, acceptance, baseline, assignee, reviewerId, parentTask, dependencies, gates, template, context:taskContext, verificationPolicy }));
     return this.control.transaction(() => {
       for (const dependency of dependencies) this.getTask(dependency);
       if (parentTask) this.getTask(id(parentTask));
@@ -95,7 +103,7 @@ export class FactoryWorkflow {
       const task = this.active(taskId); if (task.assignee !== actor) throw new Error('Only the assigned implementer may claim work.');
       const existing = parse(this.db.prepare('SELECT body FROM workflow_leases WHERE task=?').get(taskId));
       let lease;
-      if (task.coreStatus === 'running' && existing?.cellId === actor && existing.epoch === task.lease.epoch && existing.expires > this.clock()
+      if (task.coreStatus === 'running' && existing?.cellId === actor && existing.epoch === task.lease.epoch && existing.expires === task.lease.expires && existing.expires > this.clock()
         && existing.controlEpoch === this.control.control().epoch) lease = this.control.renew(existing, ttlMs);
       else lease = this.control.claimTask(taskId, actor, ttlMs);
       this.db.prepare('INSERT INTO workflow_leases VALUES(?,?) ON CONFLICT(task) DO UPDATE SET body=excluded.body').run(taskId, JSON.stringify(lease));
@@ -117,11 +125,17 @@ export class FactoryWorkflow {
       const lease = parse(this.db.prepare('SELECT body FROM workflow_leases WHERE task=?').get(taskId));
       if (!lease || lease.cellId !== actor) throw new Error('Claim the task before submission.');
       const previous = task.candidate;
+      if (previous) {
+        const priorReview = parse(this.db.prepare('SELECT body FROM workflow_reviews WHERE candidate=?').get(previous.id));
+        const outstanding = (priorReview?.findings ?? []).map(finding => finding.id);
+        if (outstanding.some(finding => !resolvedFindings.includes(finding))) throw new Error('Each previous finding needs an explicit disposition in resolvedFindings; reviewer independently checks the repair.');
+        if (resolvedFindings.some(finding => !outstanding.includes(finding))) throw new Error('Unknown finding disposition.');
+      } else if (resolvedFindings.length) throw new Error('Initial candidates cannot resolve nonexistent findings.');
       const round = this.db.prepare('SELECT COALESCE(max(round),0)+1 AS n FROM workflow_candidates WHERE task=?').get(taskId).n;
       const candidate = { ...manifest, id: submissionId, manifestRef, round, supersedes: previous?.id ?? null, specDigest: this.control.task(taskId).spec_digest, submittedAt: this.clock() };
-      this.control.submit(lease, { artifactPath: this.artifacts.path(manifestRef) });
       this.db.prepare('INSERT INTO workflow_candidates VALUES(?,?,?,?)').run(submissionId, taskId, round, JSON.stringify(candidate));
       this.db.prepare('UPDATE workflow_tasks SET current=? WHERE id=?').run(submissionId, taskId);
+      this.control.submit(lease, { artifactPath: this.artifacts.path(manifestRef) });
       this.event('candidate_submitted', taskId, task.reviewerId, { candidateId: submissionId, round });
       return candidate;
     });
@@ -154,8 +168,23 @@ export class FactoryWorkflow {
         || result.candidateRef !== candidate.manifestRef || result.gateDigest !== contentDigest(gate)
         || !result.environment || !result.diagnosticsRef || !result.runId) throw new TypeError('Verifier evidence must bind candidate, gate, environment, diagnostics and run.');
       this.artifacts.get(result.diagnosticsRef);
+      if (result.outcome === 'passed') {
+        const diagnostics = this.artifacts.getJSON(result.diagnosticsRef);
+        if (typeof diagnostics.stdout !== 'string' || typeof diagnostics.stderr !== 'string'
+          || interpretVerification(gate, diagnostics).outcome !== 'passed'
+          || result.source?.commit !== candidate.source.commit || result.source?.tree !== candidate.source.tree || result.source?.dirty !== false
+          || !candidate.artifacts.some(artifact => artifact.kind === 'git-archive' && artifact.ref === result.sourceRef)
+          || !['executable-runner','reused-executable-runner'].includes(result.provenance)) throw new Error('Passing verification contradicts its executable source or diagnostic evidence.');
+      }
       const old = parse(this.db.prepare('SELECT body FROM workflow_verifications WHERE candidate=? AND gate=?').get(candidateId, gateId));
-      if (old && contentDigest(old) !== contentDigest(result)) throw new Error('Verifier result is immutable; submit another candidate for another attempt.');
+      const reconciling = old?.outcome === 'unknown' && result.outcome !== 'unknown' && old.runId === result.runId
+        && contentDigest(old.environment) === contentDigest(result.environment);
+      if (old && !reconciling && contentDigest(old) !== contentDigest(result)) throw new Error('Verifier result is immutable; submit another candidate for another attempt.');
+      if (reconciling) {
+        const previousRef = this.artifacts.putJSON(old).ref;
+        this.db.prepare('UPDATE workflow_verifications SET body=? WHERE candidate=? AND gate=?').run(JSON.stringify(result),candidateId,gateId);
+        this.event('verification_reconciled',task.taskId,task.assignee,{candidateId,gateId,runId:result.runId,previousRef,outcome:result.outcome});
+      }
       if (!old) {
         this.db.prepare('INSERT INTO workflow_verifications VALUES(?,?,?)').run(candidateId, gateId, JSON.stringify(result));
         this.event('verification_recorded', task.taskId, task.assignee, { candidateId, gateId, outcome: result.outcome });
@@ -216,11 +245,21 @@ export class FactoryWorkflow {
     });
   }
   events({ after = 0, limit = 100, taskId, actor, types } = {}) {
-    if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new TypeError('Invalid event cursor or limit.');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new TypeError('Invalid event page limit.');
+    const stream = this.db.prepare('SELECT stream FROM workflow_meta WHERE id=1').get().stream;
+    const filter = contentDigest({taskId:taskId??null,actor:actor??null,types:types?[...types].sort():null});
+    let position=0;
+    if(after!==0){
+      let cursor; try { if(typeof after!=='string'||!after.startsWith('wf1:'))throw new Error(); cursor=JSON.parse(Buffer.from(after.slice(4),'base64url').toString()); } catch { throw new TypeError('Use the opaque cursor returned for this workflow stream.'); }
+      if(cursor.stream!==stream||cursor.filter!==filter||!Number.isSafeInteger(cursor.position)||cursor.position<0)throw new Error('Event cursor belongs to another stream, actor or filter.');
+      position=cursor.position;
+    }
     const through = this.db.prepare('SELECT COALESCE(max(seq),0) AS n FROM workflow_events').get().n;
-    const rows = this.db.prepare('SELECT * FROM workflow_events WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?').all(after, through, limit);
+    if(position>through)throw new Error('Event cursor is ahead of the durable stream.');
+    const rows = this.db.prepare('SELECT * FROM workflow_events WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?').all(position, through, limit);
+    const sequence=rows.at(-1)?.seq??through;
     return { events: rows.filter(row => (!taskId || row.task === taskId) && (!actor || row.actor === actor) && (!types || types.includes(row.type))).map(row => ({ ...row, body: JSON.parse(row.body) })),
-      cursor: rows.at(-1)?.seq ?? Math.max(after, through), through, hasMore: Boolean(rows.length && rows.at(-1).seq < through) };
+      cursor:'wf1:'+Buffer.from(JSON.stringify({stream,filter,position:sequence})).toString('base64url'), sequence, through, hasMore: Boolean(rows.length && rows.at(-1).seq < through) };
   }
   async *subscribe(options = {}) {
     let after = options.after ?? 0;
