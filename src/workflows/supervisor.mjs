@@ -18,7 +18,7 @@ export class FactoryWorkflowSupervisor {
     const task = await this.client.task(candidate.taskId), repositoryPath = this.repositories[candidate.source.repository];
     if (!repositoryPath || task.candidate?.id !== candidateId) throw new Error('Candidate is superseded or its repository is not configured for this verifier.');
     const key = contentDigest({ candidateId, manifestRef: candidate.manifestRef, gateId });
-    const directory = resolve(this.directory,key); mkdirSync(directory,{recursive:true,mode:0o700});
+    const directory = resolve(this.directory,key.slice(0,24)); mkdirSync(directory,{recursive:true,mode:0o700});
     const database = resolve(directory,'control.sqlite'), cwd = resolve(directory,'source');
     const control = new FactoryControl(database);
     try {
@@ -34,7 +34,7 @@ export class FactoryWorkflowSupervisor {
       const manifest = workflow.artifacts.getJSON(candidate.manifestRef);
       if (contentDigest(manifest.source) !== contentDigest(candidate.source) || contentDigest(manifest.artifacts) !== contentDigest(candidate.artifacts)
         || manifest.taskId !== task.taskId || manifest.submissionId !== candidateId) throw new Error('Review packet does not match the frozen manifest.');
-      const git = (args, options={}) => execFileSync('git',args,{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],...options});
+      const git = (args, options={}) => execFileSync('git',['-c','core.longpaths=true',...args],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],...options});
       if (!existsSync(resolve(cwd,'.git'))) git(['clone','--shared','--no-checkout',repositoryPath,cwd]);
       const bundle = candidate.artifacts.find(artifact=>artifact.kind==='git-bundle');
       if (bundle) {
@@ -71,7 +71,7 @@ export class FactoryWorkflowSupervisor {
           control.submit(lease,{artifactPath:workflow.artifacts.path(candidate.manifestRef)});
         });
       }
-      const run = await runVerification(workflow,{runId:`verify-${key.slice(0,48)}`,candidateId,gateId,cwd,allowedScopes:this.allowedScopes},{signal});
+      const run = await runVerification(workflow,{runId:`v-${key.slice(0,24)}`,candidateId,gateId,cwd,allowedScopes:this.allowedScopes},{signal});
       if (run.status === 'completed') {
         await this.client.upload(workflow.artifacts.get(run.result.diagnosticsRef));
         await this.client.recordVerification(candidateId,gateId,run.result);

@@ -9,6 +9,7 @@ import { CodexRpc } from './rpc.mjs';
 import { startCloudLiteCoordinator } from './server.mjs';
 import { CloudLiteTrace } from './trace.mjs';
 import { NativeOperatorStop } from './operator-stop.mjs';
+import { NativeWorkflowWake } from './workflow-wake.mjs';
 import { hash } from './protocol.mjs';
 
 const threadStatuses = new Set(['active','idle','archived','notLoaded','systemError','notFound']);
@@ -83,6 +84,7 @@ export async function runCloudLiteMachine(config) {
   // A fresh native harness has only the explicitly configured FACTORY MCP server.
   writeFileSync(join(home, 'config.toml'), 'cli_auth_credentials_store="ephemeral"\nforced_login_method="chatgpt"\n', { mode: 0o600 });
   const traces = new Map();
+  const workflowWakes = new Map();
   for (const agent of bootstrap.agents) {
     const position = await request('/trace-position', {}, agent.token);
     traces.set(agent.id, new CloudLiteTrace({ file: `/data/factory/${agent.id}.jsonl`, url: boardUrl, token: agent.token, remoteSequence: position.sequence,
@@ -171,6 +173,7 @@ export async function runCloudLiteMachine(config) {
       try { await fd.writeFile(JSON.stringify({ threadId: result.thread.id, agentId: agent.id })); await fd.sync(); } finally { await fd.close(); }
     }
     const threadId = result.thread.id; threadAgents.set(threadId, agent.id);
+    if(plan.workflow)workflowWakes.set(threadId,new NativeWorkflowWake({rpc,threadId,file:`/data/factory/${agent.id}.${threadId}.wake.json`,effort:plan.reasoningEffort,onEvent:body=>traces.get(agent.id).record('workflow.wake.pending',body)}));
     stopControllers.set(threadId, new NativeOperatorStop({ rpc, threadId,
       getTurn: () => nativeStopTurn(turns, terminalTurns, threadId),
       trace: (kind, body) => traces.get(agent.id).record(kind, body), flush: () => traces.get(agent.id).flush() }));
@@ -186,7 +189,11 @@ export async function runCloudLiteMachine(config) {
       const recoveryNote = unavailableSession ? `The prior prepared session ${unavailableSession} has no persisted rollout. Reconcile your existing FACTORY claims, inbox, checkout and GitHub state before continuing; do not replay previous delivery operations.\n` : '';
       const workflowNote = plan.workflow ? `\nUse the verified workflow tools for work lifecycle. The last worker on each machine (${machine}-a${plan.agentsPerMachine - 1}) is its independent verifier; other workers implement. Orchestrators create immutable workflow tasks with original problem, acceptance, exact baseline, assignments, dependencies, and executable gates scoped to development/publication/release/live policy. Implementers claim, upload immutable artifact bytes (Git bundle/source), and submit a candidate. Reviewers use the candidate review packet and return findings without editing it. The supervisor executes objective gates on that candidate. Revise rejected candidates. Acceptance is derived by the controller, and delivery still uses repository policy. Read incremental workflow events and next actions. When no actionable work remains, finish the turn and wait for a new event; no repeated availability updates. Query curated knowledge only for a concrete gap.\n` : '';
       const input = recoveryNote + workflowNote + (agent.role === 'orchestrator' ? plan.goal : `Work under ${rootId} toward this goal. Check inbox and shared ownership first:\n${plan.goal}`);
-      await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: input }], effort: plan.reasoningEffort });
+      if(plan.workflow){
+        states.set(threadId,{status:'completed',completed:Date.now(),inboxVersion:0,workflowVersion:0});
+        const wake=await workflowWakes.get(threadId).wake({trigger:'initial',input,initial:!recovering});
+        if(wake.status!=='delivered')traces.get(agent.id).record('workflow.wake.pending',{threadId,status:wake.status});
+      }else await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: input }], effort: plan.reasoningEffort });
     }
   }
   let monitoringBusy = false;
@@ -256,10 +263,16 @@ export async function runCloudLiteMachine(config) {
       const agentId = threadAgents.get(threadId);
       const newMail = (inboxVersions.get(threadId) ?? 0) > state.inboxVersion;
       const newWorkflowEvent = plan.workflow && (workflowVersions.get(threadId) ?? 0) > (state.workflowVersion ?? 0);
+      const pendingWorkflowWake = plan.workflow && ['unknown','rejected'].includes(workflowWakes.get(threadId)?.intent?.status);
       const leaderFollowup = !plan.workflow && agentId === rootId && Date.now() - state.completed >= 120000;
-      if (stopping || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup && !newWorkflowEvent) continue;
-      states.delete(threadId);
-      try { await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: 'Continue the active goal. Check the FACTORY inbox and current claims, report useful progress and evidence, and take the next available action. Coordinate with your orchestrator and avoid duplicate work.' }], effort: plan.reasoningEffort }); }
+      if (stopping || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup && !newWorkflowEvent && !pendingWorkflowWake) continue;
+      try {
+        if(plan.workflow){
+          const wake=await workflowWakes.get(threadId).wake({trigger:`${inboxVersions.get(threadId)??0}:${workflowVersions.get(threadId)??0}`,
+            input:'New FACTORY work is available. Read incremental workflow events and inbox, take the next assigned action, and finish the turn when waiting. Preserve original candidate and delivery identities.'});
+          if(wake.status==='delivered'&&states.get(threadId)===state)states.delete(threadId);
+        }else{states.delete(threadId);await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: 'Continue the active goal. Check the FACTORY inbox and current claims, report useful progress and evidence, and take the next available action. Coordinate with your orchestrator and avoid duplicate work.' }], effort: plan.reasoningEffort });}
+      }
       catch (error) { rootTrace.record('continuation.failed', { threadId, message: error.message }); }
     }
     } catch (error) { rootTrace.record('monitor.pending', { message: error.message }); }

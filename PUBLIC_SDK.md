@@ -1,5 +1,9 @@
 # Public local Factory SDK, CLI, and MCP
 
+The optional [verified workflow SDK](WORKFLOWS.md) adds frozen candidates,
+independent review, executable verification, portable artifacts, typed events,
+workflow templates, curated knowledge, and matched comparison tooling.
+
 Licensed under [MIT](LICENSE), including commercial use.
 
 Factory keeps a durable swarm ledger: mission, agent cells, budget allocations,

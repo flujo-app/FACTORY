@@ -21,7 +21,10 @@ export async function collectCloudLiteSnapshot({ root = '/data', runId, destinat
     if (details.isSymbolicLink()) {
       const link = readlinkSync(source); const resolved = resolve(source, '..', link);
       if (!resolved.startsWith(resolve(root) + sep)) { manifest.omitted.push(name); return; }
-      mkdirSync(resolve(target, '..'), { recursive: true }); symlinkSync(link, target); return;
+      // Absolute internal targets (including Windows junctions) must not point
+      // back to the original machine after the archive is relocated.
+      const portable = relative(resolve(target,'..'),join(output,relative(root,resolved)));
+      mkdirSync(resolve(target, '..'), { recursive: true }); symlinkSync(portable, target, statSync(resolved).isDirectory()?'dir':'file'); return;
     }
     if (details.isDirectory()) { mkdirSync(target, { recursive: true, mode: 0o700 }); for (const child of readdirSync(source).sort()) await visit(join(source, child)); return; }
     if (!details.isFile()) { manifest.omitted.push(name); return; }

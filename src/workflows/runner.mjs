@@ -1,7 +1,7 @@
 import { readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, mkdirSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { sourceIdentity, interpretVerification } from './verifier.mjs';
 import { redact } from '../cloud-lite/protocol.mjs';
 import { gitArchive } from './source.mjs';
@@ -21,12 +21,17 @@ try {
   const before = sourceIdentity(run.cwd);
   if (before.dirty || before.commit !== run.source.commit || before.tree !== run.source.tree) throw new Error('Candidate changed before verifier execution.');
   if (run.sourceRef !== 'sha256:' + sha256(gitArchive(run.cwd,run.source.commit))) throw new Error('Portable candidate source changed.');
+  const environment={};
+  for(const key of ['PATH','Path','SystemRoot','SYSTEMROOT','WINDIR','ComSpec','PATHEXT','TEMP','TMP','TMPDIR','LANG','LC_ALL','TZ']) if(process.env[key]!==undefined) environment[key]=process.env[key];
+  const home=resolve(dirname(requestPath),'h'),executionCwd=resolve(dirname(requestPath),'s'),hooks=resolve(dirname(requestPath),'hooks');
+  mkdirSync(home,{recursive:true,mode:0o700});mkdirSync(hooks,{recursive:true,mode:0o700});
+  Object.assign(environment,{HOME:home,USERPROFILE:home,CI:'true',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null',GIT_TERMINAL_PROMPT:'0'});
+  const git=args=>execFileSync('git',['-c','core.longpaths=true','-c',`core.hooksPath=${hooks}`,...args],{env:environment,windowsHide:true,stdio:'pipe'});
+  git(['clone','--shared','--no-checkout',run.cwd,executionCwd]);
+  git(['-C',executionCwd,'checkout','--detach',run.source.commit]);
+  if(run.sourceRef!=='sha256:'+sha256(gitArchive(executionCwd,run.source.commit)))throw new Error('Isolated execution source differs from the artifact.');
   diagnostics = await new Promise(resolve => {
-    const environment={};
-    for(const key of ['PATH','Path','SystemRoot','SYSTEMROOT','WINDIR','ComSpec','PATHEXT','TEMP','TMP','TMPDIR','LANG','LC_ALL','TZ']) if(process.env[key]!==undefined) environment[key]=process.env[key];
-    const home = run.requestPath + '.home'; mkdirSync(home,{recursive:true,mode:0o700});
-    environment.HOME=home; environment.USERPROFILE=home; environment.CI='true';
-    const child = spawn(run.gate.command === '$node' ? process.execPath : run.gate.command, run.gate.args, { cwd: run.cwd, env:environment, shell: false, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
+    const child = spawn(run.gate.command === '$node' ? process.execPath : run.gate.command, run.gate.args, { cwd: executionCwd, env:environment, shell: false, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
     let stdout = '', stderr = '', overflow = false, timedOut = false, timer;
     const collect = target => chunk => {
       const text = chunk.toString('utf8');
@@ -39,7 +44,7 @@ try {
     child.once('close', (exitCode, signal) => { clearTimeout(timer); resolve({ stdout, stderr, exitCode, signal, timedOut, overflow }); });
   });
   result = interpretVerification(run.gate, diagnostics);
-  const after = sourceIdentity(run.cwd);
+  const after = sourceIdentity(executionCwd);
   if (after.dirty || after.commit !== run.source.commit || after.tree !== run.source.tree) result = { outcome: 'failed', reason: 'Verifier changed the frozen source or left untracked source files.' };
   if (diagnostics.overflow) result = { outcome: 'failed', reason: 'Diagnostic output exceeded the retained evidence limit.' };
 } catch (error) { result = { outcome: 'failed', reason: error.message }; }

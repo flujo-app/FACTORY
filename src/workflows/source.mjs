@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 
 export function gitArchive(cwd, commit) {
   if (!/^[a-f0-9]{40}$/.test(commit ?? '')) throw new TypeError('An exact source commit is required.');
-  return execFileSync('git', ['-C', cwd, 'archive', '--format=tar', commit], { windowsHide: true, maxBuffer: 128 * 1024 * 1024 });
+  return execFileSync('git', ['-c','core.longpaths=true','-C', cwd, 'archive', '--format=tar', commit], { windowsHide: true, maxBuffer: 128 * 1024 * 1024 });
 }
 /** Capture the exact tree that executable verification will check, with portable bytes for reviewers. */
 export function captureGitSource(store, cwd, { repository, baseline }) {
@@ -17,7 +17,7 @@ export function captureGitSource(store, cwd, { repository, baseline }) {
   let bundle;
   if (identity.commit !== baseline) {
     const path = resolve(store.directory, `git-${baseline}-${identity.commit}.bundle`);
-    if (!existsSync(path)) execFileSync('git', ['-C',cwd,'bundle','create',path,'HEAD',`^${baseline}`], {windowsHide:true,stdio:'pipe'});
+    if (!existsSync(path)) execFileSync('git', ['-c','core.longpaths=true','-C',cwd,'bundle','create',path,'HEAD',`^${baseline}`], {windowsHide:true,stdio:'pipe'});
     const heads = execFileSync('git',['bundle','list-heads',path],{encoding:'utf8',windowsHide:true});
     if (!heads.split('\n').some(line=>line === `${identity.commit} HEAD`)) throw new Error('Portable bundle head differs from the candidate.');
     bundle = { ...store.importFile(path), name: 'candidate.bundle', kind: 'git-bundle' };

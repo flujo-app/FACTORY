@@ -1,6 +1,6 @@
 {
   "name": "flujo-factory",
-  "version": "0.3.0-dev.7",
+  "version": "0.3.0-dev.8",
   "description": "Durable FLUJO swarm engine and Factory SDK, CLI, and MCP server",
   "license": "MIT",
   "repository": {
@@ -26,6 +26,7 @@
     "scripts/savia-local-live-smoke.mjs",
     "README.md",
     "PUBLIC_SDK.md",
+    "WORKFLOWS.md",
     "LICENSE"
   ],
   "exports": {

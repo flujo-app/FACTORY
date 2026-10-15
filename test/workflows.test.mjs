@@ -101,6 +101,6 @@ test('comparison keeps all inputs matched, isolates arms and counts interrupted 
   assert.equal(plan.arms[0].plan.workflow,undefined); assert.equal(plan.arms[1].plan.workflow,'verified-v1');
   assert.notEqual(plan.arms[0].namespace,plan.arms[1].namespace);
   assert.equal(plan.arms[0].plan.repositoryRevision,plan.arms[1].plan.repositoryRevision);
-  const report=summarizeWorkflowComparison(plan,[{arm:'baseline',taskId:'one',outcome:'interrupted'},{arm:'improved',taskId:'one',outcome:'pending'}]);
+  const report=summarizeWorkflowComparison(plan,[{arm:'baseline',taskId:'mission',outcome:'interrupted'},{arm:'improved',taskId:'mission',outcome:'pending'}]);
   assert.equal(report.results.baseline.failed,0); assert.equal(report.results.baseline.interrupted,1); assert.equal(report.results.baseline.providerCost,null);
 });

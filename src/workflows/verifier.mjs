@@ -7,7 +7,7 @@ import { randomBytes, createHmac } from 'node:crypto';
 import { assertCandidateSource } from './source.mjs';
 
 export function sourceIdentity(cwd) {
-  const git = args => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true }).trim();
+  const git = args => execFileSync('git', ['-c','core.longpaths=true','-C', cwd, ...args], { encoding: 'utf8', windowsHide: true }).trim();
   return { commit: git(['rev-parse','HEAD']), tree: git(['rev-parse','HEAD^{tree}']), dirty: Boolean(git(['status','--porcelain','--untracked-files=normal'])) };
 }
 export function interpretVerification({ adapter, minimumTests = 1 }, { exitCode, signal, stdout, stderr, timedOut = false }) {

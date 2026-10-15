@@ -8,14 +8,15 @@ const revision = value => { if (!/^[a-f0-9]{40}$/.test(value ?? '')) throw new T
 const bundle = value => { revision(value?.revision); if (!/^[a-f0-9]{64}$/.test(value?.bundleSha256 ?? '')) throw new TypeError('Pin each runtime package SHA256.'); return value; };
 
 /** Planning is pure: creating a comparison never deploys machines or invokes a model. */
-export function createWorkflowComparison({ id, baseline, improved, task, armRepositories, model, subagentModel = model, reasoningEffort = 'medium',
+export function createWorkflowComparison({ id, baseline, improved, task, taskIds=['mission'], armRepositories, model, subagentModel = model, reasoningEffort = 'medium',
   resources = { machines: 10, agentsPerMachine: 10, cpuKind: 'shared', cpus: 2, memoryMb: 4096, diskGb: 20, region: 'iad' }, validationPolicy, evaluatorRevision }) {
   if (!/^[a-z][a-z0-9-]{2,38}$/.test(id ?? '')) throw new TypeError('Use a short comparison identity.');
   bundle(baseline); bundle(improved); revision(task?.revision); revision(evaluatorRevision);
   if (!task.goal || !task.acceptance || !validationPolicy || !model || !subagentModel) throw new TypeError('Freeze goal, acceptance, validation policy and explicit models.');
+  if(!Array.isArray(taskIds)||!taskIds.length||new Set(taskIds).size!==taskIds.length||taskIds.some(value=>typeof value!=='string'||!value.trim()))throw new TypeError('Freeze a nonempty unique set of original task IDs.');
   if (!armRepositories || !/^[\w.-]+\/[\w.-]+$/.test(armRepositories.baseline??'') || !/^[\w.-]+\/[\w.-]+$/.test(armRepositories.improved??'')
     || armRepositories.baseline===armRepositories.improved || Object.values(armRepositories).includes(task.repository)) throw new TypeError('Select two isolated comparison repositories, separate from the original source.');
-  const shared = { task, resources, model, subagentModel, reasoningEffort, validationPolicy, evaluatorRevision };
+  const shared = { task, taskIds, resources, model, subagentModel, reasoningEffort, validationPolicy, evaluatorRevision };
   const arms = ['baseline','improved'].map(arm => {
     const runId = `${id}-${arm}`, outputPrefix = `codex/${runId}/`;
     const plan = validateCloudLitePlan({ ...resources, runId, app: runId, repository: armRepositories[arm],
@@ -25,7 +26,7 @@ export function createWorkflowComparison({ id, baseline, improved, task, armRepo
     });
     return { arm, runtime: arm === 'baseline' ? baseline : improved, plan, namespace: runId, outputPrefix };
   });
-  const body = { schemaVersion: 1, id, shared, sharedInputDigest: contentDigest(shared), arms, isolation: {repositories:armRepositories, credentials:'Each arm requires a distinct credential scoped only to its own repository. Shared source and evaluator credentials remain on the supervisor.'},
+  const body = { schemaVersion: 1, id, shared, sharedInputDigest: contentDigest(shared), arms, isolation: {repositories:armRepositories, credentialScopeVerification:'operator-configured; not independently verified by the SDK', credentials:'Each arm requires a distinct credential scoped only to its own repository. Shared source and evaluator credentials remain on the supervisor.'},
     evaluation: { unit: 'original task', acceptedBy: 'same independent evaluator and criteria for both arms', interrupted: 'separate outcome; retain all assigned tasks in denominator',
       metrics: ['acceptedResults','resolvedFindings','invalidApprovals','repeatedWork','coordinationMessages','modelTokens','providerCost','recoverySuccess','interruptedTasks'],
       limits: 'No implicit wall-clock deadline. Stop policy is supplied by the experiment operator.' } };
@@ -49,7 +50,7 @@ export async function launchWorkflowComparison(manifest, { directory, bundlePath
 export function summarizeWorkflowComparison(manifest, records) {
   if(records.some(record=>!manifest.arms.some(arm=>arm.arm===record.arm)))throw new Error('Unknown comparison arm.');
   const matched = manifest.arms.map(({arm})=>records.filter(record=>record.arm===arm).map(record=>record.taskId).sort());
-  if(contentDigest(matched[0])!==contentDigest(matched[1]))throw new Error('Comparison arms must include the same original tasks; record pending or interrupted outcomes explicitly.');
+  if(matched.some(ids=>contentDigest(ids)!==contentDigest([...manifest.shared.taskIds].sort())))throw new Error('Comparison arms must include the same original tasks and every frozen task; record pending or interrupted outcomes explicitly.');
   const results = {};
   for (const { arm } of manifest.arms) {
     const values = records.filter(record => record.arm === arm);

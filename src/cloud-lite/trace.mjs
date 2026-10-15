@@ -9,7 +9,6 @@ export class CloudLiteTrace {
     this.file = file; this.url = url; this.token = token; this.secrets = [token, ...secrets];
     this.sync = sync; this.pendingDurability = new Set();
     this.ackFile = `${file}.ack`;
-    const localAck = existsSync(this.ackFile) ? Number(readFileSync(this.ackFile, 'utf8')) : 0;
     if (!Number.isSafeInteger(remoteSequence) || remoteSequence < 0) throw new TypeError('Invalid authoritative trace position.');
     // The receiver's durable position is authoritative; a local ACK cannot prove remote storage.
     this.ack = remoteSequence;
