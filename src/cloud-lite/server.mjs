@@ -20,6 +20,7 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
       if (request.url === '/bootstrap' && actor.role !== 'operator') return send(200, {
         plan, agents: board.inventory().filter(x => x.machine === actor.machine).map(x => ({ ...x, token: credentials[x.id] })),
         auth: currentAuth, githubToken,
+        ...(plan.collection?{sealRequested:Boolean(board.db.prepare('SELECT id FROM cloud_lite_evidence_seal WHERE id=1').get())}:{}),
       });
       if (request.url === '/auth' && actor.role !== 'operator') {
         if (body.refresh && body.previousTokenHash === hash(currentAuth.accessToken)) {
@@ -41,6 +42,15 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         return send(200, { events: board.events(after, through), refreshRequested });
       }
       if (request.url === '/operator/status' && actor.role === 'operator') return send(200, { ...board.snapshot(), refreshRequested });
+      if(request.url==='/operator/evidence-seal' && actor.role==='operator' && request.method==='POST'){
+        if(!plan.collection || body.runId!==plan.runId)throw new Error('Select the original collection-enabled run.');
+        const agents=board.inventory();
+        if(agents.length!==plan.machines*plan.agentsPerMachine || agents.some(agent=>{
+          const native=agent.nativeRuntime,receipt=native?.operatorStopReceipt;
+          return !receipt || receipt.threadId!==native.threadId || !['idle','archived'].includes(native.threadStatus) || native.threadStatus!==receipt.threadStatus || native.turnStatus==='inProgress' || (native.turnId??null)!==(receipt.turnId??null) || (native.turnStatus??null)!==(receipt.turnStatus??null);
+        }))throw new Error('Stop every original native session before sealing evidence.');
+        board.db.prepare('INSERT OR IGNORE INTO cloud_lite_evidence_seal VALUES(1,?)').run(Date.now());return send(200,{sealed:true});
+      }
       if (request.url === '/operator/workflow' && actor.role === 'operator' && request.method === 'POST') return send(200, board.call(actor, body.name, body.arguments));
       if (request.url === '/operator/workflow/verification' && actor.role === 'operator' && request.method === 'POST') {
         if (!board.workflow) throw new Error('Verified workflow profile required.');
@@ -57,6 +67,7 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
         if (!body.id || !board.inventory().some(x => x.id === body.recipient)) throw new Error('Select a known agent and stable command id.');
         if (!['message','stop'].includes(body.action) || body.action === 'message' && typeof body.message !== 'string') throw new Error('Select a stop or text message command.');
         const original = board.db.prepare('SELECT recipient,body FROM cloud_lite_commands WHERE id=?').get(body.id);
+        if(!original && board.db.prepare('SELECT id FROM cloud_lite_evidence_seal WHERE id=1').get())throw new Error('This run is sealed for final collection; start a new run for further work.');
         if (original && original.recipient !== body.recipient) throw new Error('Command id belongs to a different recipient.');
         let expectedThreadId = body.expectedThreadId; let expectedTurnId = body.expectedTurnId;
         if (body.action === 'stop' && (expectedThreadId === undefined || expectedTurnId === undefined)) {
@@ -130,6 +141,7 @@ export async function startCloudLiteCoordinator({ database, plan, credentials, o
           return send(200, { acknowledged: result.changes === 1, cancelled: false, receiptAccepted: true });
         }
         return send(200, { commands: board.db.prepare('SELECT id,body FROM cloud_lite_commands WHERE recipient=? AND acknowledged IS NULL ORDER BY rowid').all(actor.id).map(x => ({ id: x.id, ...JSON.parse(x.body) })),
+          ...(plan.collection?{sealRequested:Boolean(board.db.prepare('SELECT id FROM cloud_lite_evidence_seal WHERE id=1').get())}:{}),
           inboxVersion: board.db.prepare('SELECT count(*) AS count FROM messages WHERE recipient=?').get(actor.id).count,
           ...(board.workflow ? { workflowVersion: board.db.prepare('SELECT COALESCE(max(seq),0) AS n FROM workflow_events WHERE actor=?').get(actor.id).n } : {}) });
       }

@@ -14,6 +14,7 @@
   "files": [
     "src/",
     "bin/factory-public.mjs",
+    "bin/factory-evidence.mjs",
     "bin/factory-mcp.mjs",
     "bin/factory-lite.mjs",
     "bin/factory-cloud-mcp.mjs",
@@ -41,6 +42,7 @@
     }
   },
   "bin": {
+    "factory-evidence": "./bin/factory-evidence.mjs",
     "factory": "./bin/factory-public.mjs",
     "factory-mcp": "./bin/factory-mcp.mjs",
     "factory-lite": "./bin/factory-lite.mjs"

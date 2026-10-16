@@ -1,12 +1,14 @@
 /// <reference types="node" />
 export type ArtifactRef = `sha256:${string}`;
 export interface Artifact { ref: ArtifactRef; size?: number; name: string; kind: string }
-export interface SourceIdentity { repository: string; baseline: string; commit: string; tree: string }
+export interface GitSourceIdentity { repository: string; baseline: string; commit: string; tree: string }
+export interface WorkspaceSourceIdentity { kind: 'workspace'; baseline: string; snapshot: ArtifactRef }
+export type SourceIdentity = GitSourceIdentity | WorkspaceSourceIdentity;
 export type VerificationScope = 'development' | 'publication' | 'release' | 'live';
-export interface VerificationGate { id: string; command: string; args: string[]; adapter: 'exit-code' | 'node-tap' | 'json-summary'; scope: VerificationScope; minimumTests?: number; timeoutMs?: number }
-export interface WorkflowTaskInput { taskId: string; projectId: string; branch: string; problem: string; acceptance: string; baseline: string; assignee: string; reviewerId: string; parentTask?: string | null; dependencies?: string[]; gates?: VerificationGate[]; verificationPolicy?: {mode:'objective'}|{mode:'review-only';reason:string}; template?: {name: string; revision: number}; context?: Record<string,unknown> }
+export interface VerificationGate { id: string; command: string; args: string[]; adapter: 'exit-code' | 'node-tap' | 'json-summary'; scope: VerificationScope; minimumTests?: number; timeoutMs?: number; writablePaths?: string[] }
+export interface WorkflowTaskInput { taskId: string; projectId?: string; branch?: string; problem: string; acceptance: string; baseline?: string; assignee: string; reviewerId: string; parentTask?: string | null; dependencies?: string[]; gates?: VerificationGate[]; verificationPolicy?: {mode:'objective'}|{mode:'review-only';reason:string}; template?: {name: string; revision: number}; context?: Record<string,unknown> }
 export interface Submission { submissionId: string; source: SourceIdentity; artifacts: Artifact[]; summary: string; resolvedFindings?: string[] }
-export interface Candidate extends Submission { id: string; taskId: string; manifestRef: ArtifactRef; round: number; supersedes: string | null; specDigest: string; submittedAt: number }
+export interface Candidate extends Submission { id: string; taskId: string; manifestRef: ArtifactRef; round: number; supersedes: string | null; specDigest: string; submittedAt: number; contributions?: {taskId:string;candidateRef:ArtifactRef}[] }
 export interface Finding { id: string; requirement: string; description: string }
 export interface Review { accepted: boolean; findings?: Finding[]; rationale: string }
 export interface ReviewRecord extends Review { candidateId: string; reviewerId: string; specDigest: string; manifestRef: ArtifactRef }
@@ -45,7 +47,7 @@ export class FactoryWorkflow {
   recordVerification(candidateId: string, gateId: string, result: VerificationResult): WorkflowTask;
   revise(taskId: string, actor: string): WorkflowTask;
   pauseTask(taskId: string, paused: boolean, actor?: string): WorkflowTask;
-  reviewPacket(candidateId: string): {problem: string; acceptance: string; baseline: string; gates: VerificationGate[]; candidate: Candidate; instructions: string};
+  reviewPacket(candidateId: string): {problem: string; acceptance: string; baseline: string; gates: VerificationGate[]; candidate: Candidate; instructions: string; contributions: {taskId:string;candidateRef:ArtifactRef}[]};
   nextActions(actor: string): {taskId: string; action: 'claim' | 'continue' | 'review' | 'revise'; candidateId: string | null}[];
   events(options?: EventFilter): EventPage;
   subscribe(options?: SubscriptionOptions): AsyncGenerator<EventPage>;
@@ -54,6 +56,7 @@ export class FactoryWorkflow {
 }
 export interface VerificationInput { runId: string; candidateId: string; gateId: string; cwd: string; allowedScopes?: VerificationScope[]; environment?: Record<string,unknown> }
 export interface VerificationRun { runId: string; status: 'admitted' | 'running' | 'unknown' | 'completed'; result?: VerificationResult; candidateId?: string; gateId?: string; reason?: string }
+export interface BlockedVerification {status:'blocked';candidateId:string;gateId:string;reason:string}
 export function startVerification(workflow: FactoryWorkflow, input: VerificationInput): VerificationRun;
 export function reconcileVerification(workflow: FactoryWorkflow, runId: string): VerificationRun;
 export function runVerification(workflow: FactoryWorkflow, input: VerificationInput, options?: {signal?: AbortSignal; intervalMs?: number}): Promise<VerificationRun>;
@@ -67,6 +70,9 @@ export interface WorkflowClient {
   tasks(): Promise<{tasks: WorkflowTask[]}>;
   task(taskId: string): Promise<WorkflowTask>;
   createTask(input: WorkflowTaskInput): Promise<WorkflowTask>;
+  assignTask(input:Omit<WorkflowTaskInput,'reviewerId'>):Promise<WorkflowTask>;
+  review(candidateId:string,verdict:Review):Promise<WorkflowTask>;
+  candidateFiles(candidateId:string,options?:{path?:string;offset?:number;length?:number;after?:number}):Promise<unknown>;
   events(options?: EventFilter): Promise<EventPage>;
   reviewPacket(candidateId: string): Promise<ReturnType<FactoryWorkflow['reviewPacket']>>;
   pauseTask(taskId: string, paused?: boolean): Promise<WorkflowTask>;
@@ -79,11 +85,11 @@ export interface WorkflowClient {
 export function createWorkflowClient(options: {url: string; token: string; operator?: boolean; fetch?: typeof globalThis.fetch}): WorkflowClient;
 export function classifyWorkflowRecovery(agent: {nativeRuntime?: {threadId: string; threadStatus?: string; turnStatus?: string; operatorStopReceipt?: unknown}}): {state: string; action: string; replaySafe: boolean; threadId?: string};
 export function contentDigest(value: unknown): string;
-export function captureGitSource(store: FactoryArtifactStore, cwd: string, input: {repository: string; baseline: string}): {source: SourceIdentity; artifact: Artifact; bundle?: Artifact};
+export function captureGitSource(store: FactoryArtifactStore, cwd: string, input: {repository: string; baseline: string}): {source: GitSourceIdentity; artifact: Artifact; bundle?: Artifact};
 export class FactoryWorkflowSupervisor {
-  constructor(options: {client: WorkflowClient; directory: string; repositories: Record<string,string>; allowedScopes?: VerificationScope[]; onEvent?: (event: unknown) => void});
+  constructor(options: {client: WorkflowClient; directory: string; repositories?: Record<string,string>; allowedScopes?: VerificationScope[]; onEvent?: (event: unknown) => void});
   verify(candidateId: string, gateId: string, options?: {signal?: AbortSignal}): Promise<VerificationRun>;
-  drain(options?: {signal?: AbortSignal}): Promise<VerificationRun[]>;
+  drain(options?: {signal?: AbortSignal}): Promise<(VerificationRun | BlockedVerification)[]>;
   serve(options?: {after?: 0 | string; signal?: AbortSignal}): Promise<void>;
 }
 export interface ComparisonInput { id: string; taskIds?: string[]; baseline: {revision: string; bundleSha256: string}; improved: {revision: string; bundleSha256: string}; task: {repository: string; revision: string; goal: string; acceptance: string}; armRepositories: {baseline:string;improved:string}; model: string; subagentModel?: string; reasoningEffort?: string; resources?: {machines: number; agentsPerMachine: number; cpuKind: string; cpus: number; memoryMb: number; diskGb: number; region: string}; validationPolicy: string | Record<string,unknown>; evaluatorRevision: string }
@@ -91,3 +97,34 @@ export interface ComparisonManifest { schemaVersion: number; id: string; shared:
 export function createWorkflowComparison(input: ComparisonInput): ComparisonManifest;
 export function launchWorkflowComparison(manifest: ComparisonManifest, options: {directory: string; bundlePaths: {baseline: string; improved: string}; image: string; githubTokens: {baseline:string;improved:string}; auth: unknown; [key: string]: unknown}): Promise<{manifestDigest: string; arms: {arm: string; directory: string; status: string; error?: string}[]; fleets: unknown[]}>;
 export function summarizeWorkflowComparison(manifest: ComparisonManifest, records: {arm: string; taskId: string; outcome: 'accepted' | 'failed' | 'interrupted' | 'pending'; evidenceRef?: ArtifactRef; evaluatorRevision?: string; inputDigest?: string; [key: string]: unknown}[]): {comparisonId: string; manifestDigest: string; results: Record<string,unknown>};
+
+export interface WorkspaceManifest {schemaVersion:1;kind:'workspace-snapshot';directories:string[];omitted:string[];files:{path:string;size:number;mode:number;chunks:{ref:ArtifactRef;size:number}[]}[]}
+export function captureWorkspace(store:FactoryArtifactStore,cwd:string,options?:{paths?:string[];exclude?:string[];baseline?:string}):{source:WorkspaceSourceIdentity;artifact:Artifact;artifacts:Artifact[];objects:{ref:ArtifactRef;size:number}[]};
+export function materializeWorkspace(store:FactoryArtifactStore,ref:ArtifactRef,cwd:string):WorkspaceManifest;
+export function verifyWorkspaceArtifacts(store:FactoryArtifactStore,ref:ArtifactRef):WorkspaceManifest;
+export function readWorkspaceFile(store:FactoryArtifactStore,ref:ArtifactRef,path:string,options?:{offset?:number;length?:number}):{snapshot:ArtifactRef;path:string;offset:number;size:number;nextOffset:number;done:boolean;text:string;base64:string};
+export function submitWorkspaceCandidate(options:{client:Pick<WorkflowClient,'task'|'upload'|'call'>;cwd:string;directory:string;taskId:string;submissionId:string;paths:string[];summary:string;resolvedFindings?:string[]}):Promise<Candidate>;
+export interface EvidenceSession {agentId:string;threadId:string;stopId?:string;evidence?:{root:string;path:string}}
+export interface EvidenceRoot {name:string;path:string;paths?:string[];exclude?:string[]}
+export interface EvidenceCheckpoint {schemaVersion:1;runId:string;machineId:string;sequence:number;final:boolean;roots:{name:string;ref:ArtifactRef}[];sessions:EvidenceSession[];capturedAt:string}
+export interface EvidenceReceipt {schemaVersion:1;digest:string;checkpoint:EvidenceCheckpoint;verifiedAt:string}
+export interface EvidenceClient {
+  identity():Promise<{runId:string;machineId:string}>;
+  missing(refs:ArtifactRef[]):Promise<ArtifactRef[]>;
+  upload(ref:ArtifactRef,bytes:Uint8Array):Promise<void>;
+  download(ref:ArtifactRef):Promise<Buffer>;
+  commit(checkpoint:EvidenceCheckpoint):Promise<EvidenceReceipt>;
+  latest():Promise<EvidenceReceipt|null>;
+}
+export function createEvidenceClient(options:{url:string;token:string;fetch?:typeof globalThis.fetch}):EvidenceClient;
+export function startEvidenceServer(options:{directory:string;tokens:{token:string;runId:string;machineId:string}[];host?:string;port?:number}):Promise<{url:string;stores:Map<string,FactoryArtifactStore>;close():Promise<void>}>;
+export class ContinuousEvidenceCollector {
+  constructor(options:{directory:string;runId:string;machineId:string;roots:EvidenceRoot[];client:EvidenceClient;intervalMs?:number;sessions?:()=>EvidenceSession[];beforeCapture?:()=>Promise<void>;afterCheckpoint?:(receipt:EvidenceReceipt)=>Promise<void>;onEvent?:(event:unknown)=>void});
+  readonly store:FactoryArtifactStore;
+  checkpoint(options?:{final?:boolean}):Promise<EvidenceReceipt>;
+  flushPending():Promise<EvidenceReceipt|undefined>;
+  start():this;
+  stop(options?:{final?:boolean}):Promise<EvidenceReceipt|undefined>;
+  pruneAcknowledged(options:{remove:(relativePaths:string[])=>Promise<unknown>}):Promise<{removed:number}>;
+}
+export function restoreEvidenceCheckpoint(options:{client:EvidenceClient;receipt:EvidenceReceipt;directory:string}):Promise<{directory:string;roots:{name:string;path:string}[]}>;

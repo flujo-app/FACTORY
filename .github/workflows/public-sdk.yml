@@ -33,4 +33,7 @@ jobs:
           FACTORY_CONSUMER="$RUNNER_TEMP/consumer" node scripts/verify-public-sdk.mjs
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-public.mjs" --help
           node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-lite.mjs" --help
+          node "$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-evidence.mjs" --help
           FACTORY_TEST_MCP="$RUNNER_TEMP/consumer/node_modules/flujo-factory/bin/factory-mcp.mjs" node --test --test-name-pattern="public MCP stdio" test/public-sdk.test.mjs
+      - name: Generic workflow and evidence recovery regressions
+        run: node --test test/generic-swarm-evidence.test.mjs

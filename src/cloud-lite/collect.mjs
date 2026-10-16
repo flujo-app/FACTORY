@@ -1,5 +1,5 @@
 import { readdirSync, statSync, lstatSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, openSync, readSync, closeSync, truncateSync, readlinkSync, symlinkSync, createReadStream, linkSync, chmodSync } from 'node:fs';
-import { resolve, join, relative, isAbsolute, sep } from 'node:path';
+import { resolve, join, relative, isAbsolute, sep, toNamespacedPath } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync, backup } from 'node:sqlite';
@@ -31,8 +31,9 @@ export async function collectCloudLiteSnapshot({ root = '/data', runId, destinat
     mkdirSync(resolve(target, '..'), { recursive: true });
     const fd = openSync(source, 'r'); const header = Buffer.alloc(16); try { readSync(fd, header, 0, 16, 0); } finally { closeSync(fd); }
     if (header.toString() === 'SQLite format 3\0') {
-      const database = new DatabaseSync(source, { readOnly: true });
-      try { await backup(database, target); } finally { database.close(); }
+      // SQLite's Windows VFS needs the extended path form for deep snapshot destinations.
+      const database = new DatabaseSync(toNamespacedPath(source), { readOnly: true });
+      try { await backup(database, toNamespacedPath(target)); } finally { database.close(); }
       manifest.sqliteBackups.push(name);
     } else {
       let identical;
@@ -64,6 +65,6 @@ export async function collectCloudLiteSnapshot({ root = '/data', runId, destinat
   manifest.finishedAt = new Date().toISOString(); writeFileSync(join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 });
   const archive = join(root, `factory-artifacts-${runId}-${randomBytes(12).toString('hex')}.tgz`);
   const packed = spawnSync('tar', ['-czf', archive, '-C', destination, 'snapshot', 'manifest.json'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-  if (packed.status !== 0) throw new Error(`Evidence archive failed (${packed.status}).`);
+  if (packed.status !== 0) throw new Error(`Evidence archive failed (${packed.status}): ${(packed.error?.message ?? packed.stderr ?? '').slice(0,1000)}`);
   return { archive, sha256: await digest(archive), bytes: statSync(archive).size, files: manifest.files.length, hardLinkedFiles, sqliteBackups: manifest.sqliteBackups.length, changedDuringCopy: manifest.changedDuringCopy };
 }

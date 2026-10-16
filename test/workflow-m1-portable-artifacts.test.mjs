@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, existsSync, realpathSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, toNamespacedPath } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,6 +10,22 @@ import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
 import { Factory, FactoryArtifactStore, FactoryWorkflow, captureGitSource, interpretVerification, reconcileVerification, runVerification, startVerification } from '../src/public-sdk.mjs';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+
+test('SQLite snapshot backup supports deep workspace paths', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'factory-deep-sqlite-'));
+  const database = new DatabaseSync(toNamespacedPath(join(root, 'state.sqlite')));
+  database.exec("CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('deep-workspace')");
+  database.close();
+  // Keep tar's working directory below MAX_PATH while the SQLite target exceeds it.
+  const prefix = join(root, '.factory-export-deep-');
+  const destination = prefix + 'c'.repeat(Math.max(1, 250 - prefix.length));
+  assert.ok(join(destination, 'snapshot', 'state.sqlite').length > 260);
+  const result = await collectCloudLiteSnapshot({ root, runId: 'deep-sqlite', destination });
+  assert.equal(result.sqliteBackups, 1);
+  const retained = new DatabaseSync(toNamespacedPath(join(destination, 'snapshot', 'state.sqlite')), { readOnly: true });
+  assert.equal(retained.prepare('SELECT value FROM evidence').get().value, 'deep-workspace');
+  retained.close();
+});
 
 test('portable snapshot preserves and verifies real evidence while excluding private paths', async () => {
   const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-portable-'));

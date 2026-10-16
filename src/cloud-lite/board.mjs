@@ -30,6 +30,7 @@ export class CloudLiteBoard {
       CREATE TABLE IF NOT EXISTS cloud_lite_native_runtime(agent_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, event_seq INTEGER NOT NULL, thread_lifecycle TEXT NOT NULL, thread_status TEXT, turn_id TEXT, turn_status TEXT, failure TEXT, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipts(agent_id TEXT NOT NULL, command_id TEXT NOT NULL, thread_id TEXT NOT NULL, turn_id TEXT, thread_status TEXT NOT NULL, turn_status TEXT, event_seq INTEGER NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(agent_id,command_id));
       CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipt_rejections(source TEXT NOT NULL, source_seq INTEGER NOT NULL, PRIMARY KEY(source,source_seq));
+      CREATE TABLE IF NOT EXISTS cloud_lite_evidence_seal(id INTEGER PRIMARY KEY CHECK(id=1), requested INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_run(id INTEGER PRIMARY KEY CHECK(id=1), plan TEXT NOT NULL, digest TEXT NOT NULL);`);
     if (plan) {
       const previous = this.db.prepare('SELECT digest FROM cloud_lite_run WHERE id=1').get();
@@ -177,7 +178,7 @@ export class CloudLiteBoard {
       return this.control.sendMessage({ sender: actor.id, messageId: args.messageId, recipient: recipient.id, payload: args.message });
     }
     if (name === 'factory_claim') {
-      if (typeof args.resource !== 'string' || !/^(pr|issue|review):[\w./:-]+$/.test(args.resource)) throw new TypeError('Use a stable pr:, issue:, or review: resource identity.');
+      if (typeof args.resource !== 'string' || !/^(task|pr|issue|review):[\w./:-]+$/.test(args.resource)) throw new TypeError('Use a stable task:, pr:, issue:, or review: resource identity.');
       return this.control.transaction(() => {
         const old = this.db.prepare('SELECT * FROM cloud_lite_claims WHERE resource=?').get(args.resource);
         if (old) return { claimed: old.machine === actor.machine && !['merged', 'closed'].includes(old.status), claim: old };
@@ -292,8 +293,8 @@ export class CloudLiteBoard {
 
 export const cloudBoardTools = [
   ['factory_identity', 'Read your machine, agent identity and role.'],
-  ['factory_status', 'Read fleet agents and shared PR/issue claims before choosing work.'],
-  ['factory_claim', 'Atomically claim a PR/issue/review for your machine; another machine cannot duplicate it.', { resource: { type: 'string' } }, ['resource']],
+  ['factory_status', 'Read fleet agents and shared work claims before choosing work.'],
+  ['factory_claim', 'Atomically claim a task, issue, PR or review for your team; another team cannot duplicate it.', { resource: { type: 'string' } }, ['resource']],
   ['factory_task_update', 'Record progress and evidence links for your assigned work.', { resource: { type: 'string' }, status: { type: 'string' }, details: { type: 'object' } }, ['resource', 'status']],
   ['factory_message', 'Message your machine peers; only orchestrators may message other orchestrators.', { recipient: { type: 'string' }, messageId: { type: 'string' }, message: { type: 'object' } }, ['recipient', 'messageId', 'message']],
   ['factory_inbox', 'Read messages addressed to your identity.'],

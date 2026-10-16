@@ -4,6 +4,7 @@ import { FactoryArtifactStore, contentDigest } from './artifacts.mjs';
 import { getWorkflowTemplate } from './templates.mjs';
 import { interpretVerification } from './verifier.mjs';
 import { randomUUID } from 'node:crypto';
+import { verifyWorkspaceArtifacts, workspacePath } from './workspace.mjs';
 
 const parse = row => row ? JSON.parse(row.body) : null;
 const required = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${name} is required.`); return value; };
@@ -39,7 +40,7 @@ export class FactoryWorkflow {
     return cell;
   }
   createTask(input) {
-    const { taskId, projectId, branch, problem, acceptance, baseline, assignee, reviewerId, parentTask = null,
+    const { taskId, projectId = 'swarm', branch = `codex/task-${contentDigest(taskId ?? '').slice(0,24)}`, problem, acceptance, baseline = 'initial', assignee, reviewerId, parentTask = null,
       dependencies = [], gates = [], template = { name: 'verified-task', revision: 1 }, context = {}, verificationPolicy = { mode:'objective' } } = input;
     id(taskId); id(projectId); this.actor(assignee, ['developer','coordinator']); this.actor(reviewerId, ['verifier']);
     if (assignee === reviewerId) throw new Error('Implementer and reviewer must be independent.');
@@ -53,16 +54,20 @@ export class FactoryWorkflow {
     list(dependencies).forEach(id); if (new Set(dependencies).size !== dependencies.length || dependencies.includes(taskId)) throw new TypeError('Dependencies must be unique and acyclic.');
     list(gates).forEach(gate => {
       id(gate.id); required(gate.command, 'gate command'); list(gate.args).forEach(arg => { if (typeof arg !== 'string') throw new TypeError('Command arguments must be strings.'); });
-      if (!['exit-code','node-tap','json-summary'].includes(gate.adapter)) throw new TypeError('Select a supported verifier adapter.');
-      if (!['development','publication','release','live'].includes(gate.scope)) throw new TypeError('Verifier scope is required.');
+      if (!['exit-code','node-tap','json-summary'].includes(gate.adapter)) throw new TypeError('Gate adapter must be exit-code, node-tap or json-summary. Use exit-code for assertion scripts; $node selects the runner Node binary.');
+      if (!['development','publication','release','live'].includes(gate.scope)) throw new TypeError('Gate scope must be development, publication, release or live; choose the scope authorized by the task.');
       if (gate.timeoutMs !== undefined && (!Number.isSafeInteger(gate.timeoutMs) || gate.timeoutMs < 1)) throw new TypeError('Invalid optional verifier timeout.');
       if (gate.minimumTests !== undefined && (!Number.isSafeInteger(gate.minimumTests) || gate.minimumTests < 1)) throw new TypeError('minimumTests must be positive.');
+      if(gate.writablePaths!==undefined)list(gate.writablePaths).forEach(path=>workspacePath(this.artifacts.directory,path));
     });
     if (new Set(gates.map(g => g.id)).size !== gates.length) throw new TypeError('Gate identifiers must be unique.');
     const body = JSON.parse(JSON.stringify({ taskId, projectId, branch, problem, acceptance, baseline, assignee, reviewerId, parentTask, dependencies, gates, template, context:taskContext, verificationPolicy }));
     return this.control.transaction(() => {
       for (const dependency of dependencies) this.getTask(dependency);
-      if (parentTask) this.getTask(id(parentTask));
+      if (parentTask) {
+        const parent=this.getTask(id(parentTask));
+        if(!['ready','running','revision_required'].includes(parent.status))throw new Error('Add child work before submitting the integrated parent candidate.');
+      }
       const old = this.db.prepare('SELECT body FROM workflow_tasks WHERE id=?').get(taskId);
       if (old && contentDigest(parse(old)) !== contentDigest(body)) throw new Error('Task identity has different immutable input.');
       this.control.createTask({ taskId, projectId, branch, specification: { problem, acceptance, baseline, workflow: body } });
@@ -77,6 +82,7 @@ export class FactoryWorkflow {
     const value = parse(this.db.prepare('SELECT body FROM workflow_candidates WHERE id=?').get(candidateId));
     if (!value) throw new Error('Candidate not found.');
     this.artifacts.get(value.manifestRef); for (const artifact of value.artifacts) this.artifacts.get(artifact.ref);
+    if(value.source.kind==='workspace')verifyWorkspaceArtifacts(this.artifacts,value.source.snapshot);
     return value;
   }
   getTask(taskId) {
@@ -112,15 +118,22 @@ export class FactoryWorkflow {
   }
   submit(taskId, actor, { submissionId, source, artifacts, summary, resolvedFindings = [] }) {
     id(submissionId); required(summary, 'summary');
-    if (!source || typeof source.repository !== 'string' || !/^[a-f0-9]{40}$/.test(source.commit ?? '') || !/^[a-f0-9]{40}$/.test(source.tree ?? '') || !/^[a-f0-9]{40}$/.test(source.baseline ?? '')) throw new TypeError('Candidate source requires repository, baseline, commit and tree.');
+    if (source?.kind === 'workspace') {
+      required(source.baseline, 'baseline'); verifyWorkspaceArtifacts(this.artifacts, source.snapshot);
+      if (!artifacts?.some(artifact => artifact.kind === 'workspace-snapshot' && artifact.ref === source.snapshot)) throw new Error('Candidate must include its workspace manifest.');
+    } else if (!source || typeof source.repository !== 'string' || !/^[a-f0-9]{40}$/.test(source.commit ?? '') || !/^[a-f0-9]{40}$/.test(source.tree ?? '') || !/^[a-f0-9]{40}$/.test(source.baseline ?? '')) throw new TypeError('Select an immutable workspace snapshot or Git source identity.');
     if (!list(artifacts).length) throw new TypeError('A candidate needs portable artifact bytes.');
     for (const artifact of artifacts) { required(artifact.name, 'artifact name'); required(artifact.kind, 'artifact kind'); this.artifacts.get(artifact.ref); }
-    const manifest = { schemaVersion: 1, taskId, submissionId, source, artifacts, summary, resolvedFindings: list(resolvedFindings).map(id) };
+    const contributions=this.listTasks().filter(child=>child.parentTask===taskId).map(child=>({taskId:child.taskId,candidateRef:child.candidate?.manifestRef??null}));
+    const manifest = { schemaVersion: 1, taskId, submissionId, source, artifacts, summary, resolvedFindings: list(resolvedFindings).map(id), ...(contributions.length?{contributions}:{}) };
     const manifestRef = this.artifacts.putJSON(manifest).ref;
     return this.control.transaction(() => {
       const task = this.active(taskId); if (actor !== task.assignee) throw new Error('Only the assigned implementer may submit.');
       const old = parse(this.db.prepare('SELECT body FROM workflow_candidates WHERE id=?').get(submissionId));
       if (old) { if (old.manifestRef !== manifestRef || old.taskId !== taskId) throw new Error('Submission identity conflicts.'); return old; }
+      const children=this.listTasks().filter(child=>child.parentTask===taskId);
+      if(children.some(child=>!['accepted','delivered'].includes(child.status)))throw new Error('Integrate child work only after its independent acceptance; unfinished requirements remain open.');
+      if(contentDigest(children.map(child=>({taskId:child.taskId,candidateRef:child.candidate?.manifestRef??null})))!==contentDigest(contributions))throw new Error('Child work changed during integration capture.');
       if (source.baseline !== task.baseline) throw new Error('Candidate baseline differs from the frozen task.');
       const lease = parse(this.db.prepare('SELECT body FROM workflow_leases WHERE task=?').get(taskId));
       if (!lease || lease.cellId !== actor) throw new Error('Claim the task before submission.');
@@ -172,8 +185,10 @@ export class FactoryWorkflow {
         const diagnostics = this.artifacts.getJSON(result.diagnosticsRef);
         if (typeof diagnostics.stdout !== 'string' || typeof diagnostics.stderr !== 'string'
           || interpretVerification(gate, diagnostics).outcome !== 'passed'
-          || result.source?.commit !== candidate.source.commit || result.source?.tree !== candidate.source.tree || result.source?.dirty !== false
-          || !candidate.artifacts.some(artifact => artifact.kind === 'git-archive' && artifact.ref === result.sourceRef)
+          || result.source?.dirty !== false
+          || (candidate.source.kind === 'workspace'
+            ? result.source?.kind !== 'workspace' || result.source.snapshot !== candidate.source.snapshot || result.sourceRef !== candidate.source.snapshot
+            : result.source?.commit !== candidate.source.commit || result.source?.tree !== candidate.source.tree || !candidate.artifacts.some(artifact => artifact.kind === 'git-archive' && artifact.ref === result.sourceRef))
           || !['executable-runner','reused-executable-runner'].includes(result.provenance)) throw new Error('Passing verification contradicts its executable source or diagnostic evidence.');
       }
       const old = parse(this.db.prepare('SELECT body FROM workflow_verifications WHERE candidate=? AND gate=?').get(candidateId, gateId));
@@ -208,6 +223,7 @@ export class FactoryWorkflow {
     }
     this.event(accepted ? 'candidate_accepted' : 'revision_required', taskId, task.assignee, { candidateId: task.candidate.id });
     if (accepted) for (const dependent of this.listTasks().filter(t => t.dependencies.includes(taskId) && !t.waitingFor.length)) this.event('dependency_ready', dependent.taskId, dependent.assignee, { dependency: taskId });
+    if(accepted && task.parentTask){const parent=this.getTask(task.parentTask);this.event('dependency_ready',parent.taskId,parent.assignee,{child:taskId,candidateRef:task.candidate.manifestRef});}
   }
   revise(taskId, actor) {
     return this.control.transaction(() => {
@@ -233,6 +249,7 @@ export class FactoryWorkflow {
   reviewPacket(candidateId) {
     const candidate = this.candidate(candidateId), task = this.getTask(candidate.taskId);
     return { problem: task.problem, acceptance: task.acceptance, baseline: task.baseline, gates: task.gates, candidate,
+      contributions:candidate.contributions??[],
       instructions: 'Inspect frozen bytes against the original requirements. Return findings; do not silently repair the candidate.' };
   }
   nextActions(actor) {

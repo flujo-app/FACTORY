@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { contentDigest, canonical } from './artifacts.mjs';
 import { randomBytes, createHmac } from 'node:crypto';
 import { assertCandidateSource } from './source.mjs';
+import { assertWorkspaceSource } from './workspace.mjs';
 
 export function sourceIdentity(cwd) {
   const git = args => execFileSync('git', ['-c','core.longpaths=true','-C', cwd, ...args], { encoding: 'utf8', windowsHide: true }).trim();
@@ -48,11 +49,12 @@ export function startVerification(workflow, { runId, candidateId, gateId, cwd, a
   const candidate = workflow.candidate(candidateId), task = workflow.active(candidate.taskId), gate = task.gates.find(value => value.id === gateId);
   if (!gate || task.candidate?.id !== candidateId || task.coreStatus !== 'review') throw new Error('Verification requires the current submitted candidate.');
   if (!allowedScopes.includes(gate.scope)) throw new Error(`Explicit ${gate.scope} verification authorization is required.`);
-  const source = sourceIdentity(cwd);
-  if (source.dirty || source.commit !== candidate.source.commit || source.tree !== candidate.source.tree) throw new Error('Verifier checkout must be clean and match the exact candidate commit/tree.');
-  const sourceRef = assertCandidateSource(candidate, cwd);
+  const workspace = candidate.source.kind === 'workspace';
+  const source = workspace ? assertWorkspaceSource(workflow.artifacts, candidate.source.snapshot, cwd,{writablePaths:gate.writablePaths}) : sourceIdentity(cwd);
+  if (!workspace && (source.dirty || source.commit !== candidate.source.commit || source.tree !== candidate.source.tree)) throw new Error('Verifier checkout must be clean and match the exact candidate commit/tree.');
+  const sourceRef = workspace ? candidate.source.snapshot : assertCandidateSource(candidate, cwd);
   const bound = { runId, candidateId, gateId, cwd: resolve(cwd), gate, candidateRef: candidate.manifestRef, source, sourceRef,
-    environment: boundEnvironment };
+    artifactDirectory: workflow.artifacts.directory, environment: boundEnvironment };
   const directory = resolve(workflow.artifacts.directory, '..', 'workflow-runs', runId), requestPath = resolve(directory,'request.json'), receiptPath = resolve(directory,'receipt.json');
   const requestDigest = contentDigest(bound);
   const previous = workflow.db.prepare('SELECT body FROM workflow_runs WHERE id=?').get(runId);

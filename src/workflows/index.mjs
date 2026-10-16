@@ -6,3 +6,6 @@ export { createWorkflowClient, classifyWorkflowRecovery } from './client.mjs';
 export { createWorkflowComparison, launchWorkflowComparison, summarizeWorkflowComparison } from './comparison.mjs';
 export { captureGitSource } from './source.mjs';
 export { FactoryWorkflowSupervisor } from './supervisor.mjs';
+export { captureWorkspace, materializeWorkspace, verifyWorkspaceArtifacts, readWorkspaceFile } from './workspace.mjs';
+export { submitWorkspaceCandidate } from './candidate.mjs';
+export { ContinuousEvidenceCollector, createEvidenceClient, startEvidenceServer, restoreEvidenceCheckpoint } from '../evidence.mjs';

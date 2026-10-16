@@ -5,7 +5,8 @@ import { resolve, dirname } from 'node:path';
 import { sourceIdentity, interpretVerification } from './verifier.mjs';
 import { redact } from '../cloud-lite/protocol.mjs';
 import { gitArchive, assertCheckoutSource } from './source.mjs';
-import { sha256, canonical } from './artifacts.mjs';
+import { sha256, canonical, FactoryArtifactStore } from './artifacts.mjs';
+import { assertWorkspaceSource, materializeWorkspace } from './workspace.mjs';
 
 const requestPath = process.argv[2];
 const run = JSON.parse(readFileSync(requestPath,'utf8'));
@@ -19,19 +20,27 @@ const lock = openSync(requestPath + '.started', 'wx', 0o600); closeSync(lock);
 const startedAt = Date.now();
 let result, diagnostics = {};
 try {
-  const before = sourceIdentity(run.cwd);
-  if (before.dirty || before.commit !== run.source.commit || before.tree !== run.source.tree) throw new Error('Candidate changed before verifier execution.');
-  if (run.sourceRef !== 'sha256:' + sha256(gitArchive(run.cwd,run.source.commit))) throw new Error('Portable candidate source changed.');
+  const workspace = run.source.kind === 'workspace';
+  const store = workspace ? new FactoryArtifactStore(run.artifactDirectory) : null;
+  if (workspace) assertWorkspaceSource(store, run.sourceRef, run.cwd,{writablePaths:run.gate.writablePaths});
+  else {
+    const before = sourceIdentity(run.cwd);
+    if (before.dirty || before.commit !== run.source.commit || before.tree !== run.source.tree) throw new Error('Candidate changed before verifier execution.');
+    if (run.sourceRef !== 'sha256:' + sha256(gitArchive(run.cwd,run.source.commit))) throw new Error('Portable candidate source changed.');
+  }
   const environment={};
   for(const key of ['PATH','Path','SystemRoot','SYSTEMROOT','WINDIR','ComSpec','PATHEXT','TEMP','TMP','TMPDIR','LANG','LC_ALL','TZ']) if(process.env[key]!==undefined) environment[key]=process.env[key];
   const home=resolve(dirname(requestPath),'h'),executionCwd=resolve(dirname(requestPath),'s'),hooks=resolve(dirname(requestPath),'hooks');
   mkdirSync(home,{recursive:true,mode:0o700});mkdirSync(hooks,{recursive:true,mode:0o700});
   Object.assign(environment,{HOME:home,USERPROFILE:home,CI:'true',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null',GIT_TERMINAL_PROMPT:'0'});
   const git=args=>execFileSync('git',['-c','core.longpaths=true','-c',`core.hooksPath=${hooks}`,...args],{env:environment,windowsHide:true,stdio:'pipe'});
-  git(['clone','--shared','--no-checkout',run.cwd,executionCwd]);
-  git(['-C',executionCwd,'checkout','--detach',run.source.commit]);
-  if(run.sourceRef!=='sha256:'+sha256(gitArchive(executionCwd,run.source.commit)))throw new Error('Isolated execution source differs from the artifact.');
-  assertCheckoutSource(executionCwd,run.source.commit);
+  if (workspace) materializeWorkspace(store,run.sourceRef,executionCwd);
+  else {
+    git(['clone','--shared','--no-checkout',run.cwd,executionCwd]);
+    git(['-C',executionCwd,'checkout','--detach',run.source.commit]);
+    if(run.sourceRef!=='sha256:'+sha256(gitArchive(executionCwd,run.source.commit)))throw new Error('Isolated execution source differs from the artifact.');
+    assertCheckoutSource(executionCwd,run.source.commit);
+  }
   diagnostics = await new Promise(resolve => {
     const child = spawn(run.gate.command === '$node' ? process.execPath : run.gate.command, run.gate.args, { cwd: executionCwd, env:environment, shell: false, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
     let stdout = '', stderr = '', overflow = false, timedOut = false, timer;
@@ -46,9 +55,12 @@ try {
     child.once('close', (exitCode, signal) => { clearTimeout(timer); resolve({ stdout, stderr, exitCode, signal, timedOut, overflow }); });
   });
   result = interpretVerification(run.gate, diagnostics);
-  const after = sourceIdentity(executionCwd);
-  assertCheckoutSource(executionCwd,run.source.commit);
-  if (after.dirty || after.commit !== run.source.commit || after.tree !== run.source.tree) result = { outcome: 'failed', reason: 'Verifier changed the frozen source or left untracked source files.' };
+  if (workspace) assertWorkspaceSource(store,run.sourceRef,executionCwd,{writablePaths:run.gate.writablePaths});
+  else {
+    const after = sourceIdentity(executionCwd);
+    assertCheckoutSource(executionCwd,run.source.commit);
+    if (after.dirty || after.commit !== run.source.commit || after.tree !== run.source.tree) result = { outcome: 'failed', reason: 'Verifier changed the frozen source or left untracked source files.' };
+  }
   if (diagnostics.overflow) result = { outcome: 'failed', reason: 'Diagnostic output exceeded the retained evidence limit.' };
 } catch (error) { result = { outcome: 'failed', reason: error.message }; }
 const receipt = { ...result, requestDigest: run.requestDigest, candidateRef: run.candidateRef, startedAt, completedAt: Date.now(), diagnostics: redact(diagnostics) };

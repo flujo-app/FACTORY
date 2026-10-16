@@ -5,10 +5,11 @@ import { FactoryControl } from '../control.mjs';
 import { FactoryWorkflow } from './engine.mjs';
 import { contentDigest } from './artifacts.mjs';
 import { runVerification } from './verifier.mjs';
+import { materializeWorkspace, readWorkspaceManifest } from './workspace.mjs';
 
 /** Trusted local verifier service for a remote board. It never invokes a model or grants delivery permission. */
 export class FactoryWorkflowSupervisor {
-  constructor({ client, directory, repositories, allowedScopes = ['development'], onEvent = () => {} }) {
+  constructor({ client, directory, repositories = {}, allowedScopes = ['development'], onEvent = () => {} }) {
     if (!isAbsolute(directory ?? '') || !repositories || typeof repositories !== 'object') throw new TypeError('Select a private service directory and explicit repository-to-checkout mapping.');
     for (const path of Object.values(repositories)) if (!isAbsolute(path)) throw new TypeError('Repository checkout paths must be absolute.');
     this.client = client; this.directory = directory; this.repositories = repositories; this.allowedScopes = allowedScopes; this.onEvent = onEvent;
@@ -16,7 +17,8 @@ export class FactoryWorkflowSupervisor {
   async verify(candidateId, gateId, { signal } = {}) {
     const packet = await this.client.reviewPacket(candidateId), candidate = packet.candidate;
     const task = await this.client.task(candidate.taskId), repositoryPath = this.repositories[candidate.source.repository];
-    if (!repositoryPath || task.candidate?.id !== candidateId) throw new Error('Candidate is superseded or its repository is not configured for this verifier.');
+    const workspace = candidate.source.kind === 'workspace';
+    if ((!workspace && !repositoryPath) || task.candidate?.id !== candidateId) throw new Error('Candidate is superseded or its repository is not configured for this verifier.');
     const key = contentDigest({ candidateId, manifestRef: candidate.manifestRef, gateId });
     const directory = resolve(this.directory,key.slice(0,24)); mkdirSync(directory,{recursive:true,mode:0o700});
     const database = resolve(directory,'control.sqlite'), cwd = resolve(directory,'source');
@@ -31,19 +33,26 @@ export class FactoryWorkflowSupervisor {
         const bytes = await this.client.download(artifact.ref);
         if (workflow.artifacts.put(bytes).ref !== artifact.ref) throw new Error('Imported artifact mismatch.');
       }
+      if(workspace){
+        const snapshot=readWorkspaceManifest(workflow.artifacts,candidate.source.snapshot);
+        for(const ref of new Set(snapshot.files.flatMap(file=>file.chunks.map(chunk=>chunk.ref)))){
+          const bytes=await this.client.download(ref);if(workflow.artifacts.put(bytes).ref!==ref)throw new Error('Imported workspace chunk mismatch.');
+        }
+      }
       const manifest = workflow.artifacts.getJSON(candidate.manifestRef);
       if (contentDigest(manifest.source) !== contentDigest(candidate.source) || contentDigest(manifest.artifacts) !== contentDigest(candidate.artifacts)
         || manifest.taskId !== task.taskId || manifest.submissionId !== candidateId) throw new Error('Review packet does not match the frozen manifest.');
       const git = (args, options={}) => execFileSync('git',['-c','core.longpaths=true',...args],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],...options});
-      if (!existsSync(resolve(cwd,'.git'))) git(['clone','--shared','--no-checkout',repositoryPath,cwd]);
+      if (workspace) { if (!existsSync(cwd)) materializeWorkspace(workflow.artifacts,candidate.source.snapshot,cwd); }
+      else if (!existsSync(resolve(cwd,'.git'))) git(['clone','--shared','--no-checkout',repositoryPath,cwd]);
       const bundle = candidate.artifacts.find(artifact=>artifact.kind==='git-bundle');
-      if (bundle) {
+      if (bundle && !workspace) {
         git(['bundle','verify',workflow.artifacts.path(bundle.ref)],{cwd});
         git(['fetch',workflow.artifacts.path(bundle.ref),'HEAD'],{cwd});
       }
       // A retained checkout may contain a running or incomplete verifier; never reset it on restart.
       if (!control.db.prepare('SELECT id FROM workflow_tasks WHERE id=?').get(task.taskId)) {
-        git(['checkout','--detach',candidate.source.commit],{cwd});
+        if (!workspace) git(['checkout','--detach',candidate.source.commit],{cwd});
         // The isolated verifier mirrors the original immutable specification. Dependency acceptance
         // is checked by the remote authority; mirror placeholders retain the original IDs/digests.
         const imported = new Set();
@@ -85,7 +94,8 @@ export class FactoryWorkflowSupervisor {
       if (signal?.aborted) return results;
       if (!task.candidate || task.paused || task.waitingFor.length || !['review','verification'].includes(task.status)
         || !this.allowedScopes.includes(gate.scope) || task.verifications.some(result=>result.gateDigest===contentDigest(gate))) continue;
-      results.push(await this.verify(task.candidate.id,gate.id,{signal}));
+      try { results.push(await this.verify(task.candidate.id,gate.id,{signal})); }
+      catch (error) { const blocked={status:'blocked',candidateId:task.candidate.id,gateId:gate.id,reason:error.message}; results.push(blocked); this.onEvent(blocked); }
     }
     return results;
   }

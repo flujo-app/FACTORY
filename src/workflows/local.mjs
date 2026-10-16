@@ -2,8 +2,10 @@ import { FactoryWorkflow } from './engine.mjs';
 import { callWorkflowTool, workflowTools } from './tools.mjs';
 import { startVerification, reconcileVerification, runVerification } from './verifier.mjs';
 import { captureGitSource } from './source.mjs';
+import { candidateTool, submitWorkspaceCandidate } from './candidate.mjs';
+import { dirname, resolve } from 'node:path';
 
-export const localWorkflowTools = workflowTools.concat([{
+export const localWorkflowTools = workflowTools.concat([candidateTool,{
   name: 'factory_verification', description: 'Execute or reconcile a declared objective gate on an exact clean candidate checkout. Scope authorization is explicit.',
   inputSchema: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['capture','start','run','reconcile'] }, runId: { type: 'string' }, candidateId: { type: 'string' }, gateId: { type: 'string' }, cwd: { type: 'string' }, repository: { type: 'string' }, baseline: { type: 'string' }, environment: { type: 'object' },
@@ -13,6 +15,9 @@ export async function callLocalWorkflowTool(database, name, args = {}, {actor='r
   if (Object.hasOwn(args,'actor') || Object.hasOwn(args,'allowedScopes')) throw new Error('Actor and verification policy are bound by the trusted launcher, not tool arguments.');
   const workflow = new FactoryWorkflow(database);
   try {
+    if(name===candidateTool.name)return await submitWorkspaceCandidate({...args,cwd:process.cwd(),directory:resolve(dirname(database),'candidate-captures',actor),client:{
+      task:taskId=>workflow.getTask(taskId),upload:bytes=>workflow.artifacts.put(bytes),call:(tool,input)=>callWorkflowTool(workflow,actor,tool,input),
+    }});
     if (name === 'factory_verification') {
       if (args.action === 'capture') return captureGitSource(workflow.artifacts, args.cwd, args);
       if (actor !== 'root') throw new Error('Executable verification requires the trusted supervisor process.');
