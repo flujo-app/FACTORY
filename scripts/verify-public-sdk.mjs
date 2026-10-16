@@ -21,10 +21,28 @@ for (const name of [
   'CodexSubscriptionBroker',
   'validateCloudLitePlan',
   'cloudLiteMachineConfig',
+  'FactoryWorkflow',
+  'FactoryArtifactStore',
+  'FactoryWorkflowSupervisor',
+  'captureGitSource',
+  'captureWorkspace',
+  'submitWorkspaceCandidate',
+  'ContinuousEvidenceCollector',
+  'createEvidenceClient',
+  'startEvidenceServer',
+  'restoreEvidenceCheckpoint',
+  'runVerification',
+  'createWorkflowClient',
+  'createWorkflowComparison',
 ]) {
   assert.equal(typeof sdk[name], 'function', `${name} is missing`);
 }
 const observatory = await import(pathToFileURL(require.resolve('flujo-factory/observatory')));
+const workflows = await import(pathToFileURL(require.resolve('flujo-factory/workflows')));
+assert.equal(workflows.FactoryWorkflow,sdk.FactoryWorkflow);
+assert.equal(workflows.listWorkflowTemplates().length,5);
+assert.equal(existsSync(join(consumer,'node_modules','flujo-factory','src','workflows','index.d.mts')),true);
+assert.equal(existsSync(join(consumer,'node_modules','flujo-factory','WORKFLOWS.md')),true);
 assert.equal(typeof observatory.createObservatoryClient, 'function');
 assert.equal(existsSync(join(consumer, 'node_modules', 'flujo-factory', 'src', 'observatory-client.d.mts')), true);
 

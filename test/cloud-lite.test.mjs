@@ -1035,7 +1035,10 @@ test('an incomplete download is retained while a new destination receives verifi
   const originalBytes = readFileSync(partial); const archive = Buffer.from('complete-private-evidence');
   const receipt = { state: 'completed', archive: '/data/evidence.tgz', bytes: archive.length, sha256: hash(archive) };
   const fleet = new FactoryCloudLiteFleet({ directory, execute: async (_command, args) => {
-    if (args[0] === 'machine') return JSON.stringify(receipt);
+    if (args[0] === 'machine') {
+      assert.ok(Buffer.byteLength(args[3]) < 8192, 'collector dispatch must stay below the provider exec payload ceiling');
+      return JSON.stringify(receipt);
+    }
     assert.deepEqual(args.slice(0, 3), ['ssh', 'sftp', 'get']); writeFileSync(args[4], archive); return '';
   } });
   fleet.state = { plan: { ...plan(), machines: 1 }, machines: [{ id: 'original' }], operations: {} }; fleet.save();

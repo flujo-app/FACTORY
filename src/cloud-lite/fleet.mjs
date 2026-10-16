@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
+import { createEvidenceClient } from '../evidence.mjs';
 
 const TRACE_PAGE_SIZE = 100;
 const DEFAULT_OBSERVATION_PAGES = 5;
@@ -187,11 +189,24 @@ export class FactoryCloudLiteFleet {
     await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal']); return { app: plan.app }; });
     return this.snapshot();
   }
-  async deploy(input, { image, imageSource, channel, githubToken, bundlePath } = {}) {
-    if (!githubToken || !this.auth) throw new TypeError('Select a GitHub credential and subscription auth broker.');
+  async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens } = {}) {
+    if (input.repository && !githubToken || !this.auth) throw new TypeError('Select a subscription auth broker and, for Git tasks, a GitHub credential.');
     if (imageSource) image = (await (await this.upstream()).resolveWorkerImage({ source: imageSource, image, channel })).image;
     if (!image) throw new TypeError('Select an immutable worker image or its upstream FLUJO compatibility advertisement.');
     await this.prepare(input); const plan = this.state.plan;
+    if(plan.collection){
+      const path=join(this.directory,'evidence-credentials.json');
+      if(!evidenceTokens && existsSync(path))evidenceTokens=JSON.parse(readFileSync(path));
+      if(!evidenceTokens || Array.from({length:plan.machines},(_,i)=>evidenceTokens[`m${i}`]).some(token=>typeof token!=='string'||token.length<32))throw new Error('Configure one archive credential per machine.');
+      if(new Set(Object.values(evidenceTokens)).size!==plan.machines)throw new Error('Archive credentials must be distinct per machine.');
+      if(existsSync(path) && hash(JSON.parse(readFileSync(path)))!==hash(evidenceTokens))throw new Error('Retain original archive credentials on recovery.');
+      if(!existsSync(path))writeFileSync(path,JSON.stringify(evidenceTokens),{mode:0o600,flag:'wx'});
+      // Preflight the external archive before provisioning paid worker machines.
+      for(const [machineId,token]of Object.entries(evidenceTokens)){
+        const identity=await createEvidenceClient({url:plan.collection.url,token}).identity();
+        if(identity.runId!==plan.runId || identity.machineId!==machineId)throw new Error('Archive credential is bound to a different run/machine.');
+      }
+    }
     if (this.state.image && this.state.image !== image) throw new Error('Existing fleet image differs.');
     this.state.image = image; this.save();
     let bootstrapPath;
@@ -203,9 +218,9 @@ export class FactoryCloudLiteFleet {
       bootstrapPath = join(this.directory, 'bootstrap.sh'); writeFileSync(bootstrapPath, cloudLiteBootstrap(bundleDigest), { mode: 0o600 });
     }
     const { credentials, operatorToken } = JSON.parse(readFileSync(join(this.directory, 'credentials.json')));
-    const initialAuth = this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials)];
+    const initialAuth = this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials),...Object.values(evidenceTokens??{})];
     await this.stage('app.credentials', async () => {
-      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken })).toString('base64');
+      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken, evidenceTokens })).toString('base64');
       this.knownSecrets.push(config);
       await this.fly(['secrets', 'import', '--app', plan.app, '--stage'], { input: `FACTORY_CLOUD_BOOTSTRAP_B64=${config}\n` });
       return { staged: true };
@@ -448,12 +463,14 @@ export class FactoryCloudLiteFleet {
     if (machineIds !== undefined && (!Array.isArray(machineIds) || !machineIds.length || new Set(machineIds).size !== machineIds.length || selected.length !== machineIds.length)) throw new Error('Select original journal-owned Machine identities.');
     await this.quiesce({ attempt: `collection-${attempt}` });
     const artifacts = join(this.directory, 'artifacts'); mkdirSync(artifacts, { recursive: true, mode: 0o700 });
-    const collector = readFileSync(fileURLToPath(new URL('./collect.mjs', import.meta.url))).toString('base64');
+    // Fly's exec endpoint can reject a large command while flyctl still exits
+    // zero. Compress the embedded module before the two transport encodings.
+    const collector = gzipSync(readFileSync(fileURLToPath(new URL('./collect.mjs', import.meta.url)))).toString('base64');
     const receipts = [...(this.state.artifacts ?? [])].filter(receipt => !selected.some(machine => machine.id === receipt.machineId)); const failures = []; let next = 0;
     const capture = async machine => {
       this.event('artifacts.started', { machineId: machine.id });
       const job = `/data/factory/collection-${this.state.plan.runId}-${attempt}.json`;
-      const worker = `import {writeFileSync,renameSync} from 'node:fs'; const save=value=>{writeFileSync('${job}.next',JSON.stringify({...value,includeGitObjects:${includeGitObjects}}),{mode:384});renameSync('${job}.next','${job}');}; try {const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,${collector}'); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}',includeGitObjects:${includeGitObjects}});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
+      const worker = `import {writeFileSync,renameSync} from 'node:fs'; import {gunzipSync} from 'node:zlib'; const save=value=>{writeFileSync('${job}.next',JSON.stringify({...value,includeGitObjects:${includeGitObjects}}),{mode:384});renameSync('${job}.next','${job}');}; try {const source=gunzipSync(Buffer.from('${collector}','base64')).toString('base64'); const {collectCloudLiteSnapshot}=await import('data:text/javascript;base64,'+source); const receipt=await collectCloudLiteSnapshot({runId:'${this.state.plan.runId}',includeGitObjects:${includeGitObjects}});save({state:'completed',...receipt});}catch(error){save({state:'failed',error:error.message});process.exitCode=1;}`;
       const launch = `const fs=require('node:fs'); const job='${job}'; if(fs.existsSync(job)){console.log(fs.readFileSync(job,'utf8'));}else{fs.writeFileSync(job,JSON.stringify({state:'preparing',includeGitObjects:${includeGitObjects}}),{flag:'wx',mode:384});const out=fs.openSync(job+'.log','a',384);const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',Buffer.from('${Buffer.from(worker).toString('base64')}','base64').toString()],{detached:true,stdio:['ignore',out,out]});fs.writeFileSync(job,JSON.stringify({state:'running',pid:child.pid,includeGitObjects:${includeGitObjects}}),{mode:384});child.unref();fs.closeSync(out);console.log(fs.readFileSync(job,'utf8'));}`;
       // Dispatch only a durable detached job; Fly exec's observation timeout
       // must never be interpreted as permission to start another copy.
@@ -470,6 +487,7 @@ export class FactoryCloudLiteFleet {
           await new Promise(resolve => setTimeout(resolve, 30000)); continue;
         }
         const state = JSON.parse(raw.trim().split('\n').findLast(line => line.startsWith('{')));
+        if (state.state === 'missing') throw new Error(`Original collection job is missing at ${job}; reconcile dispatch before retrying.`);
         if ((state.includeGitObjects ?? true) !== includeGitObjects) throw new Error('Original collection content differs; select a new explicit capture attempt.');
         if (state.state === 'completed') { receipt = state; break; }
         if (state.state !== 'running') throw new Error(`Original collection job is ${state.state}; inspect ${job} before selecting another attempt.`);
@@ -509,7 +527,107 @@ export class FactoryCloudLiteFleet {
     });
     this.state.status = 'stopped'; this.save();
   }
+  /** Quiesce original sessions, verify remote immutable evidence, then stop exactly the owned machines. */
+  async verifiedShutdown({ attempt = 'final', timeoutMs = 120000, evidenceTimeoutMs = 300000, providerTimeoutMs = 120000, retire = false } = {}) {
+    if(!this.state.plan.collection)throw new Error('Verified shutdown requires configured continuous evidence collection.');
+    if(!Number.isSafeInteger(evidenceTimeoutMs)||evidenceTimeoutMs<1)throw new TypeError('Evidence timeout must be a positive integer.');
+    // Sealed native runtimes cannot resume work. Reconcile the same stop intent after a lost provider acknowledgement.
+    if(this.state.shutdownIntent && this.state.status!=='retired'){await this.recheckEvidence();await this.stopVerifiedResources({timeoutMs:providerTimeoutMs});}
+    const expected=agentInventory(this.state.plan);
+    const stopped=snapshot=>snapshot.agents.length===expected.length && expected.every(wanted=>{
+      const agent=snapshot.agents.find(a=>a.id===wanted.id),native=agent?.nativeRuntime,receipt=native?.operatorStopReceipt;
+      return receipt && receipt.threadId===native.threadId && ['idle','archived'].includes(native.threadStatus) && ['idle','archived'].includes(receipt.threadStatus)
+        && native.turnStatus!=='inProgress' && (receipt.turnId??null)===(native.turnId??null) && (receipt.turnStatus??null)===(native.turnStatus??null);
+    });
+    if(this.state.status!=='stopped' && this.state.status!=='retired'){
+      let snapshot=await this.request('/operator/status');
+      if(!stopped(snapshot)){await this.quiesce({attempt,timeoutMs});snapshot=await this.request('/operator/status');}
+      if(!stopped(snapshot))throw new Error('Native stop proof is incomplete. Preserve original machines.');
+      const seal=await this.request('/operator/evidence-seal',{runId:this.state.plan.runId});
+      if(!seal.sealed)throw new Error('Final collection seal is unconfirmed.');
+      this.state.shutdownSessions=snapshot.agents.map(agent=>({agentId:agent.id,threadId:agent.nativeRuntime.threadId,stopId:agent.nativeRuntime.operatorStopReceipt.commandId}));this.save();
+      const tokens=JSON.parse(readFileSync(join(this.directory,'evidence-credentials.json'))),deadline=Date.now()+evidenceTimeoutMs;
+      const receipts=[];
+      for(let index=0;index<this.state.plan.machines;index++){
+        const machineId=`m${index}`,client=createEvidenceClient({url:this.state.plan.collection.url,token:tokens[machineId]});let receipt;
+        for(;;){
+          receipt=await client.latest();
+          if(receipt?.checkpoint.final)break;
+          if(Date.now()>=deadline)throw Object.assign(new Error(`Final evidence for ${machineId} is pending. Native work is stopped; preserve its volume and retry verifiedShutdown.`),{code:'EVIDENCE_PENDING'});
+          await new Promise(accept=>setTimeout(accept,1000));
+        }
+        const checkpoint=receipt.checkpoint,sessions=this.state.shutdownSessions.filter(s=>s.agentId.startsWith(machineId+'-'));
+        if(checkpoint.roots.length!==5 || ['workspaces','sessions','results','runtime','board'].some(name=>!checkpoint.roots.some(root=>root.name===name)))throw new Error('Final cloud evidence is missing a required capture root.');
+        if(checkpoint.runId!==this.state.plan.runId || checkpoint.machineId!==machineId || checkpoint.sessions.length!==sessions.length
+          || sessions.some(s=>!checkpoint.sessions.some(actual=>actual.agentId===s.agentId && actual.threadId===s.threadId && actual.stopId===s.stopId)))throw new Error('Final archive does not account for the original stopped sessions.');
+        receipts.push(receipt);
+      }
+      const readback=await this.request('/operator/status');
+      if(!stopped(readback) || this.state.shutdownSessions.some(s=>{const native=readback.agents.find(a=>a.id===s.agentId)?.nativeRuntime;return native?.threadId!==s.threadId || native.operatorStopReceipt?.commandId!==s.stopId;}))throw new Error('Sessions changed while evidence was being verified. Preserve the fleet.');
+      this.state.verifiedEvidence={verifiedAt:new Date().toISOString(),receipts};this.save();
+      const owned=JSON.parse(await this.fly(['machine','list','--app',this.state.plan.app,'--json']));
+      if(owned.length!==this.state.machines.length || this.state.machines.some(machine=>!owned.some(m=>m.id===machine.id && m.config?.metadata?.['factory.run']===this.state.plan.runId && m.config?.mounts?.some(mount=>mount.volume===machine.volumeId))))throw new Error('Provider ownership changed; preserve resources.');
+      this.state.shutdownIntent={createdAt:new Date().toISOString(),evidence:this.state.verifiedEvidence.receipts.map(receipt=>receipt.digest)};this.save();
+      await this.stopVerifiedResources({timeoutMs:providerTimeoutMs});
+    }
+    if(this.state.status!=='retired'){
+      const machines=JSON.parse(await this.fly(['machine','list','--app',this.state.plan.app,'--json']));
+      if(machines.length!==this.state.machines.length || this.state.machines.some(owned=>!machines.some(m=>m.id===owned.id && m.state==='stopped' && m.config?.metadata?.['factory.run']===this.state.plan.runId && m.config?.mounts?.some(mount=>mount.volume===owned.volumeId))))throw new Error('Provider has not confirmed all original machines stopped.');
+      this.state.shutdownVerifiedAt=new Date().toISOString();this.save();
+      if(retire)await this.retire();
+    }
+    return {status:this.state.status,shutdownVerifiedAt:this.state.shutdownVerifiedAt,evidence:this.state.verifiedEvidence};
+  }
+  async recheckEvidence(){
+    if(this.state.verifiedEvidence?.receipts?.length!==this.state.plan.machines)throw new Error('Incomplete verified evidence census.');
+    const tokens=JSON.parse(readFileSync(join(this.directory,'evidence-credentials.json')));
+    for(const expected of this.state.verifiedEvidence.receipts){
+      const actual=await createEvidenceClient({url:this.state.plan.collection.url,token:tokens[expected.checkpoint.machineId]}).latest();
+      if(!actual?.checkpoint.final || actual.digest!==expected.digest)throw new Error('Retained final evidence changed or is missing. Preserve owned volumes.');
+    }
+  }
+  async stopVerifiedResources({timeoutMs=120000}={}){
+    if(!this.state.shutdownIntent)throw new Error('A verified native/evidence stop intent is required.');
+    if(!Number.isSafeInteger(timeoutMs)||timeoutMs<1)throw new TypeError('Provider confirmation timeout must be positive.');
+    const owned=inventory=>inventory.length===this.state.machines.length && this.state.machines.every(machine=>inventory.some(m=>m.id===machine.id && m.config?.metadata?.['factory.run']===this.state.plan.runId && m.config?.mounts?.some(mount=>mount.volume===machine.volumeId)));
+    const readback=async()=>{
+      let inventory;
+      try{inventory=JSON.parse(await this.fly(['machine','list','--app',this.state.plan.app,'--json']));}
+      catch(cause){throw Object.assign(new Error('Provider state is unconfirmed; retain the original stop intent.',{cause}),{code:'SHUTDOWN_PENDING'});}
+      if(!owned(inventory))throw new Error('Provider ownership changed; preserve resources.');return inventory;
+    };
+    const inventory=await readback();
+    for(const machine of [...this.state.machines].reverse()){
+      if(!['stopped','stopping'].includes(inventory.find(m=>m.id===machine.id).state)){
+        try{await this.fly(['machine','stop',machine.id,'--app',this.state.plan.app]);}
+        catch{this.event('shutdown.stop_unconfirmed',{machineId:machine.id});}
+      }
+    }
+    const deadline=Date.now()+timeoutMs;
+    for(;;){
+      try{if((await readback()).every(machine=>machine.state==='stopped'))break;}
+      catch(error){if(error.code!=='SHUTDOWN_PENDING')throw error;}
+      if(Date.now()>=deadline)throw Object.assign(new Error('Provider shutdown remains unconfirmed; retain the original stop intent.'),{code:'SHUTDOWN_PENDING'});
+      await new Promise(accept=>setTimeout(accept,Math.min(2000,deadline-Date.now())));
+    }
+    this.state.status='stopped';this.state.shutdownVerifiedAt=new Date().toISOString();this.save();
+  }
+  /** Run this supervisor in a durable host process. No implicit duration or model calls. */
+  async supervise({ shouldStop, signal, intervalMs = 15000, ...shutdownOptions } = {}) {
+    if(!this.state.plan.collection || !this.state.plan.shutdown && typeof shouldStop!=='function' && !signal)throw new Error('Configure collection and an explicit completion predicate, deadline or abort signal.');
+    if(!Number.isSafeInteger(intervalMs)||intervalMs<1000)throw new TypeError('Supervisor interval must be at least 1000 ms.');
+    for(;;){
+      try{
+        if(this.state.shutdownIntent)return await this.verifiedShutdown(shutdownOptions);
+        const snapshot=await this.observe();
+        if(signal?.aborted || this.state.plan.shutdown && Date.now()>=Date.parse(this.state.plan.shutdown.deadlineUtc) || shouldStop && await shouldStop(snapshot))return await this.verifiedShutdown(shutdownOptions);
+      }catch(error){if(!['EVIDENCE_PENDING','SHUTDOWN_PENDING'].includes(error.code)||signal?.aborted)throw error;this.event('shutdown.pending',{error:error.message});}
+      await new Promise(accept=>{const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',finish);accept();};const timer=setTimeout(finish,intervalMs);signal?.addEventListener('abort',finish,{once:true});});
+    }
+  }
   async retire() {
+    if(this.state.plan.collection && (!this.state.shutdownVerifiedAt || !this.state.verifiedEvidence?.receipts?.length))throw new Error('Verify final archive receipts and provider shutdown before retiring continuous-collection volumes.');
+    if(this.state.plan.collection && this.state.status!=='retired')await this.recheckEvidence();
     if (this.state.operations['app.retire']?.state !== 'succeeded') {
       const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
       const volumes = JSON.parse(await this.fly(['volumes', 'list', '--app', this.state.plan.app, '--json']));

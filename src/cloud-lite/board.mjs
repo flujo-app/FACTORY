@@ -1,5 +1,7 @@
 import { FactoryControl } from '../control.mjs';
 import { agentInventory, canMessage, hash, redact } from './protocol.mjs';
+import { FactoryWorkflow } from '../workflows/engine.mjs';
+import { callWorkflowTool, workflowTools } from '../workflows/tools.mjs';
 
 class NativeStopReceiptRejected extends Error {}
 
@@ -28,6 +30,7 @@ export class CloudLiteBoard {
       CREATE TABLE IF NOT EXISTS cloud_lite_native_runtime(agent_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, event_seq INTEGER NOT NULL, thread_lifecycle TEXT NOT NULL, thread_status TEXT, turn_id TEXT, turn_status TEXT, failure TEXT, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipts(agent_id TEXT NOT NULL, command_id TEXT NOT NULL, thread_id TEXT NOT NULL, turn_id TEXT, thread_status TEXT NOT NULL, turn_status TEXT, event_seq INTEGER NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(agent_id,command_id));
       CREATE TABLE IF NOT EXISTS cloud_lite_native_stop_receipt_rejections(source TEXT NOT NULL, source_seq INTEGER NOT NULL, PRIMARY KEY(source,source_seq));
+      CREATE TABLE IF NOT EXISTS cloud_lite_evidence_seal(id INTEGER PRIMARY KEY CHECK(id=1), requested INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_lite_run(id INTEGER PRIMARY KEY CHECK(id=1), plan TEXT NOT NULL, digest TEXT NOT NULL);`);
     if (plan) {
       const previous = this.db.prepare('SELECT digest FROM cloud_lite_run WHERE id=1').get();
@@ -36,7 +39,7 @@ export class CloudLiteBoard {
       if (!this.db.prepare('SELECT id FROM control WHERE id=1').get()) {
         this.control.initialize({ mission: plan.goal, budgetCents: 0, maxCells: plan.machines * plan.agentsPerMachine + 1, maxDepth: 2 });
         for (const agent of agentInventory(plan)) {
-          this.control.reserveCell({ cellId: agent.id, parentId: agent.parentId, role: agent.role === 'orchestrator' ? 'coordinator' : 'developer', budgetCents: 0, purpose: plan.goal });
+          this.control.reserveCell({ cellId: agent.id, parentId: agent.parentId, role: agent.role === 'orchestrator' ? 'coordinator' : plan.workflow && agent.id.endsWith(`-a${plan.agentsPerMachine - 1}`) ? 'verifier' : 'developer', budgetCents: 0, purpose: plan.goal });
           this.control.enrollCell(agent.id);
         }
       }
@@ -48,6 +51,8 @@ export class CloudLiteBoard {
         this.db.prepare('INSERT OR IGNORE INTO cloud_lite_agents(id,machine,role,token_hash) VALUES(?,?,?,?)').run(agent.id, agent.machine, agent.role, hash(token));
       }
     }
+    const savedPlan = this.db.prepare('SELECT plan FROM cloud_lite_run WHERE id=1').get();
+    if (savedPlan && JSON.parse(savedPlan.plan).workflow === 'verified-v1') this.workflow = new FactoryWorkflow(database, { control: this.control });
   }
   authenticate(token) {
     if (this.operatorHash && hash(token) === this.operatorHash) return { id: 'operator', role: 'operator' };
@@ -148,10 +153,22 @@ export class CloudLiteBoard {
     return { recorded: true };
   }
   snapshot() { return { plan: JSON.parse(this.db.prepare('SELECT plan FROM cloud_lite_run WHERE id=1').get().plan),
+    ...(this.workflow ? { workflows: this.workflow.listTasks(), workflowSequence: this.workflow.events({limit:1}).through } : {}),
     agents: this.inventory(), claims: this.db.prepare('SELECT * FROM cloud_lite_claims ORDER BY updated DESC').all().map(r => ({ ...r, details: JSON.parse(r.details) })),
     validations: this.db.prepare('SELECT * FROM cloud_lite_validations ORDER BY updated').all().map(r => ({ ...r, evidence: JSON.parse(r.evidence) })),
     traceSequence: this.db.prepare('SELECT max(seq) AS n FROM cloud_lite_traces').get().n ?? 0 }; }
   call(actor, name, args = {}) {
+    if (workflowTools.some(tool => tool.name === name)) {
+      if (!this.workflow) throw new Error('This fleet uses the baseline workflow profile.');
+      return callWorkflowTool(this.workflow, actor.id === 'operator' ? 'root' : actor.id, name, args, {
+        supervisor: actor.role === 'operator', authorize: task => {
+          if (actor.role === 'operator') return;
+          for (const member of [task.assignee,task.reviewerId]) {
+            if (this.db.prepare('SELECT machine FROM cloud_lite_agents WHERE id=?').get(member)?.machine !== actor.machine) throw new Error('An orchestrator assigns only its own machine; the supervisor may coordinate cross-machine work.');
+          }
+        },
+      });
+    }
     if (name === 'factory_status') return this.snapshot();
     if (name === 'factory_identity') return actor;
     if (name === 'factory_inbox') return { messages: this.control.inbox(actor.id) };
@@ -161,7 +178,7 @@ export class CloudLiteBoard {
       return this.control.sendMessage({ sender: actor.id, messageId: args.messageId, recipient: recipient.id, payload: args.message });
     }
     if (name === 'factory_claim') {
-      if (typeof args.resource !== 'string' || !/^(pr|issue|review):[\w./:-]+$/.test(args.resource)) throw new TypeError('Use a stable pr:, issue:, or review: resource identity.');
+      if (typeof args.resource !== 'string' || !/^(task|pr|issue|review):[\w./:-]+$/.test(args.resource)) throw new TypeError('Use a stable task:, pr:, issue:, or review: resource identity.');
       return this.control.transaction(() => {
         const old = this.db.prepare('SELECT * FROM cloud_lite_claims WHERE resource=?').get(args.resource);
         if (old) return { claimed: old.machine === actor.machine && !['merged', 'closed'].includes(old.status), claim: old };
@@ -276,8 +293,8 @@ export class CloudLiteBoard {
 
 export const cloudBoardTools = [
   ['factory_identity', 'Read your machine, agent identity and role.'],
-  ['factory_status', 'Read fleet agents and shared PR/issue claims before choosing work.'],
-  ['factory_claim', 'Atomically claim a PR/issue/review for your machine; another machine cannot duplicate it.', { resource: { type: 'string' } }, ['resource']],
+  ['factory_status', 'Read fleet agents and shared work claims before choosing work.'],
+  ['factory_claim', 'Atomically claim a task, issue, PR or review for your team; another team cannot duplicate it.', { resource: { type: 'string' } }, ['resource']],
   ['factory_task_update', 'Record progress and evidence links for your assigned work.', { resource: { type: 'string' }, status: { type: 'string' }, details: { type: 'object' } }, ['resource', 'status']],
   ['factory_message', 'Message your machine peers; only orchestrators may message other orchestrators.', { recipient: { type: 'string' }, messageId: { type: 'string' }, message: { type: 'object' } }, ['recipient', 'messageId', 'message']],
   ['factory_inbox', 'Read messages addressed to your identity.'],
@@ -285,4 +302,4 @@ export const cloudBoardTools = [
   ['factory_validation_request', 'Request or read supervisor Windows/Linux local CI parity for an exact claimed Git revision before GitHub delivery.', { resource: { type: 'string' }, revision: { type: 'string' } }, ['resource','revision']],
   ['factory_cleanup', 'Delete task files/caches inside your own worktree through upstream FLUJO Bash MCP.', { paths: { type: 'array', items: { type: 'string' } } }, ['paths']],
 ].map(([name, description, properties = {}, required = []]) => ({ name, description,
-  inputSchema: { type: 'object', properties, required, additionalProperties: false } }));
+  inputSchema: { type: 'object', properties, required, additionalProperties: false } })).concat(workflowTools);

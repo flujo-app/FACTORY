@@ -1,6 +1,6 @@
 {
   "name": "flujo-factory",
-  "version": "0.3.0-dev.7",
+  "version": "0.3.0-dev.8",
   "description": "Durable FLUJO swarm engine and Factory SDK, CLI, and MCP server",
   "license": "MIT",
   "repository": {
@@ -14,6 +14,7 @@
   "files": [
     "src/",
     "bin/factory-public.mjs",
+    "bin/factory-evidence.mjs",
     "bin/factory-mcp.mjs",
     "bin/factory-lite.mjs",
     "bin/factory-cloud-mcp.mjs",
@@ -26,16 +27,22 @@
     "scripts/savia-local-live-smoke.mjs",
     "README.md",
     "PUBLIC_SDK.md",
+    "WORKFLOWS.md",
     "LICENSE"
   ],
   "exports": {
     ".": "./src/public-sdk.mjs",
+    "./workflows": {
+      "types": "./src/workflows/index.d.mts",
+      "default": "./src/workflows/index.mjs"
+    },
     "./observatory": {
       "types": "./src/observatory-client.d.mts",
       "default": "./src/observatory-client.mjs"
     }
   },
   "bin": {
+    "factory-evidence": "./bin/factory-evidence.mjs",
     "factory": "./bin/factory-public.mjs",
     "factory-mcp": "./bin/factory-mcp.mjs",
     "factory-lite": "./bin/factory-lite.mjs"

@@ -4,10 +4,18 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Factory } from '../src/public-sdk.mjs';
+import { localWorkflowTools, callLocalWorkflowTool } from '../src/workflows/local.mjs';
 
 const database = process.argv[2];
-if (!database || process.argv.length !== 3) {
-  process.stderr.write('Usage: factory-mcp <database-path>\n');
+const options = process.argv.slice(3);
+let boundActor='root', allowedScopes=['development'];
+for (let index=0;index<options.length;index+=2) {
+  if(options[index]==='--actor' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(options[index+1]??'')) boundActor=options[index+1];
+  else if(options[index]==='--verification-scopes' && options[index+1]?.split(',').every(scope=>['development','publication','release','live'].includes(scope))) allowedScopes=options[index+1].split(',');
+  else { process.stderr.write('Invalid trusted MCP launch options.\n'); process.exit(1); }
+}
+if (!database) {
+  process.stderr.write('Usage: factory-mcp <database-path> [--actor <cell-id>] [--verification-scopes development,publication,release,live]\n');
   process.exit(1);
 }
 const factory = new Factory(database);
@@ -73,15 +81,18 @@ const methods = {
 };
 const packageVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const server = new Server({ name: 'factory-local', version: packageVersion }, { capabilities: { tools: {} } });
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: definitions.map(([name, description]) => ({
+const readable = new Set(['factory_status','factory_template_list','factory_template_read','factory_template_build']);
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: definitions.filter(([name])=>boundActor==='root'||readable.has(name)).map(([name, description]) => ({
   name, description, inputSchema: { type: 'object', additionalProperties: false, ...(schemas[name] ?? {}) },
   annotations: { readOnlyHint: ['factory_status','factory_template_list','factory_template_read','factory_template_build'].includes(name), openWorldHint: false },
-})) }));
+})).concat(localWorkflowTools) }));
 server.setRequestHandler(CallToolRequestSchema, async request => {
-  const method = methods[request.params.name];
+  if(boundActor!=='root' && methods[request.params.name] && !readable.has(request.params.name)) return {isError:true,content:[{type:'text',text:'Only the supervisor may mutate legacy controller administration.'}]};
+  const method = methods[request.params.name] ?? (localWorkflowTools.some(tool => tool.name === request.params.name)
+    ? args => callLocalWorkflowTool(database, request.params.name, args, {actor:boundActor,allowedScopes}) : null);
   if (!method) return { isError: true, content: [{ type: 'text', text: 'Unknown tool.' }] };
   try {
-    const result = method(request.params.arguments ?? {});
+    const result = await method(request.params.arguments ?? {});
     return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
   } catch (error) {
     return { isError: true, content: [{ type: 'text', text: `${error.code ?? 'FACTORY_ERROR'}: ${error.message}` }] };

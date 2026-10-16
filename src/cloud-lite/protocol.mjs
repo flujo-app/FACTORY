@@ -13,8 +13,19 @@ export function validateCloudLitePlan(input) {
   }
   if (plan.memoryMb % 256) throw new TypeError('memoryMb must be a multiple of 256.');
   if (!/^[a-z]{3}$/.test(plan.region)) throw new TypeError('Invalid region.');
-  if (!/^[\w.-]+\/[\w.-]+$/.test(plan.repository ?? '')) throw new TypeError('A GitHub owner/repository is required.');
+  if (plan.repository !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(plan.repository)) throw new TypeError('Optional repository must be a GitHub owner/repository.');
   if (typeof plan.goal !== 'string' || !plan.goal.trim()) throw new TypeError('A goal is required.');
+  if (plan.workflow !== undefined && plan.workflow !== 'verified-v1') throw new TypeError('Unsupported workflow profile.');
+  if (plan.workflow && plan.agentsPerMachine < 3) throw new TypeError('Verified workflows require a coordinator, implementer and independent verifier.');
+  if (plan.repositoryRevision !== undefined && (!plan.repository || !/^[0-9a-f]{40}$/.test(plan.repositoryRevision))) throw new TypeError('repositoryRevision requires a repository and immutable commit.');
+  if(plan.collection){
+    const url=new URL(plan.collection.url);
+    if(!['https:','http:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new TypeError('Use an archive URL without credentials.');
+    if(plan.collection.intervalMs!==undefined&&(!Number.isSafeInteger(plan.collection.intervalMs)||plan.collection.intervalMs<1000))throw new TypeError('Collection interval must be at least 1000 ms.');
+  }
+  if(plan.shutdown){
+    if(!plan.collection || typeof plan.shutdown.deadlineUtc!=='string' || !Number.isFinite(Date.parse(plan.shutdown.deadlineUtc)))throw new TypeError('Automatic deadline shutdown requires evidence collection and an explicit UTC deadline.');
+  }
   return plan;
 }
 export function agentInventory(plan) {
