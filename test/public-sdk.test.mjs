@@ -7,10 +7,27 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Factory, FactoryControl, liteWorkerCommand, startLiteWorker } from '../src/public-sdk.mjs';
+import { Factory, FactoryControl, executeEffect, liteWorkerCommand, startLiteWorker } from '../src/public-sdk.mjs';
 
 const cli = fileURLToPath(new URL('../bin/factory-public.mjs', import.meta.url));
 const mcp = process.env.FACTORY_TEST_MCP ?? fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
+
+test('public durable dispatch retains its original effect instead of replaying an operation', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-public-effect-'));
+  const control = new FactoryControl(join(dir, 'control.sqlite'));
+  t.after(async () => { control.close(); await rm(dir, { recursive: true, force: true }); });
+  control.initialize({ mission: 'Public integration', budgetCents: 100, maxCells: 2, maxDepth: 1 });
+  control.createTask({ taskId: 'task', projectId: 'consumer', branch: 'codex/task',
+    specification: { problem: 'Dispatch once', acceptance: 'No duplicate operation', baseline: 'main' } });
+  const lease = control.claimTask('task', 'root');
+  const intent = { key: 'consumer-dispatch', kind: 'flow_call', request: { goalId: 'task' } };
+  let calls = 0;
+  const first = await executeEffect(control, lease, intent, async () => { calls++; return { state: 'ready' }; });
+  const replay = await executeEffect(control, lease, intent, async () => { calls++; return { state: 'ready' }; });
+  assert.equal(first.effect.state, 'succeeded');
+  assert.equal(replay.dispatched, false);
+  assert.equal(calls, 1);
+});
 
 test('lite workers launch native CLIs with only the Factory MCP configuration', () => {
   for (const provider of ['codex', 'claude']) {

@@ -1,5 +1,17 @@
 # Public local Factory SDK, CLI, and MCP
 
+Version 0.3.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.3.0):
+
+```sh
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.3.0/flujo-factory-0.3.0.tgz
+```
+
+`FactoryControl` and `executeEffect` are public exports for integrations that
+retain FACTORY's durable admission while using an existing fleet executor.
+Repeating an effect key observes its original outcome without dispatching again.
+The release does not require npm registry publication or private package access.
+
 The optional [verified workflow SDK](WORKFLOWS.md) adds frozen candidates,
 independent review, executable verification, portable artifacts, typed events,
 workflow templates, curated knowledge, and matched comparison tooling.
