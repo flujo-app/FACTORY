@@ -11,6 +11,8 @@ const require = createRequire(join(consumer, 'index.mjs'));
 const sdk = await import(pathToFileURL(require.resolve('flujo-factory')));
 for (const name of [
   'Factory',
+  'FactoryControl',
+  'executeEffect',
   'FactoryManagedFleet',
   'buildSaviaCasePlan',
   'observeSaviaCaseTopology',

@@ -84,6 +84,7 @@ export class Factory {
 }
 
 export { FactoryControl } from './control.mjs';
+export { executeEffect } from './gateway.mjs';
 export { FactoryTemplateCatalog } from './template-catalog.mjs';
 export { SpendingLedger } from './spending.mjs';
 export { FactorySwarmEngine, conversationEffectKey, conversationMessageKey, conversationCancelKey } from './swarm-engine.mjs';
