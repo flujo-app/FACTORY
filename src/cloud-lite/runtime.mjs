@@ -39,7 +39,12 @@ export async function finalizeNativeStopCommand({ prove, publish, flush, acknowl
   return true;
 }
 export async function runCloudLiteMachine(config) {
-  const { plan, index, credentials, operatorToken, initialAuth, githubToken, evidenceTokens } = config;
+  const { plan, index, credentials, operatorToken, initialAuth = {}, githubToken, evidenceTokens, providerKey, deployKey } = config;
+  // Optional: a self-hosted model provider instead of the subscription login, read-only
+  // deploy-key repository access, a prepare hook for agent workspaces, operator-driven turns.
+  const providerMode = Boolean(plan.modelProvider);
+  const operatorSupervised = plan.supervision === 'operator';
+  const extraSecrets = [providerKey, deployKey].filter(value => typeof value === 'string' && value.length >= 8);
   mkdirSync('/data/factory', { recursive: true, mode: 0o700 });
   let coordinator, evidenceProcess, evidenceSealing=false, evidenceFinal=false, deadlineRequested=false, sealRequested=false;
   const stopIds=new Map();
@@ -90,37 +95,59 @@ export async function runCloudLiteMachine(config) {
   const repositoryDirectory = plan.repository ? '/data/repository' : '/data/workspace';
   if(!plan.repository)mkdirSync(repositoryDirectory,{recursive:true,mode:0o700});
   const gitEnv = { ...process.env, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' };
+  delete gitEnv.FACTORY_CLOUD_BOOTSTRAP_B64;
+  if (deployKey) {
+    // Read-only repository access: an SSH deploy key and GitHub's published host key.
+    writeFileSync('/data/factory/deploy_key', deployKey.endsWith('\n') ? deployKey : deployKey + '\n', { mode: 0o600 });
+    writeFileSync('/data/factory/known_hosts', GITHUB_KNOWN_HOSTS, { mode: 0o600 });
+    gitEnv.GIT_SSH_COMMAND = 'ssh -i /data/factory/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/data/factory/known_hosts -o StrictHostKeyChecking=yes';
+    delete gitEnv.GH_TOKEN;
+  }
+  const cloneUrl = repository => deployKey ? `git@github.com:${repository}.git` : `https://github.com/${repository}.git`;
   const execute = promisify(execFile);
   const run = async (command, args, cwd) => {
     try { return (await execute(command, args, { cwd, env: gitEnv, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })).stdout; }
     catch (error) { throw new Error(`${command} failed (${error.code}).`); }
   };
-  if (plan.repository && !existsSync(join(repositoryDirectory, '.git'))) await run('git', ['clone', `https://github.com/${plan.repository}.git`, repositoryDirectory]);
-  if (plan.repositoryRevision) {
+  // A completed prepare hook may remove repository metadata on purpose; a restarted
+  // machine then reuses the prepared workspaces instead of cloning again.
+  const preparedFile = '/data/factory/prepare-result.json';
+  const alreadyPrepared = Boolean(plan.prepare) && existsSync(preparedFile);
+  if (plan.repository && !alreadyPrepared && !existsSync(join(repositoryDirectory, '.git'))) await run('git', ['clone', cloneUrl(plan.repository), repositoryDirectory]);
+  if (plan.repositoryRevision && !alreadyPrepared) {
     await run('git', ['fetch', 'origin', plan.repositoryRevision], repositoryDirectory);
     const pinned = (await run('git', ['rev-parse', `${plan.repositoryRevision}^{commit}`], repositoryDirectory)).trim();
     if (pinned !== plan.repositoryRevision) throw new Error('Repository snapshot identity mismatch.');
   }
-  if(plan.repository){
+  if(plan.repository && !alreadyPrepared){
     await run('git', ['config', 'user.name', 'FACTORY swarm'], repositoryDirectory);
     await run('git', ['config', 'user.email', 'flujo.com.co@gmail.com'], repositoryDirectory);
-    await run('gh', ['auth', 'setup-git'], repositoryDirectory);
+    if (githubToken && !deployKey) await run('gh', ['auth', 'setup-git'], repositoryDirectory);
+    // Agents that work in prepared folders (no per-agent worktree) need the pinned source checked out.
+    if (plan.prepare && plan.repositoryRevision) await run('git', ['checkout', '--detach', '--force', plan.repositoryRevision], repositoryDirectory);
+  }
+  // The prepare hook builds each agent's workspace from the pinned source once per machine.
+  let prepared = alreadyPrepared ? JSON.parse(readFileSync(preparedFile, 'utf8')) : null;
+  if (plan.prepare && !prepared) {
+    prepared = await runPrepareHook({ plan, index, repositoryDirectory, env: gitEnv });
+    writeFileSync(preparedFile, JSON.stringify(prepared), { mode: 0o600 });
   }
   const home = '/data/codex'; mkdirSync(home, { recursive: true, mode: 0o700 });
   // A fresh native harness has only the explicitly configured FACTORY MCP server.
-  writeFileSync(join(home, 'config.toml'), 'cli_auth_credentials_store="ephemeral"\nforced_login_method="chatgpt"\n', { mode: 0o600 });
+  writeFileSync(join(home, 'config.toml'), providerMode ? providerConfigToml(plan, index)
+    : 'cli_auth_credentials_store="ephemeral"\nforced_login_method="chatgpt"\n', { mode: 0o600 });
   const traces = new Map();
   const workflowWakes = new Map();
   for (const agent of bootstrap.agents) {
     const position = await request('/trace-position', {}, agent.token);
     traces.set(agent.id, new CloudLiteTrace({ file: `/data/factory/${agent.id}.jsonl`, url: boardUrl, token: agent.token, remoteSequence: position.sequence,
-      secrets: [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials),...Object.values(evidenceTokens??{})] }));
+      secrets: [githubToken, initialAuth.accessToken, operatorToken, ...extraSecrets, ...Object.values(credentials),...Object.values(evidenceTokens??{})] }));
   }
   const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const workflowVersions = new Map(); const consumedVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const revokedStopCommands = new Set(); const pendingStopCommands = new Map(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
-  const rpc = new CodexRpc({ env: { PATH: process.env.PATH, HOME: '/data', CODEX_HOME: home, GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: '0' }, cwd: repositoryDirectory,
+  const rpc = new CodexRpc({ env: codexEnvironment({ plan, home, githubToken, deployKey, providerKey }), cwd: repositoryDirectory,
     onStderr: text => rootTrace.record('codex.stderr', { text }),
     onRequest: async (method, params) => {
-      if (method === 'account/chatgptAuthTokens/refresh') {
+      if (method === 'account/chatgptAuthTokens/refresh' && !providerMode) {
         const auth = await request('/auth', { refresh: true, previousTokenHash: hash(liveAuth.accessToken) });
         if (auth.chatgptAccountId !== initialAuth.chatgptAccountId) throw new Error('Subscription identity changed.');
         for (const trace of traces.values()) trace.secrets.push(auth.accessToken);
@@ -132,7 +159,8 @@ export async function runCloudLiteMachine(config) {
   rpc.on('notification', value => {
     const threadId = value.params?.threadId ?? value.params?.thread?.id;
     const agent = threadAgents.get(threadId) ?? rootId;
-    traces.get(agent).record(value.method, value.params ?? {});
+    // Streaming deltas are most notifications and carry no state; item/completed has the content.
+    if (plan.traceDeltas === true || !isStreamingDelta(value.method)) traces.get(agent).record(value.method, value.params ?? {});
     if (value.method === 'thread/started' || value.method === 'thread/resumed'
       || value.method === 'thread/status/changed' && value.params?.status?.type === 'active') stopControllers.get(threadId)?.invalidateReceipts();
     const turn = value.params?.turn ?? {};
@@ -167,25 +195,27 @@ export async function runCloudLiteMachine(config) {
     }
   }, 1000);
   await rpc.initialize();
-  await rpc.request('account/login/start', { type: 'chatgptAuthTokens', ...bootstrap.auth });
+  // A self-hosted provider authenticates with its key; no subscription login is involved.
+  if (!providerMode) await rpc.request('account/login/start', { type: 'chatgptAuthTokens', ...bootstrap.auth });
   rootTrace.record('machine.ready', { machine, node: process.version, codex: await run('codex', ['--version']), configuration: { cpuKind: plan.cpuKind, cpus: plan.cpus, memoryMb: plan.memoryMb, diskGb: plan.diskGb }, agents: bootstrap.agents.map(x => ({ id: x.id, role: x.role })) });
   const proxy = fileURLToPath(new URL('../../bin/factory-cloud-mcp.mjs', import.meta.url));
   for (const agent of bootstrap.agents) {
-    const directory = join('/data/worktrees', agent.id); mkdirSync('/data/worktrees', { recursive: true });
+    // With a prepare hook, each agent works in the folder the hook prepared for its slot.
+    const slot = prepared?.agents?.[Number(agent.id.split('-a')[1])];
+    const directory = slot?.cwd ?? join('/data/worktrees', agent.id); mkdirSync('/data/worktrees', { recursive: true });
     if (!existsSync(directory)) {
-      if(plan.repository)await run('git', ['worktree', 'add', '--detach', directory, plan.repositoryRevision ?? 'HEAD'], repositoryDirectory);
+      if(plan.repository && !slot)await run('git', ['worktree', 'add', '--detach', directory, plan.repositoryRevision ?? 'HEAD'], repositoryDirectory);
       else mkdirSync(directory,{recursive:true,mode:0o700});
     }
     const sessionFile = `/data/factory/${agent.id}.session.json`;
-    const configOverride = { mcp_servers: { factory: { command: process.execPath, args: [proxy], env: { FACTORY_BOARD_URL: boardUrl, FACTORY_BOARD_TOKEN: agent.token, FACTORY_WORKTREE: directory }, required: true } },
-      'features.apps': false, 'features.plugins': false, 'features.multi_agent': false,
-      'model_reasoning_effort': plan.reasoningEffort };
-    const instructions = `You are ${agent.id}, ${agent.role}, on machine ${machine}. Your orchestrator is ${rootId}. Team: ${bootstrap.agents.map(x => x.id).join(', ')}.\nUse FACTORY identity/status/claim/message/inbox/checkpoint tools. Claim a stable task:<name> before work (issue:/pr: are available for repository work). One team owns each item. Orchestrators coordinate across teams; workers communicate within their team.\n${agent.role === 'orchestrator' ? 'Actively decompose and complete the original goal. Delegate useful work, resolve dependencies, and integrate the outputs into one coherent final deliverable. Keep unmet acceptance requirements open.' : 'Produce or independently review your assigned deliverable and report evidence and remaining requirements.'}\nRetain native tools. Respect task-specific instructions and validation/publication policy. Work can be research, analysis, documents, data, operations or software; do not invent a repository or software checks for unrelated tasks. Save deliverables under your workspace or /data/results. Record progress and evidence. Credentials must never enter deliverables, messages or traces.\nThe original user goal follows unchanged.`;
+    const { sandbox, config: configOverride } = nativeAgentConfig({ plan, slot, directory,
+      board: { command: process.execPath, args: [proxy], env: { FACTORY_BOARD_URL: boardUrl, FACTORY_BOARD_TOKEN: agent.token } } });
+    const instructions = slot?.instructions ?? plan.agentInstructions ?? `You are ${agent.id}, ${agent.role}, on machine ${machine}. Your orchestrator is ${rootId}. Team: ${bootstrap.agents.map(x => x.id).join(', ')}.\nUse FACTORY identity/status/claim/message/inbox/checkpoint tools. Claim a stable task:<name> before work (issue:/pr: are available for repository work). One team owns each item. Orchestrators coordinate across teams; workers communicate within their team.\n${agent.role === 'orchestrator' ? 'Actively decompose and complete the original goal. Delegate useful work, resolve dependencies, and integrate the outputs into one coherent final deliverable. Keep unmet acceptance requirements open.' : 'Produce or independently review your assigned deliverable and report evidence and remaining requirements.'}\nRetain native tools. Respect task-specific instructions and validation/publication policy. Work can be research, analysis, documents, data, operations or software; do not invent a repository or software checks for unrelated tasks. Save deliverables under your workspace or /data/results. Record progress and evidence. Credentials must never enter deliverables, messages or traces.\nThe original user goal follows unchanged.`;
     let result; let recovering = existsSync(sessionFile); let unavailableSession;
     if (recovering) {
       const retained = JSON.parse(readFileSync(sessionFile));
       try {
-        result = await rpc.request('thread/resume', { threadId: retained.threadId, cwd: directory, config: configOverride, approvalPolicy: 'never', sandbox: 'danger-full-access' });
+        result = await rpc.request('thread/resume', { threadId: retained.threadId, cwd: directory, config: configOverride, approvalPolicy: 'never', sandbox });
       } catch (error) {
         if (error.code !== -32600 || error.message !== `no rollout found for thread id ${retained.threadId}`) throw error;
         unavailableSession = retained.threadId; recovering = false;
@@ -196,7 +226,7 @@ export async function runCloudLiteMachine(config) {
       }
     }
     if (!result) {
-      result = await rpc.request('thread/start', { model: agent.role === 'orchestrator' ? plan.model : plan.subagentModel, cwd: directory, approvalPolicy: 'never', sandbox: 'danger-full-access', config: configOverride,
+      result = await rpc.request('thread/start', { model: agent.role === 'orchestrator' ? plan.model : plan.subagentModel, cwd: directory, approvalPolicy: 'never', sandbox, config: configOverride,
         developerInstructions: instructions, serviceName: `factory.${plan.runId}.${agent.id}`, historyMode: 'legacy' });
       const fd = await open(sessionFile, 'w', 0o600);
       try { await fd.writeFile(JSON.stringify({ threadId: result.thread.id, agentId: agent.id })); await fd.sync(); } finally { await fd.close(); }
@@ -214,7 +244,8 @@ export async function runCloudLiteMachine(config) {
     const threadEvent = recovering ? 'thread.resumed' : 'thread.started';
     traces.get(agent.id).record('native.' + threadEvent, { threadId,
       ...(observedThreadStatus ? { threadStatus: nativeThreadStatus(observedThreadStatus) } : {}) });
-    if (current?.thread.status?.type !== 'active') {
+    // Operator-supervised agents start idle; every turn comes from a durable operator message.
+    if (!operatorSupervised && current?.thread.status?.type !== 'active') {
       const recoveryNote = unavailableSession ? `The prior prepared session ${unavailableSession} has no persisted rollout. Reconcile your existing FACTORY claims, inbox, checkout and GitHub state before continuing; do not replay previous delivery operations.\n` : '';
       const workflowNote = plan.workflow ? `\nYour team has exactly one independent reviewer: ${machine}-a${plan.agentsPerMachine-1}. Other workers produce deliverables. Orchestrators use factory_assign to retain the original goal/acceptance as a parent task and delegate child tasks; the SDK selects your reviewer. Choose task-appropriate executable gates or explicitly explain a review-only policy when objective checks do not apply. The orchestrator integrates accepted child outputs and submits the parent deliverable. Use factory_submit_workspace with selected relative paths, a stable submissionId and a summary; the SDK freezes files, transfers chunks and renews the claim. No Git metadata is required. Reviewers inspect the frozen packet and artifacts, then use factory_review; never edit the candidate or approve their own work. Semantic review, executable checks and delivery permission are separate. Revise rejected candidates. Continue useful unblocked work while checks are unavailable. Read your inbox/next actions and finish idle turns; the SDK wakes you on relevant events.\n` : '';
       const input = recoveryNote + workflowNote + (agent.role === 'orchestrator' ? plan.goal : `Work under ${rootId} toward this goal. Check inbox and shared ownership first:\n${plan.goal}`);
@@ -318,7 +349,7 @@ export async function runCloudLiteMachine(config) {
       const newWorkflowEvent = plan.workflow && (workflowVersions.get(threadId) ?? 0) > (state.workflowVersion ?? 0);
       const pendingWorkflowWake = plan.workflow && ['unknown','rejected'].includes(workflowWakes.get(threadId)?.intent?.status);
       const leaderFollowup = !plan.workflow && agentId === rootId && Date.now() - state.completed >= 120000;
-      if (stopping || evidenceSealing || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup && !newWorkflowEvent && !pendingWorkflowWake) continue;
+      if (operatorSupervised || stopping || evidenceSealing || stoppingThreads.has(threadId) || state.status !== 'completed' || !newMail && !leaderFollowup && !newWorkflowEvent && !pendingWorkflowWake) continue;
       try {
         if(plan.workflow){
           const wake=await workflowWakes.get(threadId).wake({trigger:`${inboxVersions.get(threadId)??0}:${workflowVersions.get(threadId)??0}`,
@@ -330,7 +361,7 @@ export async function runCloudLiteMachine(config) {
     }
     } catch (error) { rootTrace.record('monitor.pending', { message: error.message }); }
     finally { monitoringBusy = false; }
-  }, 15000);
+  }, plan.monitorIntervalMs ?? 15000);
   function stop() { return stopPromise ??= (async () => {
     stopping = true; clearInterval(timer); clearInterval(monitoring);
     for (const threadId of threadAgents.keys()) { try { const turnId = turns.get(threadId); if (turnId) await rpc.request('turn/interrupt', { threadId, turnId }, 10000); } catch { /* Retained native state remains authoritative. */ } }
@@ -340,4 +371,111 @@ export async function runCloudLiteMachine(config) {
   })(); }
   process.once('SIGTERM', () => void stop()); process.once('SIGINT', () => void stop());
   return { rpc, traces, stop, threadAgents };
+}
+
+// GitHub's published SSH host key (https://api.github.com/meta, ssh_keys).
+const GITHUB_KNOWN_HOSTS = 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n';
+
+/** Token-by-token notifications; their content also arrives in item/completed. */
+export function isStreamingDelta(method) {
+  return typeof method === 'string' && (/[dD]elta$/.test(method) || method === 'account/rateLimits/updated');
+}
+
+/** The Codex app-server environment. A provider key reaches only this process. */
+export function codexEnvironment({ plan, home, githubToken, deployKey, providerKey, path = process.env.PATH }) {
+  return { PATH: path, HOME: '/data', CODEX_HOME: home, GIT_TERMINAL_PROMPT: '0',
+    ...(githubToken && !deployKey ? { GH_TOKEN: githubToken } : {}),
+    ...(plan.modelProvider ? { [plan.modelProvider.envKey]: providerKey } : {}) };
+}
+
+/** Sandbox and per-thread configuration override for one native agent session. */
+export function nativeAgentConfig({ plan, slot, directory, board }) {
+  const sandbox = plan.sandbox ?? 'danger-full-access';
+  const config = {
+    ...(plan.boardTools === false ? {} : { mcp_servers: { factory: { ...board, env: { ...board.env, FACTORY_WORKTREE: directory }, required: true } } }),
+    'features.apps': false, 'features.plugins': false, 'features.multi_agent': false,
+    'model_reasoning_effort': plan.reasoningEffort,
+    // Agent commands may write only their workspace and the listed roots, with no network.
+    ...(sandbox === 'workspace-write' ? { 'sandbox_workspace_write.writable_roots': slot?.writableRoots ?? [], 'sandbox_workspace_write.network_access': false } : {}),
+  };
+  return { sandbox, config };
+}
+
+const tomlString = value => JSON.stringify(String(value));
+
+/** Codex configuration for a self-hosted OpenAI-compatible (Responses API) model provider. */
+export function providerConfigToml(plan, index) {
+  const p = plan.modelProvider;
+  return [
+    `model = ${tomlString(p.model ?? plan.model)}`,
+    `model_provider = ${tomlString(p.id)}`,
+    `model_reasoning_effort = ${tomlString(plan.reasoningEffort)}`,
+    ...(p.contextWindow ? [`model_context_window = ${Number(p.contextWindow)}`] : []),
+    ...(p.autoCompactTokenLimit ? [`model_auto_compact_token_limit = ${Number(p.autoCompactTokenLimit)}`] : []),
+    ...(p.toolOutputTokenLimit ? [`tool_output_token_limit = ${Number(p.toolOutputTokenLimit)}`] : []),
+    'web_search = "disabled"',
+    'check_for_update_on_startup = false',
+    'cli_auth_credentials_store = "ephemeral"',
+    '',
+    '[features]',
+    'multi_agent = false',
+    'goals = false',
+    'apps = false',
+    'plugins = false',
+    'memories = false',
+    '',
+    '[skills]',
+    'include_instructions = false',
+    '',
+    // Agents' shell commands get only the basic variables, never the provider key.
+    '[shell_environment_policy]',
+    'inherit = "core"',
+    '',
+    `[model_providers.${p.id}]`,
+    `name = ${tomlString(p.name ?? p.id)}`,
+    // Machines are spread over the endpoints, so each keeps its prompt cache on one server.
+    `base_url = ${tomlString(p.baseUrls[index % p.baseUrls.length])}`,
+    `env_key = ${tomlString(p.envKey)}`,
+    'wire_api = "responses"',
+    `request_max_retries = ${Number(p.requestMaxRetries ?? 8)}`,
+    `stream_max_retries = ${Number(p.streamMaxRetries ?? 10)}`,
+    `stream_idle_timeout_ms = ${Number(p.streamIdleTimeoutMs ?? 900000)}`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * Runs the plan's prepare command once per machine. It must be idempotent: a machine that
+ * restarts before recording the result runs it again. It receives FACTORY_MACHINE_INDEX and
+ * FACTORY_PREPARE_SPEC (a JSON file) and prints one JSON line
+ * { agents: [{ cwd, writableRoots?, instructions? }, ...] } indexed by agent slot (a0, a1, ...).
+ */
+export async function runPrepareHook({ plan, index, repositoryDirectory, env, stateDirectory = '/data/factory' }) {
+  const specFile = join(stateDirectory, 'prepare-spec.json');
+  const logFile = join(stateDirectory, 'prepare.log');
+  writeFileSync(specFile, JSON.stringify(plan.prepare.spec ?? {}), { mode: 0o600 });
+  const [command, ...args] = plan.prepare.argv;
+  const childEnv = { PATH: env.PATH, HOME: '/data', FACTORY_MACHINE_INDEX: String(index), FACTORY_PREPARE_SPEC: specFile,
+    ...(env.GIT_SSH_COMMAND ? { GIT_SSH_COMMAND: env.GIT_SSH_COMMAND } : {}),
+    ...(env.SystemRoot ? { SystemRoot: env.SystemRoot } : {}) };
+  let stdout = '', stderr = '';
+  try {
+    ({ stdout, stderr } = await promisify(execFile)(command, args, { cwd: repositoryDirectory, env: childEnv, encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024, timeout: plan.prepare.timeoutMs ?? 30 * 60000 }));
+  } catch (error) {
+    writeFileSync(logFile, `${error.stdout ?? ''}\n--- stderr ---\n${error.stderr ?? ''}\n--- error ---\n${error.message}\n`, { mode: 0o600 });
+    throw new Error(`Prepare hook failed (${error.code ?? 'error'}); see ${logFile}.`);
+  }
+  writeFileSync(logFile, `${stdout}\n--- stderr ---\n${stderr}\n`, { mode: 0o600 });
+  const line = stdout.trim().split('\n').reverse().find(value => value.trim().startsWith('{'));
+  let result = null;
+  try { result = line ? JSON.parse(line) : null; } catch { result = null; }
+  const absolute = value => typeof value === 'string' && value.startsWith('/');
+  if (!Array.isArray(result?.agents) || result.agents.length !== plan.agentsPerMachine
+    || result.agents.some(agent => !absolute(agent?.cwd)
+      || agent.writableRoots !== undefined && (!Array.isArray(agent.writableRoots) || !agent.writableRoots.every(absolute))
+      || agent.instructions !== undefined && (typeof agent.instructions !== 'string' || !agent.instructions.trim()))) {
+    throw new Error('Prepare hook must print one JSON line with an absolute cwd for every agent slot.');
+  }
+  return result;
 }

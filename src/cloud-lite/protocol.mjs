@@ -26,7 +26,46 @@ export function validateCloudLitePlan(input) {
   if(plan.shutdown){
     if(!plan.collection || typeof plan.shutdown.deadlineUtc!=='string' || !Number.isFinite(Date.parse(plan.shutdown.deadlineUtc)))throw new TypeError('Automatic deadline shutdown requires evidence collection and an explicit UTC deadline.');
   }
+  if (plan.modelProvider !== undefined) validateModelProvider(plan.modelProvider);
+  if (plan.supervision !== undefined && !['autonomous', 'operator'].includes(plan.supervision)) throw new TypeError('supervision must be autonomous or operator.');
+  if (plan.sandbox !== undefined && !CODEX_SANDBOXES.includes(plan.sandbox)) throw new TypeError(`sandbox must be one of ${CODEX_SANDBOXES.join(', ')}.`);
+  for (const name of ['boardTools', 'traceDeltas']) if (plan[name] !== undefined && typeof plan[name] !== 'boolean') throw new TypeError(`${name} must be true or false.`);
+  if (plan.workflow && (plan.supervision === 'operator' || plan.boardTools === false)) throw new TypeError('Verified workflows need automatic wakes and the board tools.');
+  if (plan.monitorIntervalMs !== undefined && (!Number.isSafeInteger(plan.monitorIntervalMs) || plan.monitorIntervalMs < 1000)) throw new TypeError('monitorIntervalMs must be at least 1000.');
+  if (plan.agentInstructions !== undefined && (typeof plan.agentInstructions !== 'string' || !plan.agentInstructions.trim())) throw new TypeError('agentInstructions must be non-empty text.');
+  if (plan.prepare !== undefined) {
+    const prepare = plan.prepare;
+    if (!prepare || typeof prepare !== 'object' || !Array.isArray(prepare.argv) || !prepare.argv.length || prepare.argv.some(arg => typeof arg !== 'string' || !arg))
+      throw new TypeError('prepare needs a non-empty argv list of strings.');
+    if (prepare.spec !== undefined && (!prepare.spec || typeof prepare.spec !== 'object' || Array.isArray(prepare.spec))) throw new TypeError('prepare.spec must be an object.');
+    if (prepare.timeoutMs !== undefined && (!Number.isSafeInteger(prepare.timeoutMs) || prepare.timeoutMs < 1000)) throw new TypeError('prepare.timeoutMs must be at least 1000.');
+  }
   return plan;
+}
+export const CODEX_SANDBOXES = ['danger-full-access', 'workspace-write', 'read-only'];
+// Variables the runtime sets for the Codex process itself; a provider key must not replace them.
+const RESERVED_ENVIRONMENT = new Set(['PATH', 'HOME', 'CODEX_HOME', 'GH_TOKEN', 'GIT_TERMINAL_PROMPT']);
+const credentialFreeHttps = value => {
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash; }
+  catch { return false; }
+};
+/** A self-hosted OpenAI-compatible (Responses API) model provider for the Codex workers. */
+export function validateModelProvider(provider) {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) throw new TypeError('modelProvider must be an object.');
+  if (!/^[a-z][a-z0-9_-]{1,40}$/.test(provider.id ?? '')) throw new TypeError('modelProvider.id must be a short lowercase name.');
+  if (!/^[A-Z][A-Z0-9_]{2,60}$/.test(provider.envKey ?? '') || RESERVED_ENVIRONMENT.has(provider.envKey)) throw new TypeError('modelProvider.envKey must name a dedicated environment variable.');
+  if (!Array.isArray(provider.baseUrls) || !provider.baseUrls.length || provider.baseUrls.length > 64 || !provider.baseUrls.every(credentialFreeHttps))
+    throw new TypeError('modelProvider.baseUrls must list https URLs without credentials, query or fragment.');
+  for (const name of ['name', 'model']) if (provider[name] !== undefined && (typeof provider[name] !== 'string' || !provider[name].trim() || provider[name].length > 200)) throw new TypeError(`modelProvider.${name} must be short text.`);
+  for (const name of ['contextWindow', 'autoCompactTokenLimit', 'toolOutputTokenLimit']) {
+    if (provider[name] !== undefined && (!Number.isSafeInteger(provider[name]) || provider[name] < 1000)) throw new TypeError(`modelProvider.${name} must be a token count of at least 1000.`);
+  }
+  if (provider.contextWindow && provider.autoCompactTokenLimit && provider.autoCompactTokenLimit >= provider.contextWindow) throw new TypeError('modelProvider.autoCompactTokenLimit must be below contextWindow.');
+  for (const name of ['requestMaxRetries', 'streamMaxRetries']) {
+    if (provider[name] !== undefined && (!Number.isSafeInteger(provider[name]) || provider[name] < 0 || provider[name] > 100)) throw new TypeError(`modelProvider.${name} must be between 0 and 100.`);
+  }
+  if (provider.streamIdleTimeoutMs !== undefined && (!Number.isSafeInteger(provider.streamIdleTimeoutMs) || provider.streamIdleTimeoutMs < 1000)) throw new TypeError('modelProvider.streamIdleTimeoutMs must be at least 1000.');
+  return provider;
 }
 export function agentInventory(plan) {
   return Array.from({ length: plan.machines }, (_, machine) => Array.from({ length: plan.agentsPerMachine }, (_, agent) => ({

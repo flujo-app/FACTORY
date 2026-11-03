@@ -189,8 +189,13 @@ export class FactoryCloudLiteFleet {
     await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal']); return { app: plan.app }; });
     return this.snapshot();
   }
-  async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens } = {}) {
-    if (input.repository && !githubToken || !this.auth) throw new TypeError('Select a subscription auth broker and, for Git tasks, a GitHub credential.');
+  async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens, deployKey, providerKey } = {}) {
+    // A self-hosted model provider replaces the subscription broker; a read-only
+    // SSH deploy key can replace the GitHub token for repository access.
+    const providerMode = Boolean(input?.modelProvider);
+    if (input.repository && !githubToken && !deployKey || !providerMode && !this.auth) throw new TypeError('Select a subscription auth broker (or a model provider) and, for Git tasks, a GitHub credential or deploy key.');
+    if (providerMode && (typeof providerKey !== 'string' || providerKey.length < 8)) throw new TypeError('A model provider needs its API key.');
+    if (deployKey !== undefined && (!input.repository || typeof deployKey !== 'string' || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(deployKey))) throw new TypeError('A deploy key must be a private SSH key for the plan repository.');
     if (imageSource) image = (await (await this.upstream()).resolveWorkerImage({ source: imageSource, image, channel })).image;
     if (!image) throw new TypeError('Select an immutable worker image or its upstream FLUJO compatibility advertisement.');
     await this.prepare(input); const plan = this.state.plan;
@@ -218,9 +223,9 @@ export class FactoryCloudLiteFleet {
       bootstrapPath = join(this.directory, 'bootstrap.sh'); writeFileSync(bootstrapPath, cloudLiteBootstrap(bundleDigest), { mode: 0o600 });
     }
     const { credentials, operatorToken } = JSON.parse(readFileSync(join(this.directory, 'credentials.json')));
-    const initialAuth = this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, ...Object.values(credentials),...Object.values(evidenceTokens??{})];
+    const initialAuth = providerMode ? {} : this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, deployKey, providerKey, ...Object.values(credentials),...Object.values(evidenceTokens??{})];
     await this.stage('app.credentials', async () => {
-      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken, evidenceTokens })).toString('base64');
+      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken, evidenceTokens, deployKey, providerKey })).toString('base64');
       this.knownSecrets.push(config);
       await this.fly(['secrets', 'import', '--app', plan.app, '--stage'], { input: `FACTORY_CLOUD_BOOTSTRAP_B64=${config}\n` });
       return { staged: true };
@@ -319,7 +324,7 @@ export class FactoryCloudLiteFleet {
     // observations must never replace that controller's provisioning receipts.
     const observationPath = join(this.directory, 'observation.json');
     const snapshot = await this.request('/operator/status');
-    if (snapshot.refreshRequested) { const auth = await this.auth.refresh(); this.knownSecrets?.push(auth.accessToken); await this.request('/operator/auth', auth); }
+    if (snapshot.refreshRequested && this.auth) { const auth = await this.auth.refresh(); this.knownSecrets?.push(auth.accessToken); await this.request('/operator/auth', auth); }
     const retained = existsSync(observationPath) ? JSON.parse(readFileSync(observationPath, 'utf8')) : null;
     if (retained && retained.runId !== this.state.plan.runId) throw new Error('Observation journal belongs to another fleet.');
     const observedWatermark = Number.isSafeInteger(snapshot.traceSequence) && snapshot.traceSequence >= 0 ? snapshot.traceSequence : null;

@@ -86,3 +86,10 @@ assert.equal(updated.revision, 2);
 assert.equal(factory.getTemplate('package-smoke').goalContext, 'Deliver a synthetic case status');
 assert.equal(factory.deleteTemplate('package-smoke', { expectedRevision: updated.revision }).deleted, true);
 assert.equal(factory.getTemplate('package-smoke'), null);
+
+// Cloud lite workers accept a self-hosted model provider and operator-driven jobs.
+const providerPlan = sdk.validateCloudLitePlan({ runId: 'package-smoke', app: 'package-smoke-app', goal: 'Operator jobs',
+  modelProvider: { id: 'selfhosted', envKey: 'SELF_HOSTED_MODEL_KEY', baseUrls: ['https://model.example/v1'], contextWindow: 262144, autoCompactTokenLimit: 80000 },
+  supervision: 'operator', sandbox: 'workspace-write', boardTools: false });
+assert.equal(providerPlan.modelProvider.autoCompactTokenLimit, 80000);
+assert.throws(() => sdk.validateCloudLitePlan({ ...providerPlan, modelProvider: { ...providerPlan.modelProvider, baseUrls: ['http://model.example/v1'] } }), TypeError);
