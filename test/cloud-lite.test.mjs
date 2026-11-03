@@ -13,9 +13,10 @@ import { NativeOperatorStop } from '../src/cloud-lite/operator-stop.mjs';
 import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
 import { finalizeNativeStopCommand, isCurrentNativeTurn, nativeStopTurn } from '../src/cloud-lite/runtime.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { tempDir } from './support/temp-dir.mjs';
 
 const plan = () => validateCloudLitePlan({ runId: 'lite-test', app: 'factory-lite-test', repository: 'mario-andreschak/FLUJO', goal: 'Analyze and merge existing PRs', machines: 10, agentsPerMachine: 10 });
-const fresh = () => mkdtempSync(join(tmpdir(), 'factory-cloud-lite-'));
+const fresh = () => tempDir('factory-cloud-lite-');
 test('requested 10 by 10 topology and Fly resource selection retain exact values', () => {
   const input = plan(); const agents = agentInventory(input);
   assert.equal(agents.length, 100); assert.equal(agents.filter(x => x.role === 'orchestrator').length, 10);

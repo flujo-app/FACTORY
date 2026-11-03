@@ -7,11 +7,11 @@ import { execFileSync } from 'node:child_process';
 import { Factory, FactoryWorkflow, FactoryWorkflowSupervisor, runVerification, createWorkflowClient, createWorkflowComparison, summarizeWorkflowComparison, captureGitSource } from '../src/public-sdk.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { assertCheckoutSource } from '../src/workflows/source.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
 // Keep generated evidence for the invoking harness; cleanup is performed through FLUJO Bash MCP.
 function fixture() {
-  const parent = process.env.FACTORY_TEST_TMP ?? tmpdir(); mkdirSync(parent, { recursive: true });
-  const root = mkdtempSync(join(parent, 'factory-workflow-')), cwd = join(root,'source'); mkdirSync(cwd);
+  const root = tempDir('factory-workflow-'), cwd = join(root,'source'); mkdirSync(cwd);
   const git = (...args) => execFileSync('git', args, { cwd, encoding:'utf8', windowsHide: true }).trim();
   git('init'); git('config','user.email','workflow-test@example.invalid'); git('config','user.name','Workflow test');
   writeFileSync(join(cwd,'check.mjs'), "console.log('TAP version 13\\nok 1 - actual behavior\\n1..1\\n# tests 1\\n# pass 1\\n# fail 0\\n# cancelled 0');\n");
@@ -52,7 +52,7 @@ test('portable source rejects export omissions and substitutions and preserves l
 });
 
 test('interrupted artifact writes cannot publish or poison a content reference', () => {
-  const directory=mkdtempSync(join(process.env.FACTORY_TEST_TMP??tmpdir(),'factory-artifact-fault-'));
+  const directory=tempDir('factory-artifact-fault-');
   const module=new URL('../src/workflows/artifacts.mjs',import.meta.url).href;
   execFileSync(process.execPath,['--input-type=module','-e',`
     import fs from 'node:fs'; import assert from 'node:assert/strict';

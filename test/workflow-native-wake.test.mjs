@@ -4,8 +4,9 @@ import {mkdtempSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {NativeWorkflowWake} from '../src/cloud-lite/workflow-wake.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 const threadId='00000000-0000-0000-0000-000000000001';
-function file(){const parent=process.env.FACTORY_TEST_TMP??tmpdir();mkdirSync(parent,{recursive:true});return join(mkdtempSync(join(parent,'factory-wake-')),'wake.json');}
+function file(){return join(tempDir('factory-wake-'),'wake.json');}
 test('native wake retains a rejected start and retries only after native idle readback',async()=>{
   let starts=0;const rpc={request:async method=>{if(method==='thread/read')return {thread:{id:threadId,status:{type:'idle'},turns:[{id:'before'}]}};
     if(++starts===1)throw Object.assign(new Error('Invalid request'),{code:-32602});return {turn:{id:'after'}};}};

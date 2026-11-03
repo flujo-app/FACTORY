@@ -8,8 +8,9 @@ import { createWorkflowClient, createWorkflowComparison, launchWorkflowCompariso
 import { contentDigest } from '../src/workflows/artifacts.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { agentInventory, secret } from '../src/cloud-lite/protocol.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
-const fresh = () => mkdtempSync(join(tmpdir(), 'factory-workflow-m2-authority-'));
+const fresh = () => tempDir('factory-workflow-m2-authority-');
 
 function sourceFixture(root) {
   const cwd = join(root, 'source'); mkdirSync(cwd);

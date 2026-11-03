@@ -8,11 +8,12 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
 import { Factory, FactoryArtifactStore, FactoryWorkflow, captureGitSource, interpretVerification, reconcileVerification, runVerification, startVerification } from '../src/public-sdk.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 test('SQLite snapshot backup supports deep workspace paths', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-deep-sqlite-'));
+  const root = tempDir('factory-deep-sqlite-');
   const database = new DatabaseSync(toNamespacedPath(join(root, 'state.sqlite')));
   database.exec("CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('deep-workspace')");
   database.close();
@@ -28,7 +29,7 @@ test('SQLite snapshot backup supports deep workspace paths', async () => {
 });
 
 test('portable snapshot preserves and verifies real evidence while excluding private paths', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-portable-'));
+  const root = tempDir('factory-workflow-m1-portable-');
   mkdirSync(join(root, 'logs'), { recursive: true });
   mkdirSync(join(root, 'cache', '.npm'), { recursive: true });
   mkdirSync(join(root, 'safe-dir'), { recursive: true });
@@ -80,8 +81,8 @@ test('portable snapshot preserves and verifies real evidence while excluding pri
 });
 
 test('portable snapshot retains internal directory links and omits links escaping its root', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-links-'));
-  const external = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-outside-'));
+  const root = tempDir('factory-workflow-m1-links-');
+  const external = tempDir('factory-workflow-m1-outside-');
   mkdirSync(join(root, 'safe-dir'));
   mkdirSync(join(external, 'outside-dir'));
   writeFileSync(join(root, 'safe-dir', 'inside.txt'), 'inside root');
@@ -128,7 +129,7 @@ test('portable snapshot retains internal directory links and omits links escapin
 });
 
 test('public FactoryArtifactStore preserves content identity across relocation and rejects corruption and invalid ranges', t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-store-'));
+  const root = tempDir('factory-workflow-m1-store-');
   const directory = join(root, 'store');
   const moved = join(root, 'relocated-store');
   const store = new FactoryArtifactStore(directory);
@@ -208,7 +209,7 @@ function verifiedFixture(root, { failingGate = false, environmentCanary = false,
 }
 
 test('candidate submission carries the captured archive and verifier binds execution to it', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-source-'));
+  const root = tempDir('factory-workflow-m1-source-');
   const f = verifiedFixture(root);
   t.after(() => f.workflow.close());
   assert.equal(f.candidate.source.commit, f.source.commit);
@@ -236,7 +237,7 @@ test('node-tap adapter rejects an exit-zero run with only skipped tests', () => 
 });
 
 test('verification refuses a submitted archive that differs from the gate source', t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-mismatch-'));
+  const root = tempDir('factory-workflow-m1-mismatch-');
   const f = verifiedFixture(root, { mismatchArchive: true });
   t.after(() => f.workflow.close());
   assert.throws(() => startVerification(f.workflow, { runId: 'm1-source-mismatch', candidateId: f.candidate.id,
@@ -244,7 +245,7 @@ test('verification refuses a submitted archive that differs from the gate source
 });
 
 test('ignored host overlay absent from captured archive cannot make a gate pass', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-ignored-'));
+  const root = tempDir('factory-workflow-m1-ignored-');
   const f = verifiedFixture(root, { ignoredGate: true });
   t.after(() => f.workflow.close());
   writeFileSync(join(f.cwd, '.git', 'info', 'exclude'), 'check.mjs\n');
@@ -258,7 +259,7 @@ test('ignored host overlay absent from captured archive cannot make a gate pass'
 });
 
 test('empty gate sets require an explicit review-only policy', t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-review-only-'));
+  const root = tempDir('factory-workflow-m1-review-only-');
   const f = verifiedFixture(root);
   t.after(() => f.workflow.close());
   const input = { taskId: 'review-only-m1', projectId: 'project-m1', branch: 'codex/review-only', problem: 'Review evidence',
@@ -271,7 +272,7 @@ test('runner drops inherited canary environment and diagnostics retain no secret
   const secret = Buffer.from('synthetic bootstrap secret').toString('base64');
   const prior = process.env.FACTORY_M1_CANARY;
   process.env.FACTORY_M1_CANARY = secret;
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-env-'));
+  const root = tempDir('factory-workflow-m1-env-');
   const f = verifiedFixture(root, { environmentCanary: true });
   t.after(() => { f.workflow.close(); if (prior === undefined) delete process.env.FACTORY_M1_CANARY; else process.env.FACTORY_M1_CANARY = prior; });
   const result = await runVerification(f.workflow, { runId: 'm1-env-isolation', candidateId: f.candidate.id, gateId: f.gate.id, cwd: f.cwd });
@@ -282,7 +283,7 @@ test('runner drops inherited canary environment and diagnostics retain no secret
 });
 
 test('runner receipt replay rejects a fabricated pass for an actually failing candidate', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'factory-workflow-m1-receipt-'));
+  const root = tempDir('factory-workflow-m1-receipt-');
   const f = verifiedFixture(root, { failingGate: true });
   t.after(() => f.workflow.close());
   const runId = 'm1-real-run';
