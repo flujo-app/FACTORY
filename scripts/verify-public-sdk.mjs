@@ -98,3 +98,10 @@ const endpoint = { ...providerPlan.modelProvider, model: 'served-model', apis: [
 assert.deepEqual(sdk.providerPrograms(endpoint), ['codex', 'claude']);
 assert.match(sdk.codexProviderConfig(endpoint), /wire_api = "responses"/);
 assert.equal(sdk.claudeProviderEnvironment(endpoint, { key: 'package-smoke-key' }).ANTHROPIC_BASE_URL, 'https://model.example');
+// Self-hosted model serving ships its Python sources and profiles, but not its tests.
+assert.deepEqual(sdk.selfHostedProfiles().map(profile => profile.id), ['nemotron', 'qwen']);
+for (const file of ['app.py', 'settings.py', 'discovery.py', 'deploy.py', 'prices.json', 'profiles/qwen.json', 'profiles/nemotron.json']) {
+  assert.equal(existsSync(join(sdk.SELFHOST_MODAL_DIR, file)), true, `${file} is missing`);
+}
+assert.equal(existsSync(join(sdk.SELFHOST_MODAL_DIR, 'test_settings.py')), false);
+assert.equal(typeof sdk.ModalSelfHostedModel, 'function');
