@@ -7,8 +7,9 @@ import { validateCloudLitePlan, secret } from '../src/cloud-lite/protocol.mjs';
 import { cloudLiteBootstrap } from '../src/cloud-lite/bootstrap.mjs';
 import { FactoryCloudLiteFleet } from '../src/cloud-lite/fleet.mjs';
 import { codexEnvironment, isStreamingDelta, nativeAgentConfig, providerConfigToml, runPrepareHook } from '../src/cloud-lite/runtime.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
-const fresh = () => mkdtempSync(join(tmpdir(), 'factory-cloud-lite-provider-'));
+const fresh = () => tempDir('factory-cloud-lite-provider-');
 // A self-hosted model with its real context window and an earlier compaction point.
 const provider = () => ({ id: 'selfhosted', name: 'Self-hosted model', envKey: 'SELF_HOSTED_MODEL_KEY', model: 'served-model',
   baseUrls: ['https://model-a.example.test/v1', 'https://model-b.example.test/v1'], contextWindow: 262144, autoCompactTokenLimit: 80000 });

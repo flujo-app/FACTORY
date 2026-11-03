@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { claudeProviderEnvironment, codexProviderConfig, codexProviderOverrides, liteWorkerCommand, providerPrograms, validateModelProvider } from '../src/public-sdk.mjs';
 import { validateCloudLitePlan, secret } from '../src/cloud-lite/protocol.mjs';
 import { providerConfigToml } from '../src/cloud-lite/runtime.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
 // One description of a self-hosted vLLM endpoint that serves every wire API.
 const endpoint = (extra = {}) => ({ id: 'selfhosted', name: 'Self-hosted model', model: 'served-model', envKey: 'SELF_HOSTED_MODEL_KEY',
@@ -74,7 +75,7 @@ test('local lite workers launch Codex and Claude Code against a self-hosted mode
 });
 
 test('factory-lite reads an endpoint description and refuses to start without its key', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'factory-lite-provider-'));
+  const dir = tempDir('factory-lite-provider-');
   const file = join(dir, 'endpoint.json'); writeFileSync(file, JSON.stringify(endpoint()));
   const cli = fileURLToPath(new URL('../bin/factory-lite.mjs', import.meta.url));
   const env = { ...process.env }; delete env.SELF_HOSTED_MODEL_KEY;

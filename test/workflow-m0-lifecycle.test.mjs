@@ -8,13 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Factory, FactoryWorkflow, captureGitSource, contentDigest, runVerification } from '../src/public-sdk.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
 const mcpServer = fileURLToPath(new URL('../bin/factory-mcp.mjs', import.meta.url));
 
 function fixture({ ignoredGateInput = false } = {}) {
-  const parent = resolve(process.env.FACTORY_TEST_TMP ?? tmpdir());
-  mkdirSync(parent, { recursive: true });
-  const root = mkdtempSync(join(parent, 'factory-workflow-m0-'));
+  const root = tempDir('factory-workflow-m0-');
   const cwd = join(root, 'source'); mkdirSync(cwd);
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
   git('init'); git('config', 'user.email', 'workflow-test@example.invalid'); git('config', 'user.name', 'Workflow test');

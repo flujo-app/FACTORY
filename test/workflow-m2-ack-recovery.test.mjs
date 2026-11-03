@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { CloudLiteTrace } from '../src/cloud-lite/trace.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { validateCloudLitePlan, agentInventory, secret } from '../src/cloud-lite/protocol.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
-const fresh = () => mkdtempSync(join(tmpdir(), 'factory-workflow-m2-ack-'));
+const fresh = () => tempDir('factory-workflow-m2-ack-');
 const event = seq => ({ seq, kind: `durable-${seq}`, body: { payload: `event-${seq}` }, observedAt: '2026-10-15T00:00:00.000Z' });
 
 test('recovery does not trust a local ack that is ahead of the coordinator', async () => {

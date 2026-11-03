@@ -14,9 +14,10 @@ import { runVerification } from '../src/workflows/verifier.mjs';
 import { ContinuousEvidenceCollector, createEvidenceClient, startEvidenceServer } from '../src/evidence.mjs';
 import { FactoryCloudLiteFleet } from '../src/cloud-lite/fleet.mjs';
 import { validateCloudLitePlan } from '../src/cloud-lite/protocol.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
 // The invoking release harness owns cleanup through FLUJO Bash MCP; retain failure evidence.
-function fixture(){const parent=process.env.FACTORY_TEST_TMP??tmpdir();mkdirSync(parent,{recursive:true});const root=mkdtempSync(join(parent,'factory-generic-'));const source=join(root,'source');mkdirSync(source);return{root,source};}
+function fixture(){const root=tempDir('factory-generic-');const source=join(root,'source');mkdirSync(source);return{root,source};}
 function workflowFixture(){
   const f=fixture(),database=join(f.root,'control.sqlite'),control=new FactoryControl(database);
   control.initializeSwarm({mission:'Research a question',budgetCents:0,maxCells:6,maxDepth:2},[

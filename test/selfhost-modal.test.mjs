@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ModalSelfHostedModel, selfHostedProfiles, codexProviderConfig, claudeProviderEnvironment, validateCloudLitePlan } from '../src/public-sdk.mjs';
+import { tempDir } from './support/temp-dir.mjs';
 
-const fresh = () => mkdtempSync(join(tmpdir(), 'factory-selfhost-'));
+const fresh = () => tempDir('factory-selfhost-');
 const read = (path) => readFileSync(path, 'utf8');
 
 // A fake Modal account: the deploy script, the Modal CLI and the served model.
