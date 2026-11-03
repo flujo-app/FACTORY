@@ -11,6 +11,7 @@ import { CloudLiteTrace } from './trace.mjs';
 import { NativeOperatorStop } from './operator-stop.mjs';
 import { NativeWorkflowWake } from './workflow-wake.mjs';
 import { hash } from './protocol.mjs';
+import { codexProviderConfig } from '../model-provider.mjs';
 
 const threadStatuses = new Set(['active','idle','archived','notLoaded','systemError','notFound']);
 const turnStatuses = new Set(['inProgress','completed','interrupted','failed']);
@@ -401,47 +402,9 @@ export function nativeAgentConfig({ plan, slot, directory, board }) {
   return { sandbox, config };
 }
 
-const tomlString = value => JSON.stringify(String(value));
-
-/** Codex configuration for a self-hosted OpenAI-compatible (Responses API) model provider. */
+/** Codex configuration for the plan's self-hosted provider on machine `index`. */
 export function providerConfigToml(plan, index) {
-  const p = plan.modelProvider;
-  return [
-    `model = ${tomlString(p.model ?? plan.model)}`,
-    `model_provider = ${tomlString(p.id)}`,
-    `model_reasoning_effort = ${tomlString(plan.reasoningEffort)}`,
-    ...(p.contextWindow ? [`model_context_window = ${Number(p.contextWindow)}`] : []),
-    ...(p.autoCompactTokenLimit ? [`model_auto_compact_token_limit = ${Number(p.autoCompactTokenLimit)}`] : []),
-    ...(p.toolOutputTokenLimit ? [`tool_output_token_limit = ${Number(p.toolOutputTokenLimit)}`] : []),
-    'web_search = "disabled"',
-    'check_for_update_on_startup = false',
-    'cli_auth_credentials_store = "ephemeral"',
-    '',
-    '[features]',
-    'multi_agent = false',
-    'goals = false',
-    'apps = false',
-    'plugins = false',
-    'memories = false',
-    '',
-    '[skills]',
-    'include_instructions = false',
-    '',
-    // Agents' shell commands get only the basic variables, never the provider key.
-    '[shell_environment_policy]',
-    'inherit = "core"',
-    '',
-    `[model_providers.${p.id}]`,
-    `name = ${tomlString(p.name ?? p.id)}`,
-    // Machines are spread over the endpoints, so each keeps its prompt cache on one server.
-    `base_url = ${tomlString(p.baseUrls[index % p.baseUrls.length])}`,
-    `env_key = ${tomlString(p.envKey)}`,
-    'wire_api = "responses"',
-    `request_max_retries = ${Number(p.requestMaxRetries ?? 8)}`,
-    `stream_max_retries = ${Number(p.streamMaxRetries ?? 10)}`,
-    `stream_idle_timeout_ms = ${Number(p.streamIdleTimeoutMs ?? 900000)}`,
-    '',
-  ].join('\n');
+  return codexProviderConfig(plan.modelProvider, { index, model: plan.model, reasoningEffort: plan.reasoningEffort });
 }
 
 /**
