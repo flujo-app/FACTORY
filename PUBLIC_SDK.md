@@ -1,11 +1,18 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.3.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.3.0):
+Version 0.4.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.4.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.3.0/flujo-factory-0.3.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.4.0/flujo-factory-0.4.0.tgz
 ```
+
+0.4.0 lets cloud lite workers run on a self-hosted OpenAI-compatible model,
+clone with a read-only deploy key, prepare agent folders, take operator-driven
+jobs in a narrower sandbox, and record far less trace volume. See
+[Self-hosted models and operator-driven jobs](#self-hosted-models-and-operator-driven-jobs).
+All new plan settings are optional; existing plans behave as before, except
+that streaming deltas are no longer traced unless `traceDeltas` is set.
 
 `FactoryControl` and `executeEffect` are public exports for integrations that
 retain FACTORY's durable admission while using an existing fleet executor.
@@ -242,6 +249,93 @@ updates the coordinator when workers request it. Run `observe()` continuously
 while workers execute; a disconnected host can prevent authentication renewal.
 The runtime does not switch to an API key. Credentials never belong in an image,
 public journal, source commit or trace. Store the fleet directory privately.
+
+#### Self-hosted models and operator-driven jobs
+
+Lite workers can run on a self-hosted, OpenAI-compatible model instead of the
+subscription login. Codex reaches it through the Responses API
+(`/v1/responses`), which vLLM serves for every model. Add `modelProvider` to the
+plan and pass its key as `providerKey`; no `auth` broker is needed. A read-only
+GitHub deploy key can replace the GitHub token:
+
+```js
+const fleet = new FactoryCloudLiteFleet({ directory: '/absolute/private/fleet-run',
+  flujoCloudPath: '/absolute/installed/flujo-cloud' });
+await fleet.deploy({
+  runId: 'my-selfhosted-run', app: 'my-selfhosted-app', goal: ownerGoal,
+  repository: 'owner/project', repositoryRevision: pinnedCommitSha,
+  machines: 10, agentsPerMachine: 19,
+  model: 'nemotron-3.5-super-vl', subagentModel: 'nemotron-3.5-super-vl', reasoningEffort: 'medium',
+  modelProvider: {
+    id: 'selfhosted', name: 'Self-hosted model', envKey: 'SELF_HOSTED_MODEL_KEY',
+    baseUrls: ['https://model-a.example/v1', 'https://model-b.example/v1'],
+    contextWindow: 262144, autoCompactTokenLimit: 80000,
+  },
+  supervision: 'operator', sandbox: 'workspace-write', boardTools: false, monitorIntervalMs: 4000,
+  agentInstructions: 'Wait for operator jobs and work only in your folder.',
+  prepare: { argv: ['node', 'tools/prepare-agents.mjs'], spec: { jobsPerMachine: 18 } },
+}, { image: immutableWorkerImage, bundlePath: '/absolute/private/flujo-factory.tgz',
+  providerKey: privateEndpointKey, deployKey: readOnlyDeployKey });
+await fleet.command('m0-a1', { id: 'job-1', action: 'message', message: 'First job ...' });
+```
+
+- **`modelProvider`**: `id`, `envKey` (the variable that carries the key) and
+  `https` `baseUrls` without credentials are required; `name`, `model`,
+  `contextWindow`, `autoCompactTokenLimit`, `toolOutputTokenLimit`,
+  `requestMaxRetries`, `streamMaxRetries` and `streamIdleTimeoutMs` are optional.
+  Each Codex gets a `config.toml` with the provider, the model's real context
+  window and its compaction point; web search, multi-agent, apps, plugins, goals,
+  memories and skill instructions are off, and agents' shell commands inherit only
+  the core environment. The key is a staged Fly app secret placed only in the
+  Codex process environment; agent commands, journals and traces do not get it.
+  Machine *i* uses `baseUrls[i % n]`, so each machine keeps its prompt cache on one
+  server. Codex offers no `apply_patch` tool to an unknown model, so ask agents to
+  edit files with shell commands.
+- **`supervision: 'operator'`**: agents start idle. There is no automatic first
+  turn, follow-up or wake; every turn comes from a durable
+  `fleet.command(agent, { id, action: 'message' | 'stop' })`. The default,
+  `'autonomous'`, keeps the existing goal-driven behavior.
+- **`sandbox`**: Codex's sandbox for agent commands. The default stays
+  `danger-full-access`. `workspace-write` lets commands write only the agent's
+  folder plus the prepare hook's `writableRoots`, with no network; `read-only` is
+  also accepted.
+- **`boardTools: false`** removes the FACTORY board MCP server from the sessions.
+  The default instructions refer to board tools, so also set `agentInstructions`
+  or per-agent `instructions` from the prepare hook. Verified workflows need the
+  board tools and automatic wakes, so they refuse either setting.
+- **`prepare`** runs `argv` once per machine after the pinned clone, in the
+  repository folder, with `FACTORY_MACHINE_INDEX` and `FACTORY_PREPARE_SPEC` (a
+  JSON file holding `spec`). It prints one JSON line,
+  `{ "agents": [{ "cwd", "writableRoots"?, "instructions"? }] }`, with one entry per
+  agent slot and absolute paths. The result is kept on the volume, so a restarted
+  machine reuses the prepared folders without cloning again; the hook may remove
+  files agents must not read. Output goes to `/data/factory/prepare.log`. The
+  hook must be idempotent and finish within `timeoutMs` (default 30 minutes).
+- **`deployKey`** clones over SSH with GitHub's published host key pinned. No `gh`
+  login happens and agents receive no Git credential. Use a read-only deploy key;
+  images without the bundle bootstrap need `openssh-client`.
+- **Traces**: streaming deltas (`*Delta`, `*/delta`, rate-limit updates), the bulk
+  of all notifications, are no longer recorded; `item/completed` carries the same
+  content. `traceDeltas: true` records them again. `monitorIntervalMs` (default
+  15000) sets how often each machine reads operator commands.
+
+Example models (vLLM 0.32 with `--enable-auto-tool-choice`, `--enable-prefix-caching`):
+
+| Model | GPU | Parsers | `contextWindow` | `autoCompactTokenLimit` |
+|---|---|---|---|---|
+| Qwen3.8-27B FP8 | 1 × H100 80 GB | `--tool-call-parser qwen3_xml --reasoning-parser qwen3` | 262144 | 80000–100000 |
+| Nemotron 3.5 Super VL 120B-A12B NVFP4 | 1 × B300 | `--tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 --trust-remote-code --mamba-cache-mode align` | 262144 | 80000 |
+
+Measured with operator-driven coding jobs: one H100 with the Qwen model kept
+about 8 long conversations (histories averaging 55k tokens) at full speed; beyond that its
+cache could not hold every history and prompt-cache hits fell from about 90% to
+15%. One B300 with the Nemotron model carried a 190-agent run (10 machines × 19
+sessions): about 170 requests at once at the peak with none queued, GPU cache at
+most 37% full, 84% of 464 million input tokens served from the prompt cache, and
+12.5 million output tokens in 2 h 18 min for about $20 of GPU time. Its
+multi-token prediction (`--speculative-config '{"method":"mtp","num_speculative_tokens":1}'`)
+makes each agent faster up to about 128 agents; beyond that run without it.
+Compacting at 80000 tokens kept agent contexts between 30k and 90k.
 
 The cloud MCP adds identity/status, work claims and progress, authenticated
 messages/inbox, checkpoints, and supervisor Windows/Linux validation requests.
