@@ -1,0 +1,17 @@
+{
+  "checkedAt": "2026-11-01",
+  "source": "https://modal.com/pricing",
+  "currency": "USD",
+  "note": "Modal list prices per second. Estimates only: storage, egress, image builds, credits and invoice adjustments are not included.",
+  "gpuPerSecond": {
+    "L40S": 0.000542,
+    "A100-80GB": 0.000694,
+    "RTX-PRO-6000": 0.000842,
+    "H100": 0.001097,
+    "H200": 0.001261,
+    "B200": 0.001736,
+    "B300": 0.001972
+  },
+  "cpuCorePerSecond": 0.0000131,
+  "memoryGibPerSecond": 0.00000222
+}

@@ -1,18 +1,21 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.4.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.4.0):
+Version 0.5.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.5.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.4.0/flujo-factory-0.4.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.5.0/flujo-factory-0.5.0.tgz
 ```
 
-0.4.0 lets cloud lite workers run on a self-hosted OpenAI-compatible model,
-clone with a read-only deploy key, prepare agent folders, take operator-driven
-jobs in a narrower sandbox, and record far less trace volume. See
-[Self-hosted models and operator-driven jobs](#self-hosted-models-and-operator-driven-jobs).
-All new plan settings are optional; existing plans behave as before, except
-that streaming deltas are no longer traced unless `traceDeltas` is set.
+FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
+`ModalSelfHostedModel` and `factory-selfhost` deploy, verify, stop and retire a vLLM endpoint
+with Qwen3.8-27B (H100) or Nemotron 3.5 Super (B300) profiles; see
+[selfhost/README.md](selfhost/README.md). Its endpoint description is a model provider that
+cloud lite workers (Codex) and local lite workers (Codex or Claude Code) use directly. See
+[Self-hosted models and operator-driven jobs](#self-hosted-models-and-operator-driven-jobs)
+for the provider, read-only deploy keys, prepare hooks, operator-driven jobs and quieter
+traces added in 0.4.0. All of it is optional; existing plans behave as before, except that
+streaming deltas are no longer traced unless `traceDeltas` is set.
 
 `FactoryControl` and `executeEffect` are public exports for integrations that
 retain FACTORY's durable admission while using an existing fleet executor.
@@ -258,6 +261,10 @@ The runtime does not switch to an API key. Credentials never belong in an image,
 public journal, source commit or trace. Store the fleet directory privately.
 
 #### Self-hosted models and operator-driven jobs
+
+To run the model yourself, `ModalSelfHostedModel` (CLI `factory-selfhost`) deploys a
+bundled vLLM profile on your Modal account and returns this description from `endpoint()`,
+with its key from `key()`; see [selfhost/README.md](selfhost/README.md).
 
 Lite workers can run on a self-hosted, OpenAI-compatible model instead of the
 subscription login. Codex reaches it through the Responses API

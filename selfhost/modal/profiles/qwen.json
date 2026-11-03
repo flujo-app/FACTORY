@@ -1,0 +1,23 @@
+{
+  "comment": "Qwen3.8-27B FP8 on one H100 80 GB, vLLM 0.30.0. Native 262k context (no YaRN stretching). Thinking on: the model card evaluates agentic coding with it. One H100 keeps about 8 long agent conversations at full speed; use more replicas for more agents.",
+  "label": "Qwen3.8-27B FP8 on H100",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+  "served_name": "qwen3.8-27b",
+  "weights_gib": 30.9,
+  "gpu": "H100",
+  "cpu": 8,
+  "memory_mib": 65536,
+  "max_model_len": 262144,
+  "kv_bytes_per_token": 65536,
+  "gpu_memory_utilization": 0.92,
+  "max_num_seqs": 48,
+  "enable_thinking": true,
+  "tool_call_parser": "qwen3_xml",
+  "reasoning_parser": "qwen3",
+  "vllm_version": "0.30.0",
+  "input_modalities": ["text", "image"],
+  "compact_tokens": 80000,
+  "efforts": ["low", "medium", "xhigh"],
+  "scaledown_minutes": 10
+}
