@@ -191,6 +191,13 @@ those process options. The standalone `startLiteWorker({provider,database,...})`
 and `liteWorkerCommand({provider,database,...})` are also exported; the latter
 only builds the process specification.
 
+Local lite workers can also run on a self-hosted model. Pass the same provider
+description the cloud plan uses (see
+[Self-hosted models](#self-hosted-models-and-operator-driven-jobs)) and its key:
+`startLiteWorker({ provider: 'claude', modelProvider, providerKey })`. From the
+command line, `factory-lite claude board.sqlite --model-provider endpoint.json`
+reads the key from the variable the file names in `envKey`.
+
 ## FLUJO worker dispatch
 
 ### Cloud Codex lite workers (development)
@@ -279,11 +286,17 @@ await fleet.deploy({
 await fleet.command('m0-a1', { id: 'job-1', action: 'message', message: 'First job ...' });
 ```
 
-- **`modelProvider`**: `id`, `envKey` (the variable that carries the key) and
-  `https` `baseUrls` without credentials are required; `name`, `model`,
-  `contextWindow`, `autoCompactTokenLimit`, `toolOutputTokenLimit`,
-  `requestMaxRetries`, `streamMaxRetries` and `streamIdleTimeoutMs` are optional.
-  Each Codex gets a `config.toml` with the provider, the model's real context
+- **`modelProvider`** is one description of the endpoint that each worker program
+  maps to its own settings. `id`, `envKey` (the variable that carries the key) and
+  `https` `baseUrls` (OpenAI-style, ending in `/v1`) without credentials are
+  required. `apis` lists the wire APIs the server offers: `responses` (Codex),
+  `anthropic` (Claude Code, `/v1/messages`) and `chat`. vLLM serves all three; the
+  default is `['responses']`. `name`, `model`, `contextWindow`,
+  `autoCompactTokenLimit`, `toolOutputTokenLimit`, `requestMaxRetries`,
+  `streamMaxRetries`, `streamIdleTimeoutMs` and `requestTimeoutMs` are optional.
+  `codexProviderConfig`, `codexProviderOverrides` and `claudeProviderEnvironment`
+  are exported mappings; `providerPrograms(provider)` says which programs can use
+  it. Cloud lite workers run Codex. Each Codex gets a `config.toml` with the provider, the model's real context
   window and its compaction point; web search, multi-agent, apps, plugins, goals,
   memories and skill instructions are off, and agents' shell commands inherit only
   the core environment. The key is a staged Fly app secret placed only in the
@@ -291,6 +304,11 @@ await fleet.command('m0-a1', { id: 'job-1', action: 'message', message: 'First j
   Machine *i* uses `baseUrls[i % n]`, so each machine keeps its prompt cache on one
   server. Codex offers no `apply_patch` tool to an unknown model, so ask agents to
   edit files with shell commands.
+  Claude Code gets the server root as `ANTHROPIC_BASE_URL`, the key as a bearer
+  token, every model alias on the served model, the real context window and
+  compaction point, and no telemetry or per-turn token reminder. That reminder
+  would be an extra system message that templates move to the front of the
+  prompt, which defeats the server's prompt cache.
 - **`supervision: 'operator'`**: agents start idle. There is no automatic first
   turn, follow-up or wake; every turn comes from a durable
   `fleet.command(agent, { id, action: 'message' | 'stop' })`. The default,

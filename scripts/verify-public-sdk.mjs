@@ -93,3 +93,8 @@ const providerPlan = sdk.validateCloudLitePlan({ runId: 'package-smoke', app: 'p
   supervision: 'operator', sandbox: 'workspace-write', boardTools: false });
 assert.equal(providerPlan.modelProvider.autoCompactTokenLimit, 80000);
 assert.throws(() => sdk.validateCloudLitePlan({ ...providerPlan, modelProvider: { ...providerPlan.modelProvider, baseUrls: ['http://model.example/v1'] } }), TypeError);
+// One provider description maps to Codex and Claude Code.
+const endpoint = { ...providerPlan.modelProvider, model: 'served-model', apis: ['responses', 'anthropic'] };
+assert.deepEqual(sdk.providerPrograms(endpoint), ['codex', 'claude']);
+assert.match(sdk.codexProviderConfig(endpoint), /wire_api = "responses"/);
+assert.equal(sdk.claudeProviderEnvironment(endpoint, { key: 'package-smoke-key' }).ANTHROPIC_BASE_URL, 'https://model.example');
