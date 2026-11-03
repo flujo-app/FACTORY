@@ -156,6 +156,23 @@ test('cleanup refuses a changed Modal workspace and cancellation before remote w
   assert.equal(refused.model.status().phase, 'retired');
 });
 
+test('an owned app from an earlier version can be adopted for verified retirement only', async () => {
+  const f = fixture();
+  const appName = 'factory-qwen-00112233aabb';
+  f.apps.set(appName, 'deployed'); f.secrets.add(`${appName}-auth`); f.volumes.add(`${appName}-hf-cache`);
+  assert.throws(() => f.model.adopt({ appName: 'other-qwen-00112233aabb', profileName: 'fixture', workspaceName: 'fixture-workspace' }), /owner prefix/);
+  assert.throws(() => f.model.adopt({ appName, profileName: 'fixture' }), /profile and workspace/);
+  assert.throws(() => f.model.adopt({ appName, profileName: 'fixture', workspaceName: 'fixture-workspace', endpoints: ['https://elsewhere.example.test'] }), /owned Modal origins/);
+  const adopted = f.model.adopt({ appName, profileName: 'fixture', workspaceName: 'fixture-workspace', endpoints: [`https://fixture--${appName}-inference.modal.run`] });
+  assert.equal(adopted.phase, 'unknown');
+  assert.throws(() => f.model.endpoint(), /not verified/);
+  await assert.rejects(f.model.deploy(), /retire it to reconcile/);
+  assert.throws(() => f.model.adopt({ appName, profileName: 'fixture', workspaceName: 'fixture-workspace' }), /already journaled/);
+  const retired = await f.model.retire();
+  assert.equal(retired.phase, 'retired'); assert.equal(retired.cleanupVerified, true);
+  assert.equal(f.apps.get(appName), 'stopped'); assert.equal(f.secrets.size, 0); assert.equal(f.volumes.size, 0);
+});
+
 test('factory-selfhost lists profiles and never prints the key', () => {
   const cli = fileURLToPath(new URL('../bin/factory-selfhost.mjs', import.meta.url));
   const listed = spawnSync(process.execPath, [cli, 'profiles'], { encoding: 'utf8' });

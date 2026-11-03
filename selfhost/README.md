@@ -86,6 +86,8 @@ are followed on the same origin only, so the POST is never repeated and the key 
 another host. Any uncertain remote outcome leaves the model `unknown`. It is never retried
 automatically; `retire` reconciles it. `stop` and `retire` refuse a different Modal workspace,
 and `retire` checks that the secret and both volumes are gone.
+`adopt({ appName, profileName, workspaceName })` takes over an owned app that an earlier
+version of your app created, in the `unknown` phase, so `retire` can clean it up.
 
 Overrides are explicit settings fields, for example `{ replicas: 2 }`, `{ variant: 'fast' }`,
 `{ enable_thinking: false }` or `{ scaledown_minutes: 2 }`. Unknown fields, unpinned images and

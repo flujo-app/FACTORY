@@ -366,6 +366,25 @@ export class ModalSelfHostedModel {
     } finally { this.busy = false; }
   }
 
+  /**
+   * Take over an owned app that another version of the caller created, so it can be retired.
+   * The model starts as unknown: it is never trusted for work without a fresh deployment.
+   */
+  adopt({ appName, profileName, workspaceName, endpoints = [] } = {}) {
+    if (this.busy) throw notApplied('The self-hosted model is already changing.');
+    if (this.record && this.record.phase !== 'retired') throw notApplied('An owned model is already journaled here.');
+    if (!OWNED_NAME.test(appName ?? '') || !appName.startsWith(`${this.namePrefix}-`)) throw notApplied('Only an app with this owner prefix can be adopted.');
+    if (typeof profileName !== 'string' || !profileName || typeof workspaceName !== 'string' || !workspaceName) {
+      throw notApplied('Adopting needs the original Modal profile and workspace.');
+    }
+    const origins = Array.isArray(endpoints) ? endpoints.map(modalEndpointOrigin) : [null];
+    if (origins.some(origin => !origin)) throw notApplied('Adopted endpoints must be owned Modal origins.');
+    const at = new Date(this.clock()).toISOString();
+    this.#save({ version: 1, attemptId: randomUUID(), appName, profile: appName.split('-')[1], overrides: {}, phase: 'unknown',
+      profileName, workspaceName, endpoints: origins, createdAt: at, adoptedAt: at });
+    return this.status();
+  }
+
   /** Stop and delete every owned resource (app, secret, both volumes, local key) and check it. */
   async retire({ signal } = {}) {
     if (this.busy) throw notApplied('The self-hosted model is already changing.');
