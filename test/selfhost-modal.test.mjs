@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ModalSelfHostedModel, selfHostedProfiles, codexProviderConfig, claudeProviderEnvironment, validateCloudLitePlan } from '../src/public-sdk.mjs';
@@ -184,4 +183,19 @@ test('factory-selfhost lists profiles and never prints the key', () => {
   const key = spawnSync(process.execPath, [cli, 'key', '--dir', dir], { encoding: 'utf8' });
   assert.equal(key.status, 1); assert.match(key.stderr, /never printed/);
   assert.match(spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout, /retire/);
+});
+
+test('a deployment stages the profiles next to the Python sources that read them', async () => {
+  const { model } = fixture();
+  await model.deploy({ profile: 'qwen' });
+  const staged = join(model.directory, 'source', 'profiles');
+  for (const name of ['qwen.json', 'nemotron.json']) assert.equal(existsSync(join(staged, name)), true, name);
+  assert.equal(JSON.parse(read(join(staged, 'qwen.json'))).served_name, selfHostedProfiles().find(profile => profile.id === 'qwen').model);
+});
+
+test('helper runs define no serving function, which would need the secret the deployment creates', () => {
+  const source = read(fileURLToPath(new URL('../selfhost/modal/app.py', import.meta.url)));
+  const guard = source.indexOf('if not HELPERS:');
+  assert.ok(guard > 0);
+  for (const name of ['GPU_FUNCTION = dict(', 'def serve():', 'def serve_b():', 'def serve_d():']) assert.ok(source.indexOf(name) > guard, name);
 });

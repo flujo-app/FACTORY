@@ -84,7 +84,7 @@ export class CloudLiteBoard {
       threadStatus: receipt.thread_status, ...(receipt.turn_status ? { turnStatus: receipt.turn_status } : {}), eventSequence: receipt.event_seq, updated: receipt.updated } : null;
   }
   registerSession(agent, session) {
-    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session ?? '')) throw new TypeError('Provide the real native Codex thread identity.');
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session ?? '')) throw new TypeError('Provide the real native thread identity.');
     const previous = this.db.prepare('SELECT session FROM cloud_lite_agents WHERE id=?').get(agent);
     if (previous && previous.session !== session) {
       this.db.prepare('DELETE FROM cloud_lite_native_runtime WHERE agent_id=?').run(agent);

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, existsSync, realpathSync, symlinkSync, renameSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, lstatSync, existsSync, realpathSync, symlinkSync, renameSync } from 'node:fs';
 import { join, relative, resolve, toNamespacedPath } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';

@@ -27,6 +27,7 @@ for (const name of [
   'FactoryArtifactStore',
   'FactoryWorkflowSupervisor',
   'captureGitSource',
+  'ClaudeSubscriptionBroker',
   'captureWorkspace',
   'submitWorkspaceCandidate',
   'ContinuousEvidenceCollector',

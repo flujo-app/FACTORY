@@ -99,7 +99,7 @@ export { createObservatoryClient } from './observatory-client.mjs';
 export { liteWorkerCommand, startLiteWorker } from './lite-worker.mjs';
 export { ModalSelfHostedModel, selfHostedProfiles, probeSelfHostedModel, modalResult, readBoundedJson, modalEndpointOrigin, runCommand, SELFHOST_MODAL_DIR, SELFHOSTED_KEY_ENV } from './selfhost/modal.mjs';
 export { MODEL_PROVIDER_APIS, WORKER_PROGRAM_APIS, validateModelProvider, providerPrograms, codexProviderConfig, codexProviderOverrides, claudeProviderEnvironment } from './model-provider.mjs';
-export { FactoryCloudLiteFleet, CodexSubscriptionBroker } from './cloud-lite/fleet.mjs';
+export { FactoryCloudLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBroker } from './cloud-lite/fleet.mjs';
 export { validateCloudLitePlan, agentInventory, machineConfig as cloudLiteMachineConfig } from './cloud-lite/protocol.mjs';
 export { cloudLiteBootstrap } from './cloud-lite/bootstrap.mjs';
 export * from './workflows/index.mjs';
