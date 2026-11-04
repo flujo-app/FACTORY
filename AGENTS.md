@@ -12,7 +12,8 @@ For FACTORY, match `.github/workflows/public-sdk.yml` on both platforms: `npm
 ci`, production dependency audit, the focused public SDK tests, a fresh install
 of `npm pack` output, swarm creation, CLI help, and installed MCP stdio smoke.
 Run the supported Node 22.17 and Node 24 lines. On this Windows host, use an
-exact supported Node binary; for Linux, a disposable local Docker container
+exact supported Node binary and put Windows' `tar.exe` ahead of Git's on the
+PATH (Git's reads `C:` as a remote host); for Linux, a disposable local Docker container
 with a tracked-source archive avoids platform-mixed `node_modules` and local
 runtime files.
 

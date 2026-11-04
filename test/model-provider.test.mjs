@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeProviderEnvironment, codexProviderConfig, codexProviderOverrides, liteWorkerCommand, providerPrograms, validateModelProvider } from '../src/public-sdk.mjs';

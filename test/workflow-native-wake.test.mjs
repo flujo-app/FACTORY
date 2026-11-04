@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {NativeWorkflowWake} from '../src/cloud-lite/workflow-wake.mjs';
 import { tempDir } from './support/temp-dir.mjs';

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { validateModelProvider, providerApis } from '../model-provider.mjs';
+import { validateModelProvider, providerApis, WORKER_PROGRAM_APIS } from '../model-provider.mjs';
 
 export { validateModelProvider };
 
@@ -8,7 +8,8 @@ export const hash = value => createHash('sha256').update(typeof value === 'strin
 export function validateCloudLitePlan(input) {
   if (!input || typeof input !== 'object') throw new TypeError('A cloud lite-worker plan is required.');
   const plan = { cpuKind: 'shared', cpus: 2, memoryMb: 4096, diskGb: 20, machines: 1,
-    agentsPerMachine: 10, region: 'iad', model: 'gpt-6.1-sol', subagentModel: 'gpt-6-luna', reasoningEffort: 'medium', ...input };
+    agentsPerMachine: 10, region: 'iad', ...(input.workerProgram === 'claude' ? { model: 'opus', subagentModel: 'sonnet' } : { model: 'gpt-6.1-sol', subagentModel: 'gpt-6-luna' }), reasoningEffort: 'medium', ...input };
+  if (plan.workerProgram !== undefined && !Object.hasOwn(WORKER_PROGRAM_APIS, plan.workerProgram)) throw new TypeError(`workerProgram must be one of ${Object.keys(WORKER_PROGRAM_APIS).join(', ')}.`);
   for (const name of ['runId', 'app']) if (!/^[a-z][a-z0-9-]{2,62}$/.test(plan[name] ?? '')) throw new TypeError(`Invalid ${name}.`);
   if (!['shared', 'performance'].includes(plan.cpuKind)) throw new TypeError('Invalid cpuKind.');
   for (const name of ['cpus', 'memoryMb', 'diskGb', 'machines', 'agentsPerMachine']) {
@@ -31,8 +32,10 @@ export function validateCloudLitePlan(input) {
   }
   if (plan.modelProvider !== undefined) {
     validateModelProvider(plan.modelProvider);
-    // Cloud lite workers run Codex, which talks to custom providers through the Responses API.
-    if (!providerApis(plan.modelProvider).includes('responses')) throw new TypeError('Cloud lite workers need a provider that offers the responses API.');
+    // Codex talks to custom providers through the Responses API, Claude Code through the Messages API.
+    const needed = WORKER_PROGRAM_APIS[plan.workerProgram ?? 'codex'];
+    if (!providerApis(plan.modelProvider).includes(needed)) throw new TypeError(`Cloud lite workers need a provider that offers the ${needed} API.`);
+    if (plan.workerProgram === 'claude' && !plan.modelProvider.model && !input.model) throw new TypeError('Select the served model name.');
   }
   if (plan.supervision !== undefined && !['autonomous', 'operator'].includes(plan.supervision)) throw new TypeError('supervision must be autonomous or operator.');
   if (plan.sandbox !== undefined && !CODEX_SANDBOXES.includes(plan.sandbox)) throw new TypeError(`sandbox must be one of ${CODEX_SANDBOXES.join(', ')}.`);
@@ -72,7 +75,7 @@ export function machineConfig(plan, { image, volumeId, index, environment }) {
     image, env: environment,
     guest: { cpu_kind: plan.cpuKind, cpus: plan.cpus, memory_mb: plan.memoryMb },
     mounts: [{ volume: volumeId, path: '/data' }],
-    metadata: { 'factory.run': plan.runId, 'factory.machine': `m${index}`, 'factory.runtime': 'codex-lite' },
+    metadata: { 'factory.run': plan.runId, 'factory.machine': `m${index}`, 'factory.runtime': plan.workerProgram === 'claude' ? 'claude-lite' : 'codex-lite' },
     restart: { policy: 'no' },
     // Same private topology as flujo-cloud: host connects using its owned proxy;
     // remote Codex sessions use the coordinator's exact Fly private Machine DNS.

@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync, fsync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, fsync } from 'node:fs';
 import { promisify } from 'node:util';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CloudLiteBoard } from '../src/cloud-lite/board.mjs';
 import { validateCloudLitePlan, agentInventory, machineConfig, redact, secret, hash } from '../src/cloud-lite/protocol.mjs';

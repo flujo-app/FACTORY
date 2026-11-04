@@ -209,6 +209,9 @@ export class ModalSelfHostedModel {
     const source = join(this.directory, 'source');
     mkdirSync(source, { recursive: true, mode: 0o700 });
     for (const name of SOURCES) copyFileSync(join(SELFHOST_MODAL_DIR, name), join(source, name));
+    // The settings read their profile next to themselves.
+    mkdirSync(join(source, 'profiles'), { recursive: true, mode: 0o700 });
+    for (const name of readdirSync(join(SELFHOST_MODAL_DIR, 'profiles'))) copyFileSync(join(SELFHOST_MODAL_DIR, 'profiles', name), join(source, 'profiles', name));
     const result = await this.commandRunner(this.python, [...this.pythonArgs, '-B', join(source, 'deploy.py')],
       { signal, timeoutMs, input: JSON.stringify(request), maxBytes: 1_000_000, env: this.#env(), killTree: true, cwd: source });
     const answer = lastJsonLine(result?.stdout);

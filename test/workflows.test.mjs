@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Factory, FactoryWorkflow, FactoryWorkflowSupervisor, runVerification, createWorkflowClient, createWorkflowComparison, summarizeWorkflowComparison, captureGitSource } from '../src/public-sdk.mjs';

@@ -83,39 +83,42 @@ def _start_vllm():
                                             'FACTORY_SELFHOST_INPUT_MODALITIES': ','.join(S.input_modalities)})
 
 
-GPU_FUNCTION = dict(image=image, gpu=S.gpu_spec, cpu=S.cpu, memory=S.memory_mib, secrets=[auth],
-                    volumes=VOLUMES, scaledown_window=S.scaledown_minutes * MINUTES,
-                    min_containers=0, max_containers=1, timeout=S.request_timeout_minutes * MINUTES)
-# A web_server endpoint holds requests while a cold container starts. Modal's own auth stays
-# off; vLLM checks the bearer key (VLLM_API_KEY).
-WEB = dict(port=S.port, startup_timeout=S.startup_timeout_minutes * MINUTES)
-CONCURRENT = dict(max_inputs=min(1000, S.max_num_seqs * 4))  # Modal's limit is 1000
+# The short-lived helper app has no serving functions: they need the key's secret, which only
+# the deployment creates, after the weights are in place.
+if not HELPERS:
+    GPU_FUNCTION = dict(image=image, gpu=S.gpu_spec, cpu=S.cpu, memory=S.memory_mib, secrets=[auth],
+                        volumes=VOLUMES, scaledown_window=S.scaledown_minutes * MINUTES,
+                        min_containers=0, max_containers=1, timeout=S.request_timeout_minutes * MINUTES)
+    # A web_server endpoint holds requests while a cold container starts. Modal's own auth stays
+    # off; vLLM checks the bearer key (VLLM_API_KEY).
+    WEB = dict(port=S.port, startup_timeout=S.startup_timeout_minutes * MINUTES)
+    CONCURRENT = dict(max_inputs=min(1000, S.max_num_seqs * 4))  # Modal's limit is 1000
 
 
-@app.function(**GPU_FUNCTION)
-@modal.concurrent(**CONCURRENT)
-@modal.web_server(**WEB)
-def serve():
-    _start_vllm()
-
-
-if S.replicas >= 2:
     @app.function(**GPU_FUNCTION)
     @modal.concurrent(**CONCURRENT)
     @modal.web_server(**WEB)
-    def serve_b():
+    def serve():
         _start_vllm()
 
-if S.replicas >= 3:
-    @app.function(**GPU_FUNCTION)
-    @modal.concurrent(**CONCURRENT)
-    @modal.web_server(**WEB)
-    def serve_c():
-        _start_vllm()
 
-if S.replicas >= 4:
-    @app.function(**GPU_FUNCTION)
-    @modal.concurrent(**CONCURRENT)
-    @modal.web_server(**WEB)
-    def serve_d():
-        _start_vllm()
+    if S.replicas >= 2:
+        @app.function(**GPU_FUNCTION)
+        @modal.concurrent(**CONCURRENT)
+        @modal.web_server(**WEB)
+        def serve_b():
+            _start_vllm()
+
+    if S.replicas >= 3:
+        @app.function(**GPU_FUNCTION)
+        @modal.concurrent(**CONCURRENT)
+        @modal.web_server(**WEB)
+        def serve_c():
+            _start_vllm()
+
+    if S.replicas >= 4:
+        @app.function(**GPU_FUNCTION)
+        @modal.concurrent(**CONCURRENT)
+        @modal.web_server(**WEB)
+        def serve_d():
+            _start_vllm()

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateCloudLitePlan, secret } from '../src/cloud-lite/protocol.mjs';
 import { cloudLiteBootstrap } from '../src/cloud-lite/bootstrap.mjs';

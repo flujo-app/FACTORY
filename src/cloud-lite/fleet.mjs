@@ -111,6 +111,7 @@ function persistObservation(file, value) {
 
 /** Only this native host owns managed refresh; remote harnesses receive external access tokens. */
 export class CodexSubscriptionBroker {
+  program = 'codex';
   constructor({ authFile, codexCommand = 'codex' } = {}) {
     if (!isAbsolute(authFile ?? '')) throw new TypeError('Select the existing absolute Codex subscription auth file.');
     this.authFile = authFile; this.command = codexCommand;
@@ -132,6 +133,25 @@ export class CodexSubscriptionBroker {
     })().finally(() => { this.refreshing = null; });
     return this.refreshing;
   }
+}
+
+/**
+ * A Claude subscription token from `claude setup-token`, kept in a private file on this host. It is
+ * long-lived and has no refresh token to protect; replacing the file rotates it for running workers.
+ */
+export class ClaudeSubscriptionBroker {
+  program = 'claude';
+  constructor({ tokenFile } = {}) {
+    if (!isAbsolute(tokenFile ?? '')) throw new TypeError('Select the absolute private Claude subscription token file.');
+    this.tokenFile = tokenFile;
+  }
+  read() {
+    const token = readFileSync(this.tokenFile, 'utf8').trim();
+    if (token.length < 20 || /\s/.test(token)) throw new Error('The token file must hold one token from claude setup-token.');
+    if (token.startsWith('sk-ant-api')) throw new Error('A Claude subscription token is required; API-key fallback is disabled.');
+    return { accessToken: token };
+  }
+  async refresh() { return this.read(); }
 }
 
 export class FactoryCloudLiteFleet {
@@ -195,6 +215,7 @@ export class FactoryCloudLiteFleet {
     const providerMode = Boolean(input?.modelProvider);
     if (input.repository && !githubToken && !deployKey || !providerMode && !this.auth) throw new TypeError('Select a subscription auth broker (or a model provider) and, for Git tasks, a GitHub credential or deploy key.');
     if (providerMode && (typeof providerKey !== 'string' || providerKey.length < 8)) throw new TypeError('A model provider needs its API key.');
+    if (!providerMode && this.auth.program && this.auth.program !== (input.workerProgram ?? 'codex')) throw new TypeError(`A ${this.auth.program} subscription broker cannot serve ${input.workerProgram ?? 'codex'} workers.`);
     if (deployKey !== undefined && (!input.repository || typeof deployKey !== 'string' || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(deployKey))) throw new TypeError('A deploy key must be a private SSH key for the plan repository.');
     if (imageSource) image = (await (await this.upstream()).resolveWorkerImage({ source: imageSource, image, channel })).image;
     if (!image) throw new TypeError('Select an immutable worker image or its upstream FLUJO compatibility advertisement.');
@@ -220,7 +241,7 @@ export class FactoryCloudLiteFleet {
       const bundleDigest = hash(readFileSync(bundlePath));
       if (this.state.bundleSha256 && this.state.bundleSha256 !== bundleDigest) throw new Error('Existing fleet bundle differs.');
       this.state.bundleSha256 = bundleDigest; this.save();
-      bootstrapPath = join(this.directory, 'bootstrap.sh'); writeFileSync(bootstrapPath, cloudLiteBootstrap(bundleDigest), { mode: 0o600 });
+      bootstrapPath = join(this.directory, 'bootstrap.sh'); writeFileSync(bootstrapPath, cloudLiteBootstrap(bundleDigest, { workerProgram: plan.workerProgram }), { mode: 0o600 });
     }
     const { credentials, operatorToken } = JSON.parse(readFileSync(join(this.directory, 'credentials.json')));
     const initialAuth = providerMode ? {} : this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, deployKey, providerKey, ...Object.values(credentials),...Object.values(evidenceTokens??{})];

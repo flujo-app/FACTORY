@@ -6,6 +6,7 @@ import { execFile, fork } from 'node:child_process';
 import { promisify } from 'node:util';
 import { freemem, totalmem, loadavg } from 'node:os';
 import { CodexRpc } from './rpc.mjs';
+import { ClaudeSessionDriver, claudeCommandWrapper, claudeEnvironment } from './claude-driver.mjs';
 import { startCloudLiteCoordinator } from './server.mjs';
 import { CloudLiteTrace } from './trace.mjs';
 import { NativeOperatorStop } from './operator-stop.mjs';
@@ -44,6 +45,8 @@ export async function runCloudLiteMachine(config) {
   // Optional: a self-hosted model provider instead of the subscription login, read-only
   // deploy-key repository access, a prepare hook for agent workspaces, operator-driven turns.
   const providerMode = Boolean(plan.modelProvider);
+  const claudeProgram = plan.workerProgram === 'claude';
+  const evidenceSessionsPath = claudeProgram ? '/data/claude/projects' : '/data/codex/sessions';
   const operatorSupervised = plan.supervision === 'operator';
   const extraSecrets = [providerKey, deployKey].filter(value => typeof value === 'string' && value.length >= 8);
   mkdirSync('/data/factory', { recursive: true, mode: 0o700 });
@@ -57,7 +60,7 @@ export async function runCloudLiteMachine(config) {
     if(!retainedEvidence.receipt?.checkpoint.final){
       const child=fork(fileURLToPath(new URL('./evidence-worker.mjs',import.meta.url)),[],{stdio:['ignore','ignore','ignore','ipc'],windowsHide:true});
       child.on('error',()=>{});
-      child.send({action:'start',runId:plan.runId,machineId:`m${index}`,url:plan.collection.url,token:evidenceTokens?.[`m${index}`],intervalMs:plan.collection.intervalMs??60000,sessions:sealedCheckpoint.sessions});
+      child.send({action:'start',runId:plan.runId,machineId:`m${index}`,url:plan.collection.url,token:evidenceTokens?.[`m${index}`],intervalMs:plan.collection.intervalMs??60000,sessions:sealedCheckpoint.sessions,sessionsPath:evidenceSessionsPath});
       child.send({action:'finalize',sessions:sealedCheckpoint.sessions});
     }
     return {sealed:true,stop:async()=>coordinator?.close()};
@@ -89,7 +92,7 @@ export async function runCloudLiteMachine(config) {
       return{agentId:agent.id,threadId:receipt.threadId,stopId:receipt.commandId};
     });
     const child=fork(fileURLToPath(new URL('./evidence-worker.mjs',import.meta.url)),[],{stdio:['ignore','ignore','ignore','ipc'],windowsHide:true});child.on('error',()=>{});
-    child.send({action:'start',runId:plan.runId,machineId:machine,url:plan.collection.url,token:evidenceTokens?.[machine],intervalMs:plan.collection.intervalMs??60000,sessions});
+    child.send({action:'start',runId:plan.runId,machineId:machine,url:plan.collection.url,token:evidenceTokens?.[machine],intervalMs:plan.collection.intervalMs??60000,sessions,sessionsPath:evidenceSessionsPath});
     child.send({action:'finalize',sessions});return{sealed:true,stop:async()=>coordinator?.close()};
   }
   if(plan.shutdown && Date.now()>=Date.parse(plan.shutdown.deadlineUtc))throw new Error('Work deadline has passed; preserve existing evidence and reconcile shutdown without restarting agents.');
@@ -133,9 +136,9 @@ export async function runCloudLiteMachine(config) {
     prepared = await runPrepareHook({ plan, index, repositoryDirectory, env: gitEnv });
     writeFileSync(preparedFile, JSON.stringify(prepared), { mode: 0o600 });
   }
-  const home = '/data/codex'; mkdirSync(home, { recursive: true, mode: 0o700 });
+  const home = claudeProgram ? '/data/claude' : '/data/codex'; mkdirSync(home, { recursive: true, mode: 0o700 });
   // A fresh native harness has only the explicitly configured FACTORY MCP server.
-  writeFileSync(join(home, 'config.toml'), providerMode ? providerConfigToml(plan, index)
+  if (!claudeProgram) writeFileSync(join(home, 'config.toml'), providerMode ? providerConfigToml(plan, index)
     : 'cli_auth_credentials_store="ephemeral"\nforced_login_method="chatgpt"\n', { mode: 0o600 });
   const traces = new Map();
   const workflowWakes = new Map();
@@ -145,18 +148,27 @@ export async function runCloudLiteMachine(config) {
       secrets: [githubToken, initialAuth.accessToken, operatorToken, ...extraSecrets, ...Object.values(credentials),...Object.values(evidenceTokens??{})] }));
   }
   const rootTrace = traces.get(rootId); const threadAgents = new Map(); const states = new Map(); const turns = new Map(); const terminalTurns = new Map(); const inboxVersions = new Map(); const workflowVersions = new Map(); const consumedVersions = new Map(); const stoppedThreads = new Set(); const stoppingThreads = new Set(); const revokedStopCommands = new Set(); const pendingStopCommands = new Map(); const stopControllers = new Map(); const stopTasks = new Map(); let stopping = false; let stopPromise; let timer; let monitoring; let liveAuth = bootstrap.auth;
-  const rpc = new CodexRpc({ env: codexEnvironment({ plan, home, githubToken, deployKey, providerKey }), cwd: repositoryDirectory,
-    onStderr: text => rootTrace.record('codex.stderr', { text }),
-    onRequest: async (method, params) => {
-      if (method === 'account/chatgptAuthTokens/refresh' && !providerMode) {
-        const auth = await request('/auth', { refresh: true, previousTokenHash: hash(liveAuth.accessToken) });
-        if (auth.chatgptAccountId !== initialAuth.chatgptAccountId) throw new Error('Subscription identity changed.');
-        for (const trace of traces.values()) trace.secrets.push(auth.accessToken);
-        liveAuth = auth;
-        return auth;
-      }
-      throw new Error(`Unexpected Codex host request: ${method}`);
-    } });
+  const refreshAuth = async () => {
+    const auth = await request('/auth', { refresh: true, previousTokenHash: hash(liveAuth.accessToken) });
+    if (auth.chatgptAccountId !== initialAuth.chatgptAccountId) throw new Error('Subscription identity changed.');
+    for (const trace of traces.values()) trace.secrets.push(auth.accessToken);
+    liveAuth = auth;
+    return auth;
+  };
+  const commandWrapper = '/data/factory/claude-command-env.sh';
+  if (claudeProgram) writeFileSync(commandWrapper, claudeCommandWrapper({ provider: providerMode }), { mode: 0o700 });
+  const rpc = claudeProgram
+    ? new ClaudeSessionDriver({ configDirectory: home, stateDirectory: '/data/factory', fixedModel: plan.modelProvider?.model, partialMessages: plan.traceDeltas === true,
+      // Read for every turn, so a refreshed subscription token reaches the next process.
+      environment: () => claudeEnvironment({ plan, index, home, commandWrapper, githubToken, deployKey, providerKey, oauthToken: liveAuth?.accessToken }),
+      onStderr: text => rootTrace.record('claude.stderr', { text }) })
+    : new CodexRpc({ env: codexEnvironment({ plan, home, githubToken, deployKey, providerKey }), cwd: repositoryDirectory,
+      onStderr: text => rootTrace.record('codex.stderr', { text }),
+      onRequest: async (method, params) => {
+        if (method === 'account/chatgptAuthTokens/refresh' && !providerMode) return refreshAuth();
+        throw new Error(`Unexpected Codex host request: ${method}`);
+      } });
+  if (claudeProgram && !providerMode) rpc.on('authFailed', () => { void refreshAuth().catch(error => rootTrace.record('auth.refresh_pending', { message: error.message })); });
   rpc.on('notification', value => {
     const threadId = value.params?.threadId ?? value.params?.thread?.id;
     const agent = threadAgents.get(threadId) ?? rootId;
@@ -197,8 +209,8 @@ export async function runCloudLiteMachine(config) {
   }, 1000);
   await rpc.initialize();
   // A self-hosted provider authenticates with its key; no subscription login is involved.
-  if (!providerMode) await rpc.request('account/login/start', { type: 'chatgptAuthTokens', ...bootstrap.auth });
-  rootTrace.record('machine.ready', { machine, node: process.version, codex: await run('codex', ['--version']), configuration: { cpuKind: plan.cpuKind, cpus: plan.cpus, memoryMb: plan.memoryMb, diskGb: plan.diskGb }, agents: bootstrap.agents.map(x => ({ id: x.id, role: x.role })) });
+  if (!providerMode && !claudeProgram) await rpc.request('account/login/start', { type: 'chatgptAuthTokens', ...bootstrap.auth });
+  rootTrace.record('machine.ready', { machine, node: process.version, ...(claudeProgram ? { claude: await run('claude', ['--version']) } : { codex: await run('codex', ['--version']) }), configuration: { cpuKind: plan.cpuKind, cpus: plan.cpus, memoryMb: plan.memoryMb, diskGb: plan.diskGb }, agents: bootstrap.agents.map(x => ({ id: x.id, role: x.role })) });
   const proxy = fileURLToPath(new URL('../../bin/factory-cloud-mcp.mjs', import.meta.url));
   for (const agent of bootstrap.agents) {
     // With a prepare hook, each agent works in the folder the hook prepared for its slot.
@@ -216,14 +228,16 @@ export async function runCloudLiteMachine(config) {
     if (recovering) {
       const retained = JSON.parse(readFileSync(sessionFile));
       try {
-        result = await rpc.request('thread/resume', { threadId: retained.threadId, cwd: directory, config: configOverride, approvalPolicy: 'never', sandbox });
+        result = await rpc.request('thread/resume', { threadId: retained.threadId, cwd: directory, config: configOverride, approvalPolicy: 'never', sandbox,
+          // Claude Code starts a new process per turn, so it needs these again after a restart.
+          ...(claudeProgram ? { model: agent.role === 'orchestrator' ? plan.model : plan.subagentModel, developerInstructions: instructions } : {}) });
       } catch (error) {
         if (error.code !== -32600 || error.message !== `no rollout found for thread id ${retained.threadId}`) throw error;
         unavailableSession = retained.threadId; recovering = false;
         const preserved = `${sessionFile}.${hash(readFileSync(sessionFile))}.unavailable`;
         try { copyFileSync(sessionFile, preserved, constants.COPYFILE_EXCL); } catch (copyError) { if (copyError.code !== 'EEXIST') throw copyError; }
         traces.get(agent.id).record('agent.session_unavailable', { previousThreadId: unavailableSession, preserved,
-          reason: 'Upstream Codex confirmed that the prepared thread has no persisted rollout. Original board claims and repository state remain; reconcile before continuing.' });
+          reason: 'The worker program confirmed that the prepared thread has no persisted history. Original board claims and repository state remain; reconcile before continuing.' });
       }
     }
     if (!result) {
@@ -267,7 +281,7 @@ export async function runCloudLiteMachine(config) {
       if(message.type==='evidence.final')evidenceFinal=true;
       writeFileSync('/data/factory-evidence-status.json',JSON.stringify({at:new Date().toISOString(),...message}),{mode:0o600});
     });
-    evidenceProcess.send({action:'start',runId:plan.runId,machineId:machine,url:plan.collection.url,token:evidenceTokens?.[machine],intervalMs:plan.collection.intervalMs??60000,sessions:evidenceSessions()});
+    evidenceProcess.send({action:'start',runId:plan.runId,machineId:machine,url:plan.collection.url,token:evidenceTokens?.[machine],intervalMs:plan.collection.intervalMs??60000,sessions:evidenceSessions(),sessionsPath:evidenceSessionsPath});
   };
   launchCollector();
   monitoring = setInterval(async () => {

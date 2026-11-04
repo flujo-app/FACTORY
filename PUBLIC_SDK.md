@@ -1,17 +1,17 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.5.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.5.0):
+Version 0.6.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.6.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.5.0/flujo-factory-0.5.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.6.0/flujo-factory-0.6.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
 `ModalSelfHostedModel` and `factory-selfhost` deploy, verify, stop and retire a vLLM endpoint
 with Qwen3.8-27B (H100) or Nemotron 3.5 Super (B300) profiles; see
 [selfhost/README.md](selfhost/README.md). Its endpoint description is a model provider that
-cloud lite workers (Codex) and local lite workers (Codex or Claude Code) use directly. See
+cloud and local lite workers (Codex or Claude Code) use directly. See
 [Self-hosted models and operator-driven jobs](#self-hosted-models-and-operator-driven-jobs)
 for the provider, read-only deploy keys, prepare hooks, operator-driven jobs and quieter
 traces added in 0.4.0. All of it is optional; existing plans behave as before, except that
@@ -203,11 +203,13 @@ reads the key from the variable the file names in `envKey`.
 
 ## FLUJO worker dispatch
 
-### Cloud Codex lite workers (development)
+### Cloud lite workers (development)
 
 `FactoryCloudLiteFleet` provisions a dedicated Fly fleet running native Codex
-app-server harnesses with their built-in tools and only FACTORY's board MCP.
-Each machine has one orchestrator and `agentsPerMachine - 1` subordinate Codex
+app-server harnesses (or Claude Code, see
+[Claude Code as the worker program](#claude-code-as-the-worker-program)) with their
+built-in tools and only FACTORY's board MCP.
+Each machine has one orchestrator and `agentsPerMachine - 1` subordinate
 sessions, isolated Git worktrees, persisted native histories, and durable traces.
 The SDK starts and registers the configured pool; additional native automatic
 fanout is disabled so every subordinate has its own board identity and policy.
@@ -260,6 +262,64 @@ while workers execute; a disconnected host can prevent authentication renewal.
 The runtime does not switch to an API key. Credentials never belong in an image,
 public journal, source commit or trace. Store the fleet directory privately.
 
+#### Claude Code as the worker program
+
+Set `workerProgram: 'claude'` in the plan (the default stays `'codex'`). Everything
+else works the same way: the board, operator commands and stop receipts, durable
+traces, prepare hooks, evidence collection and verified workflows.
+
+```js
+import { FactoryCloudLiteFleet, ClaudeSubscriptionBroker } from 'flujo-factory';
+
+// On a subscription: a token from `claude setup-token`, in a private file on this host.
+const fleet = new FactoryCloudLiteFleet({ directory: '/absolute/private/fleet-run',
+  flujoCloudPath: '/absolute/installed/flujo-cloud',
+  auth: new ClaudeSubscriptionBroker({ tokenFile: '/absolute/private/claude-token' }) });
+await fleet.deploy({ runId: 'my-claude-run', app: 'my-claude-app', goal: ownerGoal,
+  workerProgram: 'claude', model: 'opus', subagentModel: 'sonnet',
+  machines: 1, agentsPerMachine: 4 }, { image: immutableWorkerImage, bundlePath: '/absolute/private/flujo-factory.tgz' });
+
+// Or on a self-hosted model: the same description Codex uses.
+const provider = model.endpoint();
+await selfHostedFleet.deploy({ ...plan, workerProgram: 'claude', model: provider.model, subagentModel: provider.model, modelProvider: provider },
+  { image: immutableWorkerImage, bundlePath: '/absolute/private/flujo-factory.tgz', providerKey: await model.key() });
+```
+
+- **Install:** the bootstrap installs one pinned Claude Code release, checked against
+  its SHA-256, plus `bubblewrap` and `socat` for its sandbox. A custom image must
+  provide `claude` on the path, and `/bin/bash`.
+- **Sessions:** each agent slot keeps one session, with history in
+  `/data/claude/projects`. Each turn is one Claude Code process, so an idle agent uses
+  no memory beyond its files. A message during a turn joins that turn. A stop
+  interrupts it; if the program does not answer within 10 seconds its process is
+  ended. A stop receipt is issued only after the process has gone and the session
+  reads back as idle.
+- **Plans:** a plan without `modelProvider` needs a broker made for its program, and a
+  provider must offer the program's API: `anthropic` for Claude Code, `responses` for
+  Codex. The models default to `opus` and `sonnet`; with a provider, name the served model.
+- **Subscription:** the token from `claude setup-token` is long-lived, and this host
+  holds no refresh token for it. To rotate it, replace the file; when a worker reports a
+  refused token, `fleet.observe()` passes on the file's current token for the next turn.
+- **Keys and agent commands:** the key or token reaches only the Claude Code process.
+  `CLAUDE_CODE_SHELL_PREFIX` removes it from the environment of agent commands and the
+  board MCP server; with a provider the GitHub token goes too, as with Codex. Journals
+  and traces do not contain it. With `danger-full-access`, an agent command runs as the
+  same user and could still read it from the parent process, so use a narrower sandbox
+  when agents handle untrusted input. Claude Code's own `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`
+  is not used, because it also forces interactive permission checks on these sessions.
+- **Sandbox:** `danger-full-access` skips permission checks; the Machine is the
+  sandbox. `workspace-write` runs commands in Claude Code's bubblewrap sandbox, writing
+  only to the agent's folder and `writableRoots`, with no network, and its file tools
+  stay in the same folders. `read-only` also blocks writes to the agent's folder and
+  removes the file-writing tools. Both narrow modes refuse to run commands without
+  the sandbox, so the worker image must allow bubblewrap. Network tools, automatic
+  subagents, schedules, background tasks, skills, auto memory and repository settings
+  files are off in every mode.
+- **Traces:** assistant text, thinking, tool calls and results become `item/completed`
+  records (`agentMessage`, `reasoning`, `toolCall`, `toolResult`), token use becomes
+  `thread/tokenUsage/updated`, and model retries become `model/retry`. Streaming deltas
+  are skipped unless `traceDeltas` is on.
+
 #### Self-hosted models and operator-driven jobs
 
 To run the model yourself, `ModalSelfHostedModel` (CLI `factory-selfhost`) deploys a
@@ -303,11 +363,11 @@ await fleet.command('m0-a1', { id: 'job-1', action: 'message', message: 'First j
   `streamMaxRetries`, `streamIdleTimeoutMs` and `requestTimeoutMs` are optional.
   `codexProviderConfig`, `codexProviderOverrides` and `claudeProviderEnvironment`
   are exported mappings; `providerPrograms(provider)` says which programs can use
-  it. Cloud lite workers run Codex. Each Codex gets a `config.toml` with the provider, the model's real context
+  it. Each Codex gets a `config.toml` with the provider, the model's real context
   window and its compaction point; web search, multi-agent, apps, plugins, goals,
   memories and skill instructions are off, and agents' shell commands inherit only
   the core environment. The key is a staged Fly app secret placed only in the
-  Codex process environment; agent commands, journals and traces do not get it.
+  worker program's process environment; agent commands, journals and traces do not get it.
   Machine *i* uses `baseUrls[i % n]`, so each machine keeps its prompt cache on one
   server. Codex offers no `apply_patch` tool to an unknown model, so ask agents to
   edit files with shell commands.
@@ -320,7 +380,7 @@ await fleet.command('m0-a1', { id: 'job-1', action: 'message', message: 'First j
   turn, follow-up or wake; every turn comes from a durable
   `fleet.command(agent, { id, action: 'message' | 'stop' })`. The default,
   `'autonomous'`, keeps the existing goal-driven behavior.
-- **`sandbox`**: Codex's sandbox for agent commands. The default stays
+- **`sandbox`**: the sandbox for agent commands. The default stays
   `danger-full-access`. `workspace-write` lets commands write only the agent's
   folder plus the prepare hook's `writableRoots`, with no network; `read-only` is
   also accepted.

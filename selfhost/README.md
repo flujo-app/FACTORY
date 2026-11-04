@@ -3,7 +3,8 @@
 FACTORY can serve an open-weight model on your own Modal GPUs with vLLM, so workers run on it
 instead of a vendor API: source code and prompts stay in your account. The served endpoint
 speaks the OpenAI Responses API (Codex), the Anthropic Messages API (Claude Code) and Chat
-Completions, and plugs straight into `plan.modelProvider` and the local lite workers.
+Completions, and plugs straight into `plan.modelProvider` and the local lite workers. Cloud lite workers can
+run either program on it (`plan.workerProgram`).
 
 This folder is separate from `modal/`, which holds the earlier pilot definitions.
 
