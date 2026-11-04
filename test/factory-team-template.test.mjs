@@ -15,6 +15,16 @@ test('SAVIA profile builds one lead plus nine local specialist slots without fle
   assert.match(specs[1].nodes[0].prompt, /independent_verifier/);
 });
 
+test('a team can leave out the finish step, and keeps it by default', () => {
+  const kept = buildFactoryTeamSpecs({ model: 'installed-model', availableServers: ['filesystem'] });
+  assert.equal(kept.every(spec => spec.nodes.some(node => node.type === 'finish')), true);
+  assert.equal(kept.every(spec => spec.edges.some(edge => edge.to === 'finish')), true);
+  const left = buildFactoryTeamSpecs({ model: 'installed-model', availableServers: ['filesystem'], finishStep: false });
+  assert.equal(left.some(spec => spec.nodes.some(node => node.type === 'finish')), false);
+  assert.equal(left.some(spec => spec.edges.some(edge => edge.to === 'finish')), false);
+  assert.deepEqual(left.map(spec => spec.nodes.find(node => node.type === 'process').prompt.endsWith('End your turn by writing your report as your final message.')), [true, true]);
+});
+
 test('missing required specialist tools and invalid concurrency refuse before installation', () => {
   assert.throws(() => buildFactoryTeamSpecs({ model: 'installed-model',
     availableServers: ['flujo'], specialists: CASE_SPECIALISTS_V1 }), /requires connected/);

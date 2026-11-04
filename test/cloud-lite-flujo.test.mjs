@@ -116,6 +116,8 @@ test('a thread gets its own workspace with only its tools, and no secret in FLUJ
     assert.deepEqual(agent.servers.map(entry => entry.name), [...FLUJO_WORKER_SERVERS, 'factory']);
     assert.match(space.flows[0].spec.nodes[0].prompt, /Your working folder is .*Pass it as cwd/s);
     assert.match(space.flows[0].spec.nodes[0].prompt, /Be useful\./);
+    assert.equal(space.flows[0].spec.nodes.some(node => node.type === 'finish'), false, 'a later message must still reach the model');
+    assert.match(agent.prompt, /writing your report as your final message/);
     assert.equal(h.notes.some(note => note.method === 'thread/started' && note.params.threadId === thread.id), true);
   } finally { await h.end(); }
 });
@@ -129,6 +131,8 @@ test('an orchestrator leads a team when the plan asks for one', async () => {
     assert.deepEqual(space.flows.map(flow => flow.name), ['swarm_agent', 'swarm_team']);
     assert.equal(space.flows[1].spec.nodes.find(node => node.key === 'agents').concurrencyLimit, 4);
     assert.equal(space.flows[1].spec.nodes.find(node => node.key === 'lead').maxTurns, 12);
+    assert.equal(space.flows[1].spec.nodes.some(node => node.type === 'finish'), false, 'a later message must still reach the lead');
+    assert.deepEqual(space.flows[1].spec.edges, [{ from: 'start', to: 'lead' }, { from: 'lead', to: 'agents' }]);
     await h.driver.request('turn/start', { threadId: lead.id, input: text('lead') });
     await h.driver.request('turn/start', { threadId: member.id, input: text('member') });
     await waitFor(() => h.fake.count('POST', '/v1/chat/completions') === 2);

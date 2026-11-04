@@ -1,10 +1,10 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.7.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.7.0):
+Version 0.7.1 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.7.1):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.7.0/flujo-factory-0.7.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.7.1/flujo-factory-0.7.1.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.

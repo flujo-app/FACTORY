@@ -32,9 +32,12 @@ function environmentText(value) {
   return Object.entries(value).map(([key, entry]) => `${key}: ${entry}`).join('\n');
 }
 
-/** FLUJO subflow team template. One lead plus up to nine local agents per workspace. */
+/**
+ * FLUJO subflow team template. One lead plus up to nine local agents per workspace.
+ * Without a finish step a model can only end its turn by writing its report, and the conversation can take another message.
+ */
 export function buildFactoryTeamSpecs({ model, availableServers = [], availableTools = {},
-  limits = {}, specialists, goalContext, environment, instructions } = {}) {
+  limits = {}, specialists, goalContext, environment, instructions, finishStep = true } = {}) {
   if (typeof model !== 'string' || !model.trim() || !Array.isArray(availableServers)
     || new Set(availableServers).size !== availableServers.length
     || availableServers.some(name => typeof name !== 'string')) throw new TypeError('Model and connected server inventory are required');
@@ -72,22 +75,25 @@ export function buildFactoryTeamSpecs({ model, availableServers = [], availableT
     `Give each admitted agent a concrete task and acceptance condition; you can also implement or independently review work yourself.${shared}\n` +
     `${principles} Wait on original subflow conversation IDs for real terminal results. A queued or timed-out subflow is unfinished. ` +
     `Use only the workspace and communication tools actually attached; do not infer another Worker or machine exists.${roleGuide}`;
+  const ending = finishStep ? '' : ' End your turn by writing your report as your final message.';
+  const finish = finishStep ? [{ key: 'finish', type: 'finish' }] : [];
+  const toFinish = from => finishStep ? [{ from, to: 'finish' }] : [];
   const agent = { name: FACTORY_FLOW_NAMES.agent, description: 'General-purpose agent in a shared FLUJO workspace.',
     nodes: [
       { key: 'start', type: 'start', label: 'Start', prompt: agentPrompt },
-      { key: 'agent', type: 'process', label: 'Agent', model, prompt: 'Complete the assigned task and report the observed result.',
+      { key: 'agent', type: 'process', label: 'Agent', model, prompt: `Complete the assigned task and report the observed result.${ending}`,
         servers: selectedServers(agentServers, availableTools), maxTurns: agentTurns },
-      { key: 'finish', type: 'finish' },
-    ], edges: [{ from: 'start', to: 'agent' }, { from: 'agent', to: 'finish' }] };
+      ...finish,
+    ], edges: [{ from: 'start', to: 'agent' }, ...toFinish('agent')] };
   const team = { name: FACTORY_FLOW_NAMES.team, description: 'General-purpose lead with a bounded native FLUJO subflow gate.',
     nodes: [
       { key: 'start', type: 'start', label: 'Start', prompt: teamPrompt },
-      { key: 'lead', type: 'process', label: 'Lead', model, prompt: 'Deliver and coordinate the admitted task.',
+      { key: 'lead', type: 'process', label: 'Lead', model, prompt: `Deliver and coordinate the admitted task.${ending}`,
         servers: selectedServers(connected, availableTools), maxTurns: leadTurns },
       { key: 'agents', type: 'subflow', label: 'agent', flow: FACTORY_FLOW_NAMES.agent,
         concurrencyLimit: concurrency, inputMode: 'isolated',
         prompt: 'Ask your parent for your assigned task with subflow_send_message.', outputMode: 'final-only' },
-      { key: 'finish', type: 'finish' },
-    ], edges: [{ from: 'start', to: 'lead' }, { from: 'lead', to: 'agents' }, { from: 'lead', to: 'finish' }] };
+      ...finish,
+    ], edges: [{ from: 'start', to: 'lead' }, { from: 'lead', to: 'agents' }, ...toFinish('lead')] };
   return [agent, team];
 }
