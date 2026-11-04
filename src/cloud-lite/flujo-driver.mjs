@@ -246,6 +246,9 @@ export class FlujoSessionDriver extends EventEmitter {
       // FLUJO's shell and file tools start in its own data folder unless told otherwise.
       instructions: `Your working folder is ${thread.cwd}. Pass it as cwd on every shell command and use absolute paths under it for file tools.${thread.instructions ? `\n${thread.instructions}` : ''}`,
       limits: { ...(this.team.agentTurns ? { agentTurns: this.team.agentTurns } : {}), ...(this.team.leadTurns ? { leadTurns: this.team.leadTurns } : {}), ...(concurrency ? { concurrency } : {}) },
+      // Once a model hands off to a finish step, FLUJO keeps later messages but never shows them to the model.
+      // A worker's conversation takes many turns, so its flows have no such step.
+      finishStep: false,
       environment: { workingFolder: thread.cwd } }).filter(spec => concurrency || spec.name === FACTORY_FLOW_NAMES.agent);
     const digest = createHash('sha256').update(JSON.stringify(specs)).digest('hex');
     // Saving a flow gives it a new identity, so an unchanged flow is left alone for the conversation that uses it.
