@@ -34,8 +34,10 @@ export class FlujoProgram extends EventEmitter {
   }
 
   spawnProcess() {
-    // On Windows an npm command is a .cmd file, which only a shell can start. The port is a number, so nothing here needs quoting.
-    const child = spawn(this.command, [...this.baseArgs, '--no-open', '--port', String(this.port)], { env: this.environment(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true, shell: process.platform === 'win32' });
+    // On Windows an npm command is a .cmd file, which only a shell can start.
+    const windows = process.platform === 'win32';
+    const word = value => windows && /\s/.test(value) ? `"${value}"` : value;
+    const child = spawn(word(this.command), [...this.baseArgs, '--no-open', '--port', String(this.port)].map(word), { env: this.environment(), stdio: ['ignore', 'pipe', 'pipe'], detached: !windows, windowsHide: true, shell: windows });
     this.child = child;
     for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => this.onOutput?.(chunk.toString()));
     return child;
