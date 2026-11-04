@@ -157,7 +157,7 @@ export class ClaudeSessionDriver extends EventEmitter {
     const recovered = lastTurn?.status === 'inProgress' ? { ...lastTurn, status: 'interrupted' } : lastTurn;
     const thread = this.addThread(id, { ...params, lastTurn: recovered });
     this.notify('thread/resumed', { threadId: id, thread: { id } });
-    return { thread: this.describe(thread) };
+    return { thread: this.describe(thread), ...(lastTurn?.status === 'inProgress' ? { recoveredTurn: recovered } : {}) };
   }
 
   readThread({ threadId, includeTurns }) {

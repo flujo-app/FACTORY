@@ -206,7 +206,7 @@ export class FactoryCloudLiteFleet {
       writeFileSync(join(this.directory, 'credentials.json'), JSON.stringify({ credentials, operatorToken: secret() }), { mode: 0o600, flag: 'wx' });
       this.state = { schemaVersion: 1, plan, image: null, operations: {}, machines: [], createdAt: new Date().toISOString() }; this.save();
     }
-    await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal']); return { app: plan.app }; });
+    await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal', ...(plan.network ? ['--network', plan.network] : [])]); return { app: plan.app }; });
     return this.snapshot();
   }
   async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens, deployKey, providerKey } = {}) {
@@ -411,7 +411,7 @@ export class FactoryCloudLiteFleet {
       throw new TypeError('Select original journal-owned Machine identities.');
     }
     const bootstrapPath = join(this.directory, `bootstrap-${digest}.sh`);
-    writeFileSync(bootstrapPath, cloudLiteBootstrap(digest), { mode: 0o600 });
+    writeFileSync(bootstrapPath, cloudLiteBootstrap(digest, { workerProgram: this.state.plan.workerProgram }), { mode: 0o600 });
     for (const machine of selected) {
       await this.stage(`${machine.id}.runtime.${digest}`, async () => {
         const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));

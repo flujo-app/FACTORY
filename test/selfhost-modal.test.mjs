@@ -11,8 +11,9 @@ const fresh = () => tempDir('factory-selfhost-');
 const read = (path) => readFileSync(path, 'utf8');
 
 // A fake Modal account: the deploy script, the Modal CLI and the served model.
-function fixture({ deployError, describeError, holdDescribe, workspace = 'fixture-workspace', completion, redirect, catalogueBytes } = {}) {
+function fixture({ deployError, describeError, holdDescribe, workspace = 'fixture-workspace', completion, redirect, catalogueBytes, stoppingReads = 0, refusedDeletes = 0, stopFor = Infinity, modelOptions = {} } = {}) {
   const calls = [], requests = [], apps = new Map(), secrets = new Set(), volumes = new Set();
+  let reads = stoppingReads, refusals = refusedDeletes;
   let key, appName, account = workspace;
   const runner = async (command, args, options) => {
     calls.push({ command, args, input: options.input, env: options.env });
@@ -40,9 +41,15 @@ function fixture({ deployError, describeError, holdDescribe, workspace = 'fixtur
     }
     const cli = args.slice(args.indexOf('modal') + 1);
     if (cli[0] === 'profile') return { code: 0, stdout: JSON.stringify([{ name: 'fixture', workspace: account, active: true }]) };
-    if (cli[0] === 'app' && cli[1] === 'stop') { const known = apps.has(cli.at(-1)); if (known) apps.set(cli.at(-1), 'stopped'); return { code: known ? 0 : 1, stdout: '' }; }
-    if (cli[0] === 'app' && cli[1] === 'list') return { code: 0, stdout: JSON.stringify([...apps].map(([description, state]) => ({ description, state }))) };
-    if (cli[1] === 'delete') { (cli[0] === 'secret' ? secrets : volumes).delete(cli.at(-1)); return { code: 0, stdout: '' }; }
+    if (cli[0] === 'app' && cli[1] === 'stop') { const known = apps.has(cli.at(-1)); if (known) apps.set(cli.at(-1), reads > 0 ? 'stopping' : 'stopped'); return { code: known ? 0 : 1, stdout: '' }; }
+    if (cli[0] === 'app' && cli[1] === 'list') {
+      if (reads > 0 && --reads === 0 && stopFor === Infinity) for (const [name, state] of apps) if (state === 'stopping') apps.set(name, 'stopped');
+      return { code: 0, stdout: JSON.stringify([...apps].map(([description, state]) => ({ description, state }))) };
+    }
+    if (cli[1] === 'delete') {
+      if (refusals > 0) { refusals--; return { code: 1, stdout: '' }; }
+      (cli[0] === 'secret' ? secrets : volumes).delete(cli.at(-1)); return { code: 0, stdout: '' };
+    }
     if (cli[1] === 'list') return { code: 0, stdout: JSON.stringify([...(cli[0] === 'secret' ? secrets : volumes)].map(name => ({ name }))) };
     throw new Error(`Unexpected command ${cli.join(' ')}`);
   };
@@ -55,7 +62,7 @@ function fixture({ deployError, describeError, holdDescribe, workspace = 'fixtur
     const challenge = body.messages[0].content.match(/FACTORY-[A-F0-9]{8}/)?.[0];
     return new Response(JSON.stringify(completion?.(body, challenge) ?? { model: body.model, choices: [{ message: { role: 'assistant', content: challenge }, finish_reason: 'stop' }] }));
   };
-  const model = new ModalSelfHostedModel({ directory: fresh(), python: 'fixture-python', commandRunner: runner, fetchImpl,
+  const model = new ModalSelfHostedModel({ directory: fresh(), python: 'fixture-python', commandRunner: runner, fetchImpl, stopPollMs: 1, ...modelOptions,
     env: { PATH: 'fixture-path', FACTORY_SELFHOST_SETTINGS_B64: 'inherited-must-be-dropped' } });
   return { model, calls, requests, apps, secrets, volumes, key: () => key, appName: () => appName, setWorkspace: value => { account = value; } };
 }
@@ -67,6 +74,34 @@ test('bundled profiles carry list-price estimates per running replica', () => {
   assert.equal(profiles.nemotron.gpu, 'B300'); assert.equal(profiles.nemotron.usdPerHour, 8.43); assert.equal(profiles.nemotron.variant, 'mtp1');
   assert.ok(profiles.nemotron.variants.includes('fast'));
   for (const profile of Object.values(profiles)) { assert.equal(profile.contextWindow, 262144); assert.equal(profile.autoCompactTokenLimit, 80000); }
+});
+
+test('one retire right after a busy replica finishes: it waits for the stop and retries refused deletes', async () => {
+  const f = fixture({ stoppingReads: 3, refusedDeletes: 2 });
+  await f.model.deploy({ profile: 'qwen' });
+  const retired = await f.model.retire();
+  assert.equal(retired.phase, 'retired'); assert.equal(retired.cleanupVerified, true);
+  assert.equal(f.secrets.size, 0); assert.equal(f.volumes.size, 0);
+  const deletes = f.calls.filter(call => call.args.includes('delete') && call.args.includes('--allow-missing'));
+  assert.equal(deletes.length, 5, 'three resources, two of the tries refused');
+});
+
+test('an app still stopping at the deadline, or a delete that keeps failing, stays uncertain and is never reported as success', async () => {
+  const stuck = fixture({ stoppingReads: 10000, stopFor: 0, modelOptions: { stopWaitMs: 20 } });
+  await stuck.model.deploy({ profile: 'qwen' });
+  await assert.rejects(stuck.model.retire(), /uncertain/);
+  assert.equal(stuck.model.status().phase, 'unknown');
+  assert.equal(stuck.secrets.size, 1, 'nothing is deleted while the app may still run');
+  const refused = fixture({ refusedDeletes: 100 });
+  await refused.model.deploy({ profile: 'qwen' });
+  await assert.rejects(refused.model.retire(), /uncertain/);
+  assert.equal(refused.model.status().phase, 'unknown');
+  assert.equal(refused.calls.filter(call => call.args.includes('delete') && call.args.includes('--allow-missing')).length, 5, 'the tries are bounded');
+  // The stop path waits too, and a later retire can still finish.
+  const stopping = fixture({ stoppingReads: 2 });
+  await stopping.model.deploy({ profile: 'qwen' });
+  assert.equal((await stopping.model.stop()).phase, 'stopped');
+  assert.equal((await stopping.model.retire()).phase, 'retired');
 });
 
 test('deploy, verify, describe, stop, redeploy and retire touch only the owned resources', async () => {

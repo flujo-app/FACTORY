@@ -34,7 +34,7 @@ function environmentText(value) {
 
 /** FLUJO subflow team template. One lead plus up to nine local agents per workspace. */
 export function buildFactoryTeamSpecs({ model, availableServers = [], availableTools = {},
-  limits = {}, specialists, goalContext, environment } = {}) {
+  limits = {}, specialists, goalContext, environment, instructions } = {}) {
   if (typeof model !== 'string' || !model.trim() || !Array.isArray(availableServers)
     || new Set(availableServers).size !== availableServers.length
     || availableServers.some(name => typeof name !== 'string')) throw new TypeError('Model and connected server inventory are required');
@@ -56,7 +56,8 @@ export function buildFactoryTeamSpecs({ model, availableServers = [], availableT
     specialists.roles.map(role => `${role.id}: ${role.mission} ${role.instructions} Evidence: ${role.evidence}`).join('\n') : '';
   const goal = context(goalContext, 'goalContext');
   const surroundings = environmentText(environment);
-  const shared = `${goal ? `\nGoal context: ${goal}` : ''}${surroundings ? `\nEnvironment:\n${surroundings}` : ''}`;
+  if (instructions !== undefined && (typeof instructions !== 'string' || instructions.length > 64000)) throw new TypeError('instructions must be text under 64000 characters');
+  const shared = `${goal ? `\nGoal context: ${goal}` : ''}${surroundings ? `\nEnvironment:\n${surroundings}` : ''}${instructions?.trim() ? `\n${instructions.trim()}` : ''}`;
   const principles = `Use the tools actually attached to this flow; never claim an action or result without its receipt. ` +
     `Reuse relevant installed upstream code and contracts before making a small adapter or product change. ` +
     `Deliver a bounded, useful product change where the task calls for one. Coordinate concisely on an available shared board and linked issue or PR. ` +

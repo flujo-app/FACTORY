@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { validateModelProvider, providerApis, WORKER_PROGRAM_APIS } from '../model-provider.mjs';
+import { validateModelProvider, requireFleetApi, WORKER_PROGRAM_APIS } from '../model-provider.mjs';
 
 export { validateModelProvider };
 
@@ -8,7 +8,7 @@ export const hash = value => createHash('sha256').update(typeof value === 'strin
 export function validateCloudLitePlan(input) {
   if (!input || typeof input !== 'object') throw new TypeError('A cloud lite-worker plan is required.');
   const plan = { cpuKind: 'shared', cpus: 2, memoryMb: 4096, diskGb: 20, machines: 1,
-    agentsPerMachine: 10, region: 'iad', ...(input.workerProgram === 'claude' ? { model: 'opus', subagentModel: 'sonnet' } : { model: 'gpt-6.1-sol', subagentModel: 'gpt-6-luna' }), reasoningEffort: 'medium', ...input };
+    agentsPerMachine: 10, region: 'iad', ...(input.workerProgram === 'claude' ? { model: 'opus', subagentModel: 'sonnet' } : input.workerProgram === 'flujo' ? {} : { model: 'gpt-6.1-sol', subagentModel: 'gpt-6-luna' }), reasoningEffort: 'medium', ...input };
   if (plan.workerProgram !== undefined && !Object.hasOwn(WORKER_PROGRAM_APIS, plan.workerProgram)) throw new TypeError(`workerProgram must be one of ${Object.keys(WORKER_PROGRAM_APIS).join(', ')}.`);
   for (const name of ['runId', 'app']) if (!/^[a-z][a-z0-9-]{2,62}$/.test(plan[name] ?? '')) throw new TypeError(`Invalid ${name}.`);
   if (!['shared', 'performance'].includes(plan.cpuKind)) throw new TypeError('Invalid cpuKind.');
@@ -17,6 +17,7 @@ export function validateCloudLitePlan(input) {
   }
   if (plan.memoryMb % 256) throw new TypeError('memoryMb must be a multiple of 256.');
   if (!/^[a-z]{3}$/.test(plan.region)) throw new TypeError('Invalid region.');
+  if (plan.network !== undefined && !/^[a-z][a-z0-9-]{2,62}$/.test(plan.network)) throw new TypeError('Invalid network.');
   if (plan.repository !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(plan.repository)) throw new TypeError('Optional repository must be a GitHub owner/repository.');
   if (typeof plan.goal !== 'string' || !plan.goal.trim()) throw new TypeError('A goal is required.');
   if (plan.workflow !== undefined && plan.workflow !== 'verified-v1') throw new TypeError('Unsupported workflow profile.');
@@ -33,9 +34,13 @@ export function validateCloudLitePlan(input) {
   if (plan.modelProvider !== undefined) {
     validateModelProvider(plan.modelProvider);
     // Codex talks to custom providers through the Responses API, Claude Code through the Messages API.
-    const needed = WORKER_PROGRAM_APIS[plan.workerProgram ?? 'codex'];
-    if (!providerApis(plan.modelProvider).includes(needed)) throw new TypeError(`Cloud lite workers need a provider that offers the ${needed} API.`);
-    if (plan.workerProgram === 'claude' && !plan.modelProvider.model && !input.model) throw new TypeError('Select the served model name.');
+    requireFleetApi(plan.modelProvider, plan.workerProgram ?? 'codex');
+    if (['claude', 'flujo'].includes(plan.workerProgram) && !plan.modelProvider.model && !input.model) throw new TypeError('Select the served model name.');
+  }
+  if (plan.flujo !== undefined && plan.workerProgram !== 'flujo') throw new TypeError('The flujo settings belong to FLUJO worker plans.');
+  if (plan.workerProgram === 'flujo') {
+    validateFlujoSettings(plan);
+    if (plan.model && !plan.subagentModel) plan.subagentModel = plan.model;
   }
   if (plan.supervision !== undefined && !['autonomous', 'operator'].includes(plan.supervision)) throw new TypeError('supervision must be autonomous or operator.');
   if (plan.sandbox !== undefined && !CODEX_SANDBOXES.includes(plan.sandbox)) throw new TypeError(`sandbox must be one of ${CODEX_SANDBOXES.join(', ')}.`);
@@ -53,6 +58,19 @@ export function validateCloudLitePlan(input) {
   return plan;
 }
 export const CODEX_SANDBOXES = ['danger-full-access', 'workspace-write', 'read-only'];
+/** The bundled tool servers a FLUJO worker may use. The FLUJO control server stays off: it can install and edit flows. */
+export const FLUJO_SERVERS = ['bash', 'filesystem', 'browser'];
+function validateFlujoSettings(plan) {
+  // FLUJO has no subscription login to broker; its models are stored records with their own key.
+  if (!plan.modelProvider) throw new TypeError('FLUJO workers need a modelProvider.');
+  if (plan.sandbox !== undefined && plan.sandbox !== 'danger-full-access') throw new TypeError('FLUJO workers run with full access on their Machine; choose danger-full-access.');
+  const { teamConcurrency, agentTurns, leadTurns, servers } = plan.flujo ?? {};
+  if (plan.flujo !== undefined && (!plan.flujo || typeof plan.flujo !== 'object' || Array.isArray(plan.flujo))) throw new TypeError('flujo must be an object.');
+  if (teamConcurrency !== undefined && (!Number.isSafeInteger(teamConcurrency) || teamConcurrency < 1 || teamConcurrency > 9)) throw new TypeError('flujo.teamConcurrency must be from 1 to 9.');
+  if (agentTurns !== undefined && (!Number.isSafeInteger(agentTurns) || agentTurns < 1 || agentTurns > 200)) throw new TypeError('flujo.agentTurns must be from 1 to 200.');
+  if (leadTurns !== undefined && (!Number.isSafeInteger(leadTurns) || leadTurns < 1 || leadTurns > 600)) throw new TypeError('flujo.leadTurns must be from 1 to 600.');
+  if (servers !== undefined && (!Array.isArray(servers) || !servers.length || new Set(servers).size !== servers.length || servers.some(name => !FLUJO_SERVERS.includes(name)))) throw new TypeError(`flujo.servers must list ${FLUJO_SERVERS.join(', ')}.`);
+}
 export function agentInventory(plan) {
   return Array.from({ length: plan.machines }, (_, machine) => Array.from({ length: plan.agentsPerMachine }, (_, agent) => ({
     id: `m${machine}-a${agent}`, machine: `m${machine}`, role: agent === 0 ? 'orchestrator' : 'subagent',
@@ -75,7 +93,7 @@ export function machineConfig(plan, { image, volumeId, index, environment }) {
     image, env: environment,
     guest: { cpu_kind: plan.cpuKind, cpus: plan.cpus, memory_mb: plan.memoryMb },
     mounts: [{ volume: volumeId, path: '/data' }],
-    metadata: { 'factory.run': plan.runId, 'factory.machine': `m${index}`, 'factory.runtime': plan.workerProgram === 'claude' ? 'claude-lite' : 'codex-lite' },
+    metadata: { 'factory.run': plan.runId, 'factory.machine': `m${index}`, 'factory.runtime': `${plan.workerProgram ?? 'codex'}-lite` },
     restart: { policy: 'no' },
     // Same private topology as flujo-cloud: host connects using its owned proxy;
     // remote Codex sessions use the coordinator's exact Fly private Machine DNS.

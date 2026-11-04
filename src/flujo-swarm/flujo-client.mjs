@@ -90,6 +90,11 @@ export class FlujoClient {
     return true;
   }
 
+  /** The folders this workspace's file and shell tools may use. */
+  async setWorkspaceRoots(roots, name = this.workspace) {
+    return this.expect('PATCH', '/api/workspaces', { name, newName: name, roots }, { workspace: null });
+  }
+
   /** Read-only observation; a missing workspace must stay missing throughout the window. */
   async confirmWorkspaceAbsent(name, { verificationWindowMs = 15_000, pollIntervalMs = 500 } = {}) {
     if (!Number.isSafeInteger(verificationWindowMs) || verificationWindowMs < 1 ||
@@ -162,13 +167,13 @@ export class FlujoClient {
     return result.body.flow;
   }
 
-  async conversation(id) {
-    return this.api('GET', `/v1/chat/conversations/${encodeURIComponent(id)}`);
+  async conversation(id, { messageLimit } = {}) {
+    return this.api('GET', `/v1/chat/conversations/${encodeURIComponent(id)}${messageLimit ? `?messageLimit=${messageLimit}` : ''}`);
   }
 
   /** Read FLUJO's persisted conversation hierarchy without opening message bodies. */
-  async descendants(id) {
-    return this.api('GET', `/v1/chat/conversations?paged=1&limit=200&descendantsOf=${encodeURIComponent(id)}`);
+  async descendants(id, cursor) {
+    return this.api('GET', `/v1/chat/conversations?paged=1&limit=200&descendantsOf=${encodeURIComponent(id)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
   }
 
   async inject(id, content, messageId = randomUUID()) {

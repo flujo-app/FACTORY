@@ -14,7 +14,7 @@ process.on('message',async message=>{
       sessions=message.sessions;
       const directory='/data/factory-evidence';mkdirSync(directory,{recursive:true,mode:0o700});
       const roots=[{name:'workspaces',path:'/data/worktrees',exclude:['node_modules','.git','.next','.cache','.npm','__pycache__']},
-        {name:'sessions',path:message.sessionsPath??'/data/codex/sessions'}, {name:'results',path:'/data/results'},
+        {name:'sessions',path:message.sessionsPath??'/data/codex/sessions',...(message.sessionsExclude?{exclude:message.sessionsExclude}:{})}, {name:'results',path:'/data/results'},
         {name:'runtime',path:'/data/factory',exclude:['control.sqlite','control.sqlite-wal','control.sqlite-shm']},
         {name:'board',path:resolve(directory,'board')}];
       for(const root of roots)mkdirSync(root.path,{recursive:true,mode:0o700});
