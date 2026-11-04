@@ -367,6 +367,7 @@ await fleet.deploy({ runId: 'my-flujo-run', app: 'my-flujo-app', goal: ownerGoal
   against its SHA-256, so a restarted Machine does not install it again. Allow a few minutes
   on first start. A custom image can provide `flujo` on the path instead. Use a Node image of
   at least 24.22.1 or 22.23.4, running as root; FLUJO's official image runs as a normal user.
+  Fly needs the full reference, such as `docker.io/library/node@sha256:...`.
 - **Sessions:** each agent slot has its own FLUJO workspace with one conversation, so its
   board identity, model record and tools stay apart. FLUJO runs on port 4210 on the
   Machine's loopback, or `FACTORY_FLUJO_PORT`. Each workspace runs its own tool servers, so

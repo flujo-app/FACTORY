@@ -67,7 +67,9 @@ test('a plan can choose FLUJO, and refuses what FLUJO cannot do', () => {
 test('the FLUJO mapping prefers Responses and stores the key in a model record', () => {
   const responses = flujoProviderModel(provider(), { index: 1, key });
   assert.deepEqual([responses.id, responses.name, responses.provider, responses.adapter, responses.baseUrl, responses.ApiKey, responses.contextWindow, responses.compactionThreshold, responses.supportsTools],
-    ['factory-selfhosted', 'served-model', 'openai', 'openai-responses', 'https://model-b.example.test/v1', key, 262144, 80000, true]);
+    ['factory-selfhosted', 'served-model', 'litellm', 'openai-responses', 'https://model-b.example.test/v1', key, 262144, 80000, true]);
+  // FLUJO's OpenAI cache order puts the system message last, which open models refuse.
+  assert.equal(flujoProviderModel(provider({ baseUrls: ['https://api.openai.com/v1'] }), { key }).provider, 'openai');
   const chat = flujoProviderModel(provider({ apis: ['chat'] }), { key });
   assert.deepEqual([chat.adapter, chat.baseUrl], ['openai', 'https://model-a.example.test/v1']);
   const anthropic = flujoProviderModel(provider({ apis: ['anthropic'] }), { key });
@@ -637,6 +639,30 @@ test('a fleet can have its own private network', async () => {
   const other = new FactoryCloudLiteFleet({ directory: join(root, 'other'), infrastructure });
   await other.prepare(plan({ org: 'my-org' }));
   assert.deepEqual(calls[1], ['apps', 'create', 'factory-flujo-test', '--org', 'my-org']);
+});
+
+test('a fleet that stopped part way can still be retired, and foreign resources still block it', async () => {
+  const root = fresh(); const calls = [];
+  let machines = [], volumes = [{ id: 'vol_1' }];
+  const infrastructure = {
+    run: async args => { calls.push(args); if (args[0] === 'volumes' && args[1] === 'create') return JSON.stringify({ id: 'vol_1' }); if (args[0] === 'volumes') return JSON.stringify(volumes); if (args[0] === 'machine') return JSON.stringify(machines); return ''; },
+    buildMachineConfig: () => ({ init: { cmd: ['upstream'] }, services: [] }),
+    createMachine: async () => { throw new Error('refused'); },
+  };
+  const fleet = new FactoryCloudLiteFleet({ directory: join(root, 'fleet'), infrastructure });
+  const image = 'ghcr.io/example/worker@sha256:' + 'a'.repeat(64);
+  await assert.rejects(fleet.deploy(plan({ machines: 1 }), { image, providerKey: key }), /refused/);
+  assert.equal(fleet.snapshot().machines.length, 0);
+  machines = [{ id: 'other', name: 'someone-else', config: { metadata: { 'factory.run': 'another-run' } } }];
+  await assert.rejects(fleet.retire(), /exact original/);
+  machines = []; volumes = [{ id: 'vol_foreign' }];
+  await assert.rejects(fleet.retire(), /exact original/);
+  // A Machine whose creation looked refused may exist anyway; its name and label prove it is ours.
+  volumes = [{ id: 'vol_1' }];
+  machines = [{ id: 'late', name: 'factory-flujo-test-m0', config: { metadata: { 'factory.run': 'flujo-test' } } }];
+  await fleet.retire();
+  assert.equal(fleet.snapshot().status, 'retired');
+  assert.deepEqual(calls.at(-1), ['apps', 'destroy', 'factory-flujo-test', '--yes']);
 });
 
 test('a local FLUJO worker attaches, installs the template and the board, and keeps its conversation', async () => {

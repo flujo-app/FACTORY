@@ -657,9 +657,13 @@ export class FactoryCloudLiteFleet {
     if (this.state.operations['app.retire']?.state !== 'succeeded') {
       const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
       const volumes = JSON.parse(await this.fly(['volumes', 'list', '--app', this.state.plan.app, '--json']));
-      if (inventory.length !== this.state.machines.length || inventory.some(value => !this.state.machines.some(machine =>
-        machine.id === value.id && machine.name === value.name && value.config?.metadata?.['factory.run'] === this.state.plan.runId && value.config?.mounts?.some(mount => mount.volume === machine.volumeId))) ||
-        volumes.length !== this.state.machines.length || volumes.some(value => !this.state.machines.some(machine => machine.volumeId === value.id))) {
+      // A deployment can stop part way, so what this journal created is the inventory, not the plan's full size.
+      // A Machine whose creation has an unknown outcome still proves itself by its run label.
+      const journaledVolumes = new Set(Object.entries(this.state.operations).filter(([key, operation]) => /^m\d+\.volume$/.test(key) && operation.state === 'succeeded').map(([, operation]) => operation.result?.id));
+      const uncertainMachines = new Set(Object.entries(this.state.operations).filter(([key, operation]) => /^m\d+\.machine-create$/.test(key) && operation.state !== 'succeeded').map(([key]) => `factory-${this.state.plan.runId}-${key.split('.')[0]}`));
+      const labelled = value => value.config?.metadata?.['factory.run'] === this.state.plan.runId;
+      if (inventory.some(value => !labelled(value) || !(this.state.machines.some(machine => machine.id === value.id && machine.name === value.name && value.config?.mounts?.some(mount => mount.volume === machine.volumeId)) || uncertainMachines.has(value.name)))
+        || volumes.some(value => !journaledVolumes.has(value.id))) {
         throw new Error('Retirement requires the exact original Machine and volume inventory; retain resources whose ownership differs.');
       }
     }

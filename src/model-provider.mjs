@@ -158,11 +158,10 @@ export function claudeProviderEnvironment(provider, { index = 0, key, model } = 
 }
 
 // FLUJO keeps a model as a stored record, so its settings differ by adapter rather than by variable.
-const FLUJO_ADAPTERS = Object.freeze({
-  responses: { provider: 'openai', adapter: 'openai-responses' },
-  chat: { provider: 'openai', adapter: 'openai' },
-  anthropic: { provider: 'anthropic', adapter: 'anthropic' },
-});
+const FLUJO_ADAPTERS = Object.freeze({ responses: 'openai-responses', chat: 'openai', anthropic: 'anthropic' });
+// FLUJO moves the system message behind the conversation for OpenAI's own prompt cache. Open models'
+// chat templates refuse that, so only OpenAI's endpoint may carry the openai name.
+const flujoProviderName = (api, base) => api === 'anthropic' ? 'anthropic' : new URL(base).hostname === 'api.openai.com' ? 'openai' : 'litellm';
 
 /**
  * FLUJO model record for a self-hosted provider, for `POST /api/model`. FLUJO stores the key in its
@@ -175,7 +174,7 @@ export function flujoProviderModel(provider, { index = 0, key, model } = {}) {
   if (typeof served !== 'string' || !served) throw new TypeError('Select the served model name.');
   const api = programApi(provider, 'flujo');
   const base = providerBaseUrl(provider, index);
-  return { id: `factory-${provider.id}`, name: served, displayName: provider.name ?? provider.id, ...FLUJO_ADAPTERS[api],
+  return { id: `factory-${provider.id}`, name: served, displayName: provider.name ?? provider.id, provider: flujoProviderName(api, base), adapter: FLUJO_ADAPTERS[api],
     // The Anthropic client adds /v1 itself.
     baseUrl: api === 'anthropic' ? base.replace(/\/+$/, '').replace(/\/v1$/, '') : base,
     ApiKey: key, supportsTools: true,
