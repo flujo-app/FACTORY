@@ -11,7 +11,9 @@ export async function collectCloudLiteSnapshot({ root = '/data', runId, destinat
   mkdirSync(destination, { mode: 0o700 });
   const output = join(destination, 'snapshot'); mkdirSync(output, { recursive: true, mode: 0o700 });
   const manifest = { runId, includeGitObjects, startedAt: new Date().toISOString(), files: [], omitted: [], changedDuringCopy: [], sqliteBackups: [] };
-  const excluded = new Set(['node_modules', '.next', '.npm', '.cache', '__pycache__', '.pytest_cache', 'auth.json', 'lost+found']);
+  const excluded = new Set(['node_modules', '.next', '.npm', '.cache', '__pycache__', '.pytest_cache', 'auth.json', 'lost+found',
+    // FLUJO keeps its keys and server settings in these, and the board credential sits in the last one.
+    'encryption_key.json', 'models.json', 'mcp_servers.json', 'factory-private']);
   const digest = async file => { const hash = createHash('sha256'); for await (const bytes of createReadStream(file)) hash.update(bytes); return hash.digest('hex'); };
   const identicalFiles = new Map(); let hardLinkedFiles = 0;
   async function visit(source) {

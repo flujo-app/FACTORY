@@ -15,9 +15,10 @@ const endpoint = (extra = {}) => ({ id: 'selfhosted', name: 'Self-hosted model',
   contextWindow: 262144, autoCompactTokenLimit: 100000, ...extra });
 
 test('one provider description states which worker programs can use it', () => {
-  assert.deepEqual(providerPrograms(endpoint()), ['codex', 'claude']);
-  assert.deepEqual(providerPrograms(endpoint({ apis: undefined })), ['codex'], '0.4.0 descriptions keep working for Codex');
-  assert.deepEqual(providerPrograms(endpoint({ apis: ['anthropic'] })), ['claude']);
+  assert.deepEqual(providerPrograms(endpoint()), ['codex', 'claude', 'flujo']);
+  assert.deepEqual(providerPrograms(endpoint({ apis: undefined })), ['codex', 'flujo'], '0.4.0 descriptions keep working for Codex');
+  assert.deepEqual(providerPrograms(endpoint({ apis: ['anthropic'] })), ['claude', 'flujo']);
+  assert.deepEqual(providerPrograms(endpoint({ apis: ['chat'] })), ['flujo']);
   for (const extra of [{ apis: [] }, { apis: ['grpc'] }, { envKey: 'ANTHROPIC_AUTH_TOKEN' }, { requestTimeoutMs: 10 }]) assert.throws(() => validateModelProvider(endpoint(extra)), TypeError, JSON.stringify(extra));
   assert.throws(() => validateCloudLitePlan({ runId: 'claude-only', app: 'claude-only-app', goal: 'x', modelProvider: endpoint({ apis: ['anthropic'] }) }), /responses API/);
 });

@@ -1,6 +1,8 @@
 /** Bootstrap on the pinned upstream Node image when a custom registry is unavailable. */
 const CLAUDE_CODE_VERSION = '2.1.311';
 const CLAUDE_CODE_LINUX_X64_SHA256 = '86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada';
+const FLUJO_VERSION = '3.48.3';
+const FLUJO_SHA256 = '09e954ec5b15e30748c28576b2c0bbe3d4f5cdc34afbbbc139d92759474b6b98';
 const programInstall = {
   codex: {
     folder: '/data/codex', packages: '', home: 'CODEX_HOME=/data/codex',
@@ -20,6 +22,22 @@ mv /usr/local/bin/codex-code-mode-host-x86_64-unknown-linux-musl /usr/local/bin/
 echo '${CLAUDE_CODE_LINUX_X64_SHA256}  /tmp/claude' | sha256sum -c -
 install -m 755 /tmp/claude /usr/local/bin/claude
 rm -f /tmp/claude`,
+  },
+  // Kept on the volume, so a restarted Machine does not install it again. An image that already has
+  // `flujo` on its path skips this. Install scripts stay off: they only download a browser workers leave off.
+  flujo: {
+    folder: '/data/flujo /data/factory-private /data/results', packages: ' ripgrep python3-venv python3-pip', home: 'FLUJO_DATA_DIR=/data/flujo',
+    install: `if ! command -v flujo >/dev/null 2>&1; then
+if [ ! -f /data/flujo-program/.installed-${FLUJO_VERSION} ]; then
+rm -rf /data/flujo-program
+curl -fsSL https://registry.npmjs.org/flujo-ai/-/flujo-ai-${FLUJO_VERSION}.tgz -o /tmp/flujo.tgz
+echo '${FLUJO_SHA256}  /tmp/flujo.tgz' | sha256sum -c -
+npm install --prefix /data/flujo-program /tmp/flujo.tgz --ignore-scripts --omit=dev --no-audit --no-fund
+rm -f /tmp/flujo.tgz
+touch /data/flujo-program/.installed-${FLUJO_VERSION}
+fi
+ln -sf /data/flujo-program/node_modules/.bin/flujo /usr/local/bin/flujo
+fi`,
   },
 };
 

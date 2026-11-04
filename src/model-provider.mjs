@@ -4,8 +4,11 @@
 
 /** Wire APIs an endpoint can offer. */
 export const MODEL_PROVIDER_APIS = ['responses', 'chat', 'anthropic'];
-/** The wire API each worker program needs. */
-export const WORKER_PROGRAM_APIS = Object.freeze({ codex: 'responses', claude: 'anthropic' });
+/**
+ * The wire APIs each worker program can use, best first. Codex and Claude Code know one each;
+ * FLUJO has an adapter for all three and prefers the Responses API.
+ */
+export const WORKER_PROGRAM_APIS = Object.freeze({ codex: Object.freeze(['responses']), claude: Object.freeze(['anthropic']), flujo: Object.freeze(['responses', 'chat', 'anthropic']) });
 // Variables the launchers set for the worker process itself; a provider key must not replace them.
 const RESERVED_ENVIRONMENT = new Set(['PATH', 'HOME', 'CODEX_HOME', 'GH_TOKEN', 'GIT_TERMINAL_PROMPT',
   'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN']);
@@ -44,17 +47,27 @@ export function validateModelProvider(provider) {
 /** The wire APIs a provider offers (the default keeps 0.4.0 descriptions valid for Codex). */
 export const providerApis = provider => provider.apis ?? ['responses'];
 
+/** The API a worker program would use on this provider, or undefined when they share none. */
+export function programApi(provider, program) {
+  const apis = providerApis(provider);
+  return WORKER_PROGRAM_APIS[program]?.find(api => apis.includes(api));
+}
+
 /** Which worker programs can use this provider. */
 export function providerPrograms(provider) {
-  const apis = providerApis(provider);
-  return Object.entries(WORKER_PROGRAM_APIS).filter(([, api]) => apis.includes(api)).map(([program]) => program);
+  return Object.keys(WORKER_PROGRAM_APIS).filter(program => programApi(provider, program));
 }
+
+const apiNames = program => WORKER_PROGRAM_APIS[program].join(' or ');
 
 function requireApi(provider, program) {
   validateModelProvider(provider);
-  if (!providerApis(provider).includes(WORKER_PROGRAM_APIS[program])) {
-    throw new TypeError(`${program} needs a provider that offers the ${WORKER_PROGRAM_APIS[program]} API.`);
-  }
+  if (!programApi(provider, program)) throw new TypeError(`${program} needs a provider that offers the ${apiNames(program)} API.`);
+}
+
+/** A cloud plan's refusal, in the words its operator knows. */
+export function requireFleetApi(provider, program) {
+  if (!programApi(provider, program)) throw new TypeError(`Cloud lite workers need a provider that offers the ${apiNames(program)} API.`);
 }
 
 /** Spread workers over the endpoints so each keeps its prompt cache on one server. */
@@ -142,6 +155,31 @@ export function claudeProviderEnvironment(provider, { index = 0, key, model } = 
     ...(provider.contextWindow ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(provider.contextWindow) } : {}),
     ...(provider.autoCompactTokenLimit ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(provider.autoCompactTokenLimit) } : {}),
   };
+}
+
+// FLUJO keeps a model as a stored record, so its settings differ by adapter rather than by variable.
+const FLUJO_ADAPTERS = Object.freeze({ responses: 'openai-responses', chat: 'openai', anthropic: 'anthropic' });
+// FLUJO moves the system message behind the conversation for OpenAI's own prompt cache. Open models'
+// chat templates refuse that, so only OpenAI's endpoint may carry the openai name.
+const flujoProviderName = (api, base) => api === 'anthropic' ? 'anthropic' : new URL(base).hostname === 'api.openai.com' ? 'openai' : 'litellm';
+
+/**
+ * FLUJO model record for a self-hosted provider, for `POST /api/model`. FLUJO stores the key in its
+ * own encrypted settings, so it never enters the process environment that agent commands inherit.
+ */
+export function flujoProviderModel(provider, { index = 0, key, model } = {}) {
+  requireApi(provider, 'flujo');
+  if (typeof key !== 'string' || key.length < 8) throw new TypeError('A model provider needs its API key.');
+  const served = provider.model ?? model;
+  if (typeof served !== 'string' || !served) throw new TypeError('Select the served model name.');
+  const api = programApi(provider, 'flujo');
+  const base = providerBaseUrl(provider, index);
+  return { id: `factory-${provider.id}`, name: served, displayName: provider.name ?? provider.id, provider: flujoProviderName(api, base), adapter: FLUJO_ADAPTERS[api],
+    // The Anthropic client adds /v1 itself.
+    baseUrl: api === 'anthropic' ? base.replace(/\/+$/, '').replace(/\/v1$/, '') : base,
+    ApiKey: key, supportsTools: true,
+    ...(provider.contextWindow ? { contextWindow: provider.contextWindow } : {}),
+    ...(provider.autoCompactTokenLimit ? { compactionThreshold: provider.autoCompactTokenLimit } : {}) };
 }
 
 /** Apply a mapping's environment to an inherited one (null removes a variable). */

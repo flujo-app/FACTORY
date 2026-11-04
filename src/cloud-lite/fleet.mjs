@@ -206,7 +206,7 @@ export class FactoryCloudLiteFleet {
       writeFileSync(join(this.directory, 'credentials.json'), JSON.stringify({ credentials, operatorToken: secret() }), { mode: 0o600, flag: 'wx' });
       this.state = { schemaVersion: 1, plan, image: null, operations: {}, machines: [], createdAt: new Date().toISOString() }; this.save();
     }
-    await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal']); return { app: plan.app }; });
+    await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal', ...(plan.network ? ['--network', plan.network] : [])]); return { app: plan.app }; });
     return this.snapshot();
   }
   async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens, deployKey, providerKey } = {}) {
@@ -411,7 +411,7 @@ export class FactoryCloudLiteFleet {
       throw new TypeError('Select original journal-owned Machine identities.');
     }
     const bootstrapPath = join(this.directory, `bootstrap-${digest}.sh`);
-    writeFileSync(bootstrapPath, cloudLiteBootstrap(digest), { mode: 0o600 });
+    writeFileSync(bootstrapPath, cloudLiteBootstrap(digest, { workerProgram: this.state.plan.workerProgram }), { mode: 0o600 });
     for (const machine of selected) {
       await this.stage(`${machine.id}.runtime.${digest}`, async () => {
         const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
@@ -657,9 +657,13 @@ export class FactoryCloudLiteFleet {
     if (this.state.operations['app.retire']?.state !== 'succeeded') {
       const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
       const volumes = JSON.parse(await this.fly(['volumes', 'list', '--app', this.state.plan.app, '--json']));
-      if (inventory.length !== this.state.machines.length || inventory.some(value => !this.state.machines.some(machine =>
-        machine.id === value.id && machine.name === value.name && value.config?.metadata?.['factory.run'] === this.state.plan.runId && value.config?.mounts?.some(mount => mount.volume === machine.volumeId))) ||
-        volumes.length !== this.state.machines.length || volumes.some(value => !this.state.machines.some(machine => machine.volumeId === value.id))) {
+      // A deployment can stop part way, so what this journal created is the inventory, not the plan's full size.
+      // A Machine whose creation has an unknown outcome still proves itself by its run label.
+      const journaledVolumes = new Set(Object.entries(this.state.operations).filter(([key, operation]) => /^m\d+\.volume$/.test(key) && operation.state === 'succeeded').map(([, operation]) => operation.result?.id));
+      const uncertainMachines = new Set(Object.entries(this.state.operations).filter(([key, operation]) => /^m\d+\.machine-create$/.test(key) && operation.state !== 'succeeded').map(([key]) => `factory-${this.state.plan.runId}-${key.split('.')[0]}`));
+      const labelled = value => value.config?.metadata?.['factory.run'] === this.state.plan.runId;
+      if (inventory.some(value => !labelled(value) || !(this.state.machines.some(machine => machine.id === value.id && machine.name === value.name && value.config?.mounts?.some(mount => mount.volume === machine.volumeId)) || uncertainMachines.has(value.name)))
+        || volumes.some(value => !journaledVolumes.has(value.id))) {
         throw new Error('Retirement requires the exact original Machine and volume inventory; retain resources whose ownership differs.');
       }
     }

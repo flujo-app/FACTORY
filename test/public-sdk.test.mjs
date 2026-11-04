@@ -46,7 +46,7 @@ test('lite workers launch native CLIs with only the Factory MCP configuration', 
   assert.ok(claude.args.includes('--dangerously-skip-permissions'));
   assert.ok(claude.args.includes('--strict-mcp-config'));
   assert.deepEqual(Object.keys(JSON.parse(claude.args[claude.args.indexOf('--mcp-config') + 1]).mcpServers), ['factory']);
-  assert.throws(() => liteWorkerCommand({ provider: 'flujo', database: 'board.sqlite' }), /provider/);
+  assert.throws(() => liteWorkerCommand({ provider: 'other', database: 'board.sqlite' }), /provider/);
 });
 
 test('public SDK starts a lite worker through the same launcher as the CLI', async t => {

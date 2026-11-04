@@ -1,17 +1,17 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.6.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.6.0):
+Version 0.7.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.7.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.6.0/flujo-factory-0.6.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.7.0/flujo-factory-0.7.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
 `ModalSelfHostedModel` and `factory-selfhost` deploy, verify, stop and retire a vLLM endpoint
 with Qwen3.8-27B (H100) or Nemotron 3.5 Super (B300) profiles; see
 [selfhost/README.md](selfhost/README.md). Its endpoint description is a model provider that
-cloud and local lite workers (Codex or Claude Code) use directly. See
+cloud and local lite workers (Codex, Claude Code or FLUJO) use directly. See
 [Self-hosted models and operator-driven jobs](#self-hosted-models-and-operator-driven-jobs)
 for the provider, read-only deploy keys, prepare hooks, operator-driven jobs and quieter
 traces added in 0.4.0. All of it is optional; existing plans behave as before, except that
@@ -137,7 +137,7 @@ local overrides are not implicitly shared with a remote adapter.
 ### Lite workers
 
 `factory-lite` opens a regular interactive Codex or Claude CLI session in the
-current directory. It does not provision a FLUJO worker or use the FLUJO
+current directory, or runs a FLUJO worker (see below). A CLI session does not provision a FLUJO worker or use the FLUJO
 conversation harness. The CLI retains its built-in tools and unrestricted file
 and command access. The only MCP server supplied for that session is FACTORY's
 local board/swarm server, connected to the specified durable database.
@@ -200,6 +200,23 @@ description the cloud plan uses (see
 `startLiteWorker({ provider: 'claude', modelProvider, providerKey })`. From the
 command line, `factory-lite claude board.sqlite --model-provider endpoint.json`
 reads the key from the variable the file names in `envKey`.
+
+A local FLUJO worker has no terminal session. It attaches to a running FLUJO, or starts
+its own with a separate data folder, installs the generic team template with the board
+as a tool server, and keeps its conversation across runs:
+
+```js
+const worker = await factory.startLiteWorker({ provider: 'flujo', modelProvider, providerKey,
+  origin: 'http://127.0.0.1:4200', prompt: 'Work on the Factory board' });
+const turn = await worker.settled();
+await worker.send('Next job');
+await worker.stop();
+```
+
+From the command line: `factory-lite flujo board.sqlite --model-provider endpoint.json
+[--origin http://127.0.0.1:4200] "Work on the Factory board"`. Without `--origin`, the
+`flujo` command from `npm install -g flujo-ai` must be on the path. A record from
+`POST /api/model` can stand in for a provider as `flujoModel`.
 
 ## FLUJO worker dispatch
 
@@ -320,6 +337,71 @@ await selfHostedFleet.deploy({ ...plan, workerProgram: 'claude', model: provider
   `thread/tokenUsage/updated`, and model retries become `model/retry`. Streaming deltas
   are skipped unless `traceDeltas` is on.
 
+#### FLUJO as the worker program
+
+Set `workerProgram: 'flujo'` to run a FLUJO server on each machine. The board, operator
+commands and stop receipts, durable traces, prepare hooks, evidence collection and
+verified workflows are the same shared code as for Codex and Claude Code.
+
+```js
+const fleet = new FactoryCloudLiteFleet({ directory: '/absolute/private/fleet-run',
+  flujoCloudPath: '/absolute/installed/flujo-cloud' });
+await fleet.deploy({ runId: 'my-flujo-run', app: 'my-flujo-app', goal: ownerGoal,
+  workerProgram: 'flujo', machines: 3, agentsPerMachine: 1,
+  modelProvider: model.endpoint(),
+  // Optional: each orchestrator leads a team of native FLUJO subflows.
+  flujo: { teamConcurrency: 4, agentTurns: 200, leadTurns: 600 },
+}, { image: immutableNodeImage, bundlePath: '/absolute/private/flujo-factory.tgz', providerKey: await model.key() });
+```
+
+- **Model:** a plan needs a `modelProvider`; FLUJO workers have no subscription login. It
+  can offer `responses`, `chat` or `anthropic`, and FLUJO uses the first of those that the
+  provider has. `flujoProviderModel` is the exported mapping. FLUJO stores the key in its
+  own encrypted settings, so the FLUJO process and the agent commands it starts never have
+  it in their environment. `reasoningEffort` does not apply: FLUJO accepts it only for
+  models it knows by name.
+- **Bundle:** `bundlePath` can be a release file, or what `packFactorySdk(file)` writes from
+  the installed package, which needs no `npm` or `tar` on the host. `network` in the plan
+  puts the fleet's app on its own private network.
+- **Install:** the bootstrap installs one pinned `flujo-ai` release on the volume, checked
+  against its SHA-256, so a restarted Machine does not install it again. Allow about four
+  minutes on first start. A custom image can provide `flujo` on the path instead. Use a Node image of
+  at least 24.22.1 or 22.23.4, running as root; FLUJO's official image runs as a normal user.
+  Fly needs the full reference, such as `docker.io/library/node@sha256:...`.
+- **Sessions:** each agent slot has its own FLUJO workspace with one conversation, so its
+  board identity, model record and tools stay apart. FLUJO runs on port 4210 on the
+  Machine's loopback, or `FACTORY_FLUJO_PORT`. Each workspace runs its own tool servers, so
+  plan on about 400 MB per agent plus 300 MB for FLUJO. FLUJO restarts by itself up to
+  three times in ten minutes; after that the worker stops, as with the other programs.
+- **Team:** with `flujo.teamConcurrency` an orchestrator gets the `swarm_team` flow, with one
+  native gate for its subflows, and `flujo.specialists` can give it a role catalog. The others get `swarm_agent`. A turn ends, and a stop receipt
+  is issued, only after every child conversation has ended too. Each conversation lists its
+  children under `/v1/chat/conversations?descendantsOf=<thread>`.
+- **Tools:** `bash` and `filesystem`, plus `browser` if `flujo.servers` lists it and the image
+  has its browser; the bootstrap does not download one. The FLUJO control server stays off.
+  The board server takes its address and credential from a private file. A worker's prompt
+  names its working folder, because FLUJO's tools otherwise start in FLUJO's data folder.
+- **Sandbox:** only `danger-full-access`. FLUJO's folder settings are a guide for its tools,
+  not a boundary, so the Machine is the sandbox, and a plan with a narrower `sandbox` is
+  refused. Agents get no GitHub token, as with other self-hosted model plans. An agent command
+  runs as the same user, so it could still read FLUJO's stored settings, including the model
+  key; use another program with a narrower sandbox when agents handle untrusted input.
+- **Runs:** a run belongs to FLUJO, not to the connection that asked for it. A dropped event
+  stream is followed again from its last event. A submission whose answer was lost is read
+  back and never sent twice. While FLUJO is under pressure a turn waits for up to five
+  minutes. A question or form from a tool is declined, because nobody is there to answer it.
+- **Messages and stops:** a message during a turn joins it at its next safe point; if the run
+  ended before taking it, the same turn goes on with it. A stop is requested again until FLUJO
+  has stopped, and wins over a queued message. If it never stops, no receipt is issued.
+- **Restarts:** the conversation survives. A turn that was running when FLUJO died ends as
+  `interrupted`. It is not replayed; in autonomous mode the agent gets a new turn. If the
+  conversation is gone, the usual recovery for an unavailable session applies.
+- **Traces and evidence:** messages, tool calls and results and subflow starts and ends become
+  `item/completed` records (`agentMessage`, `toolCall`, `toolResult`, `subflow`), with `depth`
+  and `lane` for children. Token use becomes `thread/tokenUsage/updated`, retries become
+  `model/retry`, and errors become `flujo/error`. Evidence holds the conversations from
+  `/data/flujo/workspaces`, not its keys, server settings or tool copies.
+
 #### Self-hosted models and operator-driven jobs
 
 To run the model yourself, `ModalSelfHostedModel` (CLI `factory-selfhost`) deploys a
@@ -357,12 +439,12 @@ await fleet.command('m0-a1', { id: 'job-1', action: 'message', message: 'First j
   maps to its own settings. `id`, `envKey` (the variable that carries the key) and
   `https` `baseUrls` (OpenAI-style, ending in `/v1`) without credentials are
   required. `apis` lists the wire APIs the server offers: `responses` (Codex),
-  `anthropic` (Claude Code, `/v1/messages`) and `chat`. vLLM serves all three; the
-  default is `['responses']`. `name`, `model`, `contextWindow`,
+  `anthropic` (Claude Code, `/v1/messages`) and `chat`; FLUJO can use any of them. vLLM
+  serves all three; the default is `['responses']`. `name`, `model`, `contextWindow`,
   `autoCompactTokenLimit`, `toolOutputTokenLimit`, `requestMaxRetries`,
   `streamMaxRetries`, `streamIdleTimeoutMs` and `requestTimeoutMs` are optional.
-  `codexProviderConfig`, `codexProviderOverrides` and `claudeProviderEnvironment`
-  are exported mappings; `providerPrograms(provider)` says which programs can use
+  `codexProviderConfig`, `codexProviderOverrides`, `claudeProviderEnvironment` and
+  `flujoProviderModel` are exported mappings; `providerPrograms(provider)` says which programs can use
   it. Each Codex gets a `config.toml` with the provider, the model's real context
   window and its compaction point; web search, multi-agent, apps, plugins, goals,
   memories and skill instructions are off, and agents' shell commands inherit only

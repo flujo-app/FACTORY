@@ -16,6 +16,11 @@ const MINUTE = 60_000;
 
 const notApplied = message => Object.assign(new Error(message), { outcome: 'not_applied' });
 const unknown = message => Object.assign(new Error(message), { code: 'UNKNOWN', outcome: 'unknown', unknown: true });
+const pause = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(uncertain()); return; }
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener('abort', () => { clearTimeout(timer); reject(uncertain()); }, { once: true });
+});
 const uncertain = () => unknown('The self-hosted model has an uncertain outcome. Its owned resources are kept for reconciliation; retire them before deploying again.');
 const json = raw => { try { return JSON.parse(raw); } catch { return null; } };
 const lastJsonLine = raw => json(String(raw ?? '').trim().split(/\r?\n/).reverse().find(line => line.trim().startsWith('{')) ?? '');
@@ -169,10 +174,10 @@ function fileCredentialStore(directory) {
 export class ModalSelfHostedModel {
   constructor({ directory, python = process.platform === 'win32' ? 'python' : 'python3', pythonArgs = [], env = process.env,
     commandRunner = runCommand, fetchImpl = fetch, credentialStore, keyName = 'selfhosted-model', namePrefix = 'factory',
-    clock = Date.now, deployTimeoutMs = 45 * MINUTE, prefetchTimeoutMs = 70 * MINUTE } = {}) {
+    clock = Date.now, deployTimeoutMs = 45 * MINUTE, prefetchTimeoutMs = 70 * MINUTE, stopWaitMs = 3 * MINUTE, stopPollMs = 3000, deleteAttempts = 5 } = {}) {
     if (typeof directory !== 'string' || !directory) throw new TypeError('Select a private state directory.');
     if (!/^[a-z][a-z0-9]{1,15}$/.test(namePrefix)) throw new TypeError('namePrefix must be a short lowercase name.');
-    Object.assign(this, { directory, python, pythonArgs: [...pythonArgs], commandRunner, fetch: fetchImpl, keyName, namePrefix, clock, deployTimeoutMs, prefetchTimeoutMs });
+    Object.assign(this, { stopWaitMs, stopPollMs, deleteAttempts, directory, python, pythonArgs: [...pythonArgs], commandRunner, fetch: fetchImpl, keyName, namePrefix, clock, deployTimeoutMs, prefetchTimeoutMs });
     this.environment = typeof env === 'function' ? env : () => env;
     this.store = credentialStore ?? fileCredentialStore(directory);
     this.path = join(directory, 'model.json');
@@ -349,11 +354,15 @@ export class ModalSelfHostedModel {
 
   async #stopApp(signal) {
     const stopped = await this.#cli(['app', 'stop', '--yes', this.record.appName], { signal });
-    const states = await this.#appState(signal);
-    // Stopped (now or earlier), or never created after an early deployment failure, is a
-    // confirmed GPU-off state; anything else stays uncertain.
-    if (states && !states.every(state => /^stopped$/i.test(state))) throw uncertain();
-    return { stopCommand: stopped?.code === 0 ? 'ok' : 'refused', listed: Boolean(states) };
+    // A busy replica takes a while to stop. Stopped (now or earlier), or never created after an
+    // early deployment failure, is a confirmed GPU-off state; still stopping at the deadline stays uncertain.
+    const deadline = this.clock() + this.stopWaitMs;
+    for (;;) {
+      const states = await this.#appState(signal);
+      if (!states || states.every(state => /^stopped$/i.test(state))) return { stopCommand: stopped?.code === 0 ? 'ok' : 'refused', listed: Boolean(states) };
+      if (!states.some(state => /stopping/i.test(state)) && stopped?.code !== 0 || this.clock() >= deadline) throw uncertain();
+      await pause(this.stopPollMs, signal);
+    }
   }
 
   /** Stop the GPU containers now; key, secret and cached weights stay for a later redeploy. */
@@ -408,8 +417,13 @@ export class ModalSelfHostedModel {
         const app = record.appName;
         const owned = [['secret', `${app}-auth`], ['volume', `${app}-hf-cache`], ['volume', `${app}-vllm-cache`]];
         for (const [kind, name] of owned) {
-          const deleted = await this.#cli([kind, 'delete', '--allow-missing', '--yes', name], { signal });
-          if (deleted?.code !== 0) throw uncertain();
+          // Modal can refuse a delete for a moment while the stopped app lets go of its volumes.
+          for (let attempt = 1; ; attempt++) {
+            const deleted = await this.#cli([kind, 'delete', '--allow-missing', '--yes', name], { signal });
+            if (deleted?.code === 0) break;
+            if (attempt >= this.deleteAttempts) throw uncertain();
+            await pause(this.stopPollMs, signal);
+          }
         }
         const [secrets, volumes] = await Promise.all([this.#cli(['secret', 'list', '--json'], { signal }), this.#cli(['volume', 'list', '--json'], { signal })]);
         const remaining = [json(secrets?.stdout), json(volumes?.stdout)];
