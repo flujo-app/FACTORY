@@ -364,8 +364,8 @@ await fleet.deploy({ runId: 'my-flujo-run', app: 'my-flujo-app', goal: ownerGoal
   the installed package, which needs no `npm` or `tar` on the host. `network` in the plan
   puts the fleet's app on its own private network.
 - **Install:** the bootstrap installs one pinned `flujo-ai` release on the volume, checked
-  against its SHA-256, so a restarted Machine does not install it again. Allow a few minutes
-  on first start. A custom image can provide `flujo` on the path instead. Use a Node image of
+  against its SHA-256, so a restarted Machine does not install it again. Allow about four
+  minutes on first start. A custom image can provide `flujo` on the path instead. Use a Node image of
   at least 24.22.1 or 22.23.4, running as root; FLUJO's official image runs as a normal user.
   Fly needs the full reference, such as `docker.io/library/node@sha256:...`.
 - **Sessions:** each agent slot has its own FLUJO workspace with one conversation, so its
@@ -374,7 +374,7 @@ await fleet.deploy({ runId: 'my-flujo-run', app: 'my-flujo-app', goal: ownerGoal
   plan on about 400 MB per agent plus 300 MB for FLUJO. FLUJO restarts by itself up to
   three times in ten minutes; after that the worker stops, as with the other programs.
 - **Team:** with `flujo.teamConcurrency` an orchestrator gets the `swarm_team` flow, with one
-  native gate for its subflows. The others get `swarm_agent`. A turn ends, and a stop receipt
+  native gate for its subflows, and `flujo.specialists` can give it a role catalog. The others get `swarm_agent`. A turn ends, and a stop receipt
   is issued, only after every child conversation has ended too. Each conversation lists its
   children under `/v1/chat/conversations?descendantsOf=<thread>`.
 - **Tools:** `bash` and `filesystem`, plus `browser` if `flujo.servers` lists it and the image
