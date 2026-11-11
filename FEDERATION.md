@@ -12,7 +12,7 @@ throughput measure. Compare task classes and include review, integration and rew
 The owner's larger vision is a network of FLUJO instances that can deploy further
 cloud instances, work on separate problems or competing approaches, communicate,
 and monitor one another. This document extends the
-[factory notebook](C:/Users/Moe/Documents/ChatGPT/FACTORY/FACTORY_DESIGN.md).
+[factory notebook](FACTORY_DESIGN.md).
 
 ## A cell is a complete local work system
 
@@ -223,7 +223,7 @@ separate clean `flujo-cloud` checkout at `c36ceef`. The cached newer FLUJO remot
 ref is context, not a claim about the currently deployed fleet.
 
 The local source audit found a portable workspace-snapshot cloud-worker path in
-[Hot-clone workspace](C:/Users/Moe/Documents/GitHub/FLUJO/docs/features/hot-clone-workspace.md).
+[Hot-clone workspace](https://github.com/mario-andreschak/FLUJO/blob/main/docs/features/hot-clone-workspace.md).
 Its documentation delegates Fly lifecycle, tunneling, forwarding and teardown to
 a separate `flujo-cloud` bridge and validates worker compatibility.
 
@@ -232,8 +232,8 @@ The bridge already exposes a shared `ManagedCloud` application service with
 operation records a durable attempt before provisioning, pins a compatible image,
 and binds credentials to the deployment journal. `call` forwards an existing Flow
 request. These are concrete foundations for a factory provisioning capability.
-See [the cloud architecture](C:/Users/Moe/Documents/GitHub/flujo-cloud/docs/architecture.md)
-and [ManagedCloud](C:/Users/Moe/Documents/GitHub/flujo-cloud/lib/managed.mjs:253).
+See [the cloud architecture](https://github.com/flujo-app/flujo-cloud/blob/main/docs/architecture.md)
+and [ManagedCloud](https://github.com/flujo-app/flujo-cloud/blob/main/lib/managed.mjs#L253).
 
 The bridge exposes CLI/application-service operations. The factory adds a private
 MCP capacity tool, authenticated peer inbox and controller-admitted adapter.
@@ -281,8 +281,8 @@ cross-host consensus. Remote MCP task polling can resume observation against a
 matching server identity, but its documented restart path does not retrieve and
 deliver results after the originating run is gone. These existing mechanisms
 cannot substitute for a durable cross-cell work/result protocol. See
-[the local lease boundary](C:/Users/Moe/Documents/GitHub/FLUJO/docs/architecture/enduring-agent-foundation-contracts.md:52)
-and [remote task recovery](C:/Users/Moe/Documents/GitHub/FLUJO/src/backend/services/mcp/remoteTaskResume.ts:3).
+[the local lease boundary](https://github.com/mario-andreschak/FLUJO/blob/main/docs/architecture/enduring-agent-foundation-contracts.md#L52)
+and [remote task recovery](https://github.com/mario-andreschak/FLUJO/blob/main/src/backend/services/mcp/remoteTaskResume.ts#L3).
 
 Established background patterns include lease-based coordination and durable
 workflow history/recovery. Kubernetes documents leases for heartbeats and leader
@@ -297,7 +297,7 @@ The first partial live delegation proof has now passed: real parent/child FLUJO
 workers, coordinator-mediated child admission, independent review, owned teardown
 and a separate same-host provider witness. It does not yet qualify the full
 experiment below. Exact evidence and remaining scope are in
-[the qualification record](C:/Users/Moe/Documents/ChatGPT/FACTORY/QUALIFICATION.md).
+[the qualification record](QUALIFICATION.md).
 
 1. Select one bounded FLUJO improvement and a common acceptance contract.
 2. Provision one cloud development cell and an independently hosted watcher,
