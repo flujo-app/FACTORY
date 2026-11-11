@@ -141,7 +141,7 @@ remains unverified. HTTP witness SHA-256:
 `1e545a0d0dca944e0daaae73d21486e4e00a92e0ba90b4bf5bd7be5644361bb4`.
 
 The private bearer file is
-`C:\Users\Moe\Documents\ChatGPT\FACTORY\.factory\viewer\credential.json`.
+`.factory\viewer\credential.json`.
 It contains `{ "token": "..." }` under owner-only Windows permissions. Load it
 only into the server-side brain-online adapter; never expose it to its browser,
 Git, logs or process arguments. FACTORY's `loadViewerToken` checks file ownership,
@@ -152,7 +152,7 @@ commit. The currently running process was launched earlier from `8f5a940`:
 
 ```powershell
 $factoryBuild = (git rev-parse HEAD).Trim()
-& 'C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' bin/serve.mjs --database 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/federation-20261002/control.sqlite' --spending-ledger 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/spending.sqlite' --factory-id factory-live-pilot --token-file 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/credential.json' --modal-journals 'C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/viewer/modal-journals-20261003.private.json' --port 4344 --build-revision $factoryBuild
+& 'node' bin/serve.mjs --database '.factory/federation-20261002/control.sqlite' --spending-ledger '.factory/spending.sqlite' --factory-id factory-live-pilot --token-file '.factory/viewer/credential.json' --modal-journals '.factory/viewer/modal-journals-20261003.private.json' --port 4344 --build-revision $factoryBuild
 ```
 
 Shared paid reservations live separately in `.factory/spending.sqlite`: $10 Fly

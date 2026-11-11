@@ -872,7 +872,7 @@ logical allocation and paid admission projections. The brain-online staff BFF
 also read this actual endpoint successfully; anonymous access was rejected and
 customer access excluded. Its frontend work is
 [brain-online PR 34](https://github.com/flujo-app/brain-online/pull/34).
-See [the interface contract](C:/Users/Moe/Documents/ChatGPT/FACTORY/BRAIN_ONLINE_INTEGRATION.md).
+See [the interface contract](BRAIN_ONLINE_INTEGRATION.md).
 
 This snapshot's task/effect/pause scope is the Fly pilot's controller. Modal uses
 a separate operation journal and shared paid-admission ledger, without consulting

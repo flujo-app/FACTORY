@@ -20,7 +20,7 @@ The entrypoint sets `umask 077` and uses `exec`, leaving Node as PID1 to receive
 SIGTERM. Files in `/app` remain root-owned; the process runs as uid/gid1000.
 
 `deploy/private-files.mjs` is a verbatim verified copy of
-`C:/Users/Moe/Documents/GitHub/flujo-cloud/lib/private-files.mjs`, captured for
+`flujo-cloud/lib/private-files.mjs`, captured for
 this packaging increment. Its SHA256 is
 `7ae5ba87ec1cd387ee1b914105894d29254e07c0a3644c86f65810f461dcd54d`.
 It imports only Node builtins, implements owner-private files on POSIX and

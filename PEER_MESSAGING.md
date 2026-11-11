@@ -44,11 +44,10 @@ hosted high availability.
 
 ## Explicit CLI
 
-Use Node 24 or newer. This machine's default Node is older; the bundled executable
-is `C:/Users/Moe/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe`.
+Use Node 24 or newer.
 All operations require `--private-module ABSOLUTE_PATH`, selecting the trusted
 private-files helper. The existing helper is
-`C:/Users/Moe/Documents/GitHub/flujo-cloud/lib/private-files.mjs`. It checks owner-only
+`flujo-cloud/lib/private-files.mjs`. It checks owner-only
 Windows ACLs and file identity. Configuration must be owner-private. Select a new
 dedicated private data directory and an explicit peer database; existing shared
 directories are not reprotected. Keep config files, databases and TLS private key

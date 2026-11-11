@@ -4,7 +4,7 @@ Version 0.2 · October 2, 2026 · Discussion draft
 
 The notebook below records the original design assessment. Subsequent implemented
 and live-tested results are tracked separately in
-[the qualification record](C:/Users/Moe/Documents/ChatGPT/FACTORY/QUALIFICATION.md).
+[the qualification record](QUALIFICATION.md).
 
 ## Confirmed direction
 
@@ -16,7 +16,7 @@ constraints. Track accepted-delivery throughput as a complementary measure.
 The owner also wants a network of FLUJO instances that can provision further
 cloud instances, pursue different problems and competing approaches, communicate,
 and monitor each other. The proposed architecture is a federation with delegated
-budget and explicit authority; see [the federation design](C:/Users/Moe/Documents/ChatGPT/FACTORY/FEDERATION.md).
+budget and explicit authority; see [the federation design](FEDERATION.md).
 
 The factory should eventually govern its own routine work and improve its
 methods. The operating model below is a proposal, not an implemented system or
@@ -30,8 +30,8 @@ interruptions, and shows what changed and why.
 
 | Responsibility | Owner-designated chat | Observed context on October 2 |
 | --- | --- | --- |
-| User experience / avatar interface | [Plan Fujo’s avatar interface](codex://threads/01a0fe99-5cef-76b2-8a84-67e9ee3f6d71) | Active interface implementation; its avatar/world connects to FLUJO's existing backend capabilities |
-| FLUJO development | [Clarify task request](codex://threads/01a0feb8-d78c-7b03-8e13-caae7b35e4fb) | Owner-designated development chat; retrieved history contains only a placeholder and clarification reply |
+| User experience / avatar interface | Plan Fujo’s avatar interface | Active interface implementation; its avatar/world connects to FLUJO's existing backend capabilities |
+| FLUJO development | Clarify task request | Owner-designated development chat; retrieved history contains only a placeholder and clarification reply |
 | Factory operating model and federation | This FACTORY chat | Architecture discussion and design artifacts |
 
 These are ownership/context references. No assignments or messages were sent to
@@ -300,12 +300,12 @@ now uses budget-only policy at paused epoch 5/revision 92, preserving its missio
 budget and historical records; see [BUDGET_GROWTH.md](BUDGET_GROWTH.md).
 
 The local recovery pilot is executable in this repository. Its saved evidence at
-[the October 2 recovery report](C:/Users/Moe/Documents/ChatGPT/FACTORY/evidence/local-recovery-20261002/report.json)
+the October 2 recovery report
 records real Git mutation followed by process termination before receipt,
 positive destination reconciliation, rejected stale authority and one delivered
 candidate. Both candidate implementations are fixed fixtures. This qualifies a
 local control/recovery mechanism, not model-driven FLUJO development or network
-failover. See [README.md](README.md) for reproducible commands and boundaries.
+failover. See [the pilot notes](PILOT_NOTES.md) for reproducible commands and boundaries.
 
 ## Decisions still open
 
@@ -320,16 +320,16 @@ failover. See [README.md](README.md) for reproducible commands and boundaries.
 
 ## Local evidence reviewed
 
-- [FLUJO foundation contracts](C:/Users/Moe/Documents/GitHub/FLUJO/docs/architecture/enduring-agent-foundation-contracts.md)
-- [Behavior learning](C:/Users/Moe/Documents/GitHub/FLUJO/src/backend/services/enduringAgents/behaviorLearning.ts)
-- [Behavior outcomes](C:/Users/Moe/Documents/GitHub/FLUJO/src/backend/services/enduringAgents/behaviorOutcome.ts)
-- [Outcome policy](C:/Users/Moe/Documents/GitHub/FLUJO/src/backend/services/enduringAgents/behaviorOutcomePolicy.ts)
-- [Persona review and delivery handoff](C:/Users/Moe/Documents/GitHub/FLUJO/docs/audits/2026-09-21-persona-review-handoff.md)
-- [Runtime acceptance scope](C:/Users/Moe/Documents/GitHub/FLUJO/docs/performance/persona-runtime-soak-acceptance.md)
-- [Hackathon product boundary](C:/Users/Moe/Documents/GitHub/factored-hackathon-2026/docs/FLUJO_PRODUCT_BOUNDARY.md)
-- [Hackathon supervision](C:/Users/Moe/Documents/GitHub/factored-hackathon-2026/docs/HACKATHON_SUPERVISION.md)
-- [Local CI policy](C:/Users/Moe/Documents/GitHub/factored-hackathon-2026/docs/LOCAL_CI.md)
-- [Recorded October 2 pause and release handoff](C:/Users/Moe/.codex/visualizations/2026/10/01/01a0f97d-c4fa-7d51-bf5c-50edd8e7b1f4/manual-release/SESSION_HANDOFF_PAUSED.md)
+- [FLUJO foundation contracts](https://github.com/mario-andreschak/FLUJO/blob/main/docs/architecture/enduring-agent-foundation-contracts.md)
+- [Behavior learning](https://github.com/mario-andreschak/FLUJO/blob/main/src/backend/services/enduringAgents/behaviorLearning.ts)
+- [Behavior outcomes](https://github.com/mario-andreschak/FLUJO/blob/main/src/backend/services/enduringAgents/behaviorOutcome.ts)
+- [Outcome policy](https://github.com/mario-andreschak/FLUJO/blob/main/src/backend/services/enduringAgents/behaviorOutcomePolicy.ts)
+- Persona review and delivery handoff
+- [Runtime acceptance scope](https://github.com/mario-andreschak/FLUJO/blob/main/docs/performance/persona-runtime-soak-acceptance.md)
+- Hackathon product boundary
+- Hackathon supervision
+- Local CI policy
+- Recorded October 2 pause and release handoff
 - Selected coordination chats: `2h - FLUJO team coordinator`, `Inspect deployment
   and progress`, `1h - PR review automation`, and `24h - Fly deployment`.
 - [Official Codex App Server documentation](https://learn.chatgpt.com/docs/app-server).

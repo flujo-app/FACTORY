@@ -14,7 +14,7 @@ The owner-private JSON file contains only this configuration:
   "journals": [
     {
       "runId": "modal-20261002-r3",
-      "journalPath": "C:/Users/Moe/Documents/ChatGPT/FACTORY/.factory/modal-20261002-r3/modal.sqlite"
+      "journalPath": "/absolute/private/.factory/modal-20261002-r3/modal.sqlite"
     }
   ]
 }
