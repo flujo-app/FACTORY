@@ -52,6 +52,10 @@ class Profiles(unittest.TestCase):
             self.assertEqual(command[command.index(pair[0]) + 1], pair[1])
         for flag in ('--trust-remote-code', '--language-model-only', '--async-scheduling', '--enable-mamba-shared-prefix-checkpoint'):
             self.assertIn(flag, command)
+        # remote code and tokenizer from the same pinned revision as the weights
+        for flag in ('--revision', '--code-revision', '--tokenizer-revision'):
+            self.assertEqual(command[command.index(flag) + 1], s.revision, flag)
+        self.assertNotIn('--code-revision', resolve(QWEN, 'qwen').vllm_command(), 'no remote code, nothing to pin')
         self.assertEqual(json.loads(command[command.index('--speculative-config') + 1]), {'method': 'mtp', 'num_speculative_tokens': 1})
         self.assertEqual(s.env, {'OMP_NUM_THREADS': '1'})
         self.assertEqual(s.input_modalities, ('text',))

@@ -167,7 +167,9 @@ class Settings:
                    '--reasoning-parser', self.reasoning_parser,
                    '--default-chat-template-kwargs', json.dumps(self.chat_template_kwargs())]
         if self.trust_remote_code:
-            command += ['--trust-remote-code']
+            # The model's own code and tokenizer come from the same pinned revision as its weights; without these flags
+            # the Hub serves the default branch's code files (transformers warns "A new version ... was downloaded").
+            command += ['--trust-remote-code', '--code-revision', self.revision, '--tokenizer-revision', self.revision]
         if self.gpu_count > 1:
             command += ['--tensor-parallel-size', str(self.gpu_count)]
         return command + list(self.extra_args) + self.variant_args()
