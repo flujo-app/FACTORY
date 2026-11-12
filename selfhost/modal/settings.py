@@ -23,6 +23,8 @@ REPLICA_FUNCTIONS = ('serve', 'serve_b', 'serve_c', 'serve_d')
 # <prefix>-<profile>-<12 hex>; Modal names stay below 64 characters with the volume suffixes.
 APP_NAME = re.compile(r'[a-z][a-z0-9]{1,15}-[a-z][a-z0-9]{1,15}-[a-f0-9]{12}')
 PROFILE_NAME = re.compile(r'[a-z][a-z0-9]{1,15}')
+# Modal volume names: letters, digits, dashes, dots and underscores, below 64 characters.
+VOLUME_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,62}')
 SETTINGS_ENV = 'FACTORY_SELFHOST_SETTINGS_B64'
 # Profile keys that describe the model for clients, not the server.
 CLIENT_KEYS = ('comment', 'compact_tokens', 'efforts')
@@ -68,8 +70,16 @@ class Settings:
     replicas: int = 1
     # Idle minutes before a GPU container stops (Modal allows 1..20).
     scaledown_minutes: int = 10
-    request_timeout_minutes: int = 60
+    # Longest single request. Modal's starter plan never schedules a GPU function whose limit is
+    # 45 minutes or more (it waits without an error; measured 2026-11-11: 10 to 30 start in
+    # seconds, 45 and 60 never). One model call of an agent stays far below 30.
+    request_timeout_minutes: int = 30
     startup_timeout_minutes: int = 40
+    # An existing volume to use for the weights / the compile caches instead of the app's own
+    # (for example one an earlier deployment filled). Such a volume is never created or deleted
+    # here; empty = the owned `<app>-hf-cache` / `<app>-vllm-cache`.
+    weights_volume: str = ''
+    compile_volume: str = ''
     port: int = 8000
 
     def __post_init__(self):
@@ -93,6 +103,12 @@ class Settings:
             raise ValueError(f'replicas must be within 1..{MAX_REPLICAS}')
         if not 1 <= self.scaledown_minutes <= 20:
             raise ValueError('scaledown_minutes must be within 1..20 (Modal limit)')
+        if not 1 <= self.request_timeout_minutes <= 1440:
+            raise ValueError('request_timeout_minutes must be within 1..1440 (Modal limit)')
+        for name in ('weights_volume', 'compile_volume'):
+            value = getattr(self, name)
+            if value and (not VOLUME_NAME.fullmatch(value) or value.startswith(self.app_name)):
+                raise ValueError(f'{name} must name an existing volume outside this app')
         if self.variant and self.variant not in self.variants:
             raise ValueError(f'unknown variant {self.variant!r}; expected one of {sorted(self.variants)}')
         if self.image and not re.fullmatch(r'[\w./-]+@sha256:[a-f0-9]{64}', self.image):
@@ -109,6 +125,11 @@ class Settings:
     def endpoint_functions(self):
         """The web functions, one per replica; each has its own URL."""
         return list(REPLICA_FUNCTIONS[:self.replicas])
+
+    def volumes(self):
+        """Weights and compile-cache volume names, and whether this app owns (creates, deletes) each."""
+        return {'weights': {'name': self.weights_volume or self.app_name + '-hf-cache', 'owned': not self.weights_volume},
+                'compile': {'name': self.compile_volume or self.app_name + '-vllm-cache', 'owned': not self.compile_volume}}
 
     def usd_per_second(self):
         """List price of one running replica: GPU plus its reserved CPU and memory."""
@@ -157,7 +178,7 @@ class Settings:
                 'gpu': self.gpu_spec, 'replicas': self.replicas, 'functions': self.endpoint_functions(),
                 'usdPerHourPerReplica': self.usd_per_hour(), 'usdPerSecondPerReplica': self.usd_per_second(),
                 'scaledownMinutes': self.scaledown_minutes, 'startupTimeoutMinutes': self.startup_timeout_minutes,
-                'requestTimeoutMinutes': self.request_timeout_minutes,
+                'requestTimeoutMinutes': self.request_timeout_minutes, 'volumes': self.volumes(),
                 'contextWindow': self.max_model_len, 'variant': self.variant or None,
                 'inputModalities': list(self.input_modalities), 'estimateGib': self.estimate_gib(),
                 'vllmCommand': self.vllm_command()}

@@ -32,7 +32,11 @@ function fixture({ deployError, describeError, holdDescribe, workspace = 'fixtur
       if (request.action === 'deploy') {
         if (deployError) return { code: 1, stdout: JSON.stringify({ error: deployError }) };
         if (!request.reuseSecret) { assert.equal(secrets.has(`${appName}-auth`), false); secrets.add(`${appName}-auth`); }
-        key = request.key; volumes.add(`${appName}-hf-cache`); volumes.add(`${appName}-vllm-cache`);
+        key = request.key;
+        // a reused volume must exist already; only the app's own ones are created
+        for (const [name, own] of [[request.overrides.weights_volume, `${appName}-hf-cache`], [request.overrides.compile_volume, `${appName}-vllm-cache`]]) {
+          if (name) assert.ok(volumes.has(name), `${name} exists before the deployment`); else volumes.add(own);
+        }
         apps.set(appName, 'deployed');
         const replicas = request.overrides.replicas ?? 1;
         return { code: 0, stdout: JSON.stringify({ endpoints: ['serve', 'serve-b'].slice(0, replicas).map(name => `https://fixture--${appName}-${name}.modal.run`) }) };
@@ -134,6 +138,18 @@ test('deploy, verify, describe, stop, redeploy and retire touch only the owned r
   assert.equal(f.secrets.size, 0); assert.equal(f.volumes.size, 0);
   assert.equal(existsSync(join(f.model.directory, 'selfhosted-model.key')), false);
   const named = f.calls.filter(call => call.args.includes('stop') || call.args.includes('delete')).map(call => call.args.at(-1));
+  assert.ok(named.every(name => name.startsWith(f.appName())), named.join(','));
+});
+
+test('volumes an earlier deployment filled are used and survive the retire', async () => {
+  const f = fixture();
+  f.volumes.add('earlier-hf-cache'); f.volumes.add('earlier-vllm-cache');
+  const ready = await f.model.deploy({ profile: 'nemotron', overrides: { weights_volume: 'earlier-hf-cache', compile_volume: 'earlier-vllm-cache' } });
+  assert.equal(ready.phase, 'ready');
+  assert.deepEqual([...f.volumes].sort(), ['earlier-hf-cache', 'earlier-vllm-cache'], 'no volume of its own is created');
+  assert.equal((await f.model.retire()).phase, 'retired');
+  assert.deepEqual([...f.volumes].sort(), ['earlier-hf-cache', 'earlier-vllm-cache'], 'the reused volumes are kept');
+  const named = f.calls.filter(call => call.args.includes('delete')).map(call => call.args.at(-1));
   assert.ok(named.every(name => name.startsWith(f.appName())), named.join(','));
 });
 

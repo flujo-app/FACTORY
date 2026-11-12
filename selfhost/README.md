@@ -94,6 +94,13 @@ Overrides are explicit settings fields, for example `{ replicas: 2 }`, `{ varian
 `{ enable_thinking: false }` or `{ scaledown_minutes: 2 }`. Unknown fields, unpinned images and
 settings that would not fit the GPU are refused before anything is created.
 
+- `request_timeout_minutes` (default 30) is the longest single request. Modal's starter plan never
+  schedules a GPU function whose limit is 45 minutes or more: the deployment and every request
+  then wait without an error. Raise it only on a plan that allows it.
+- `weights_volume` / `compile_volume` name an existing volume that already holds the weights (a
+  Hugging Face cache) or vLLM's compile caches, for example one an earlier deployment filled. The
+  app uses it instead of creating its own; `retire` never deletes it.
+
 ## Things to know
 
 - vLLM's `--api-key` protects `/v1/*`; `/health` and `/metrics` answer without it (counters only).

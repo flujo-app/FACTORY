@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { claudeProviderEnvironment, codexProviderConfig, codexProviderOverrides, liteWorkerCommand, providerPrograms, validateModelProvider } from '../src/public-sdk.mjs';
 import { validateCloudLitePlan, secret } from '../src/cloud-lite/protocol.mjs';
 import { providerConfigToml } from '../src/cloud-lite/runtime.mjs';
+import { applyProviderEnvironment } from '../src/model-provider.mjs';
 import { tempDir } from './support/temp-dir.mjs';
 
 // One description of a self-hosted vLLM endpoint that serves every wire API.
@@ -54,6 +55,17 @@ test('the Claude Code mapping uses the Anthropic API at the server root with eve
   assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
   assert.throws(() => claudeProviderEnvironment(endpoint({ apis: ['responses'] }), { key }), /anthropic API/);
   assert.throws(() => claudeProviderEnvironment(endpoint(), { key: 'short' }), /API key/);
+});
+
+test('a Claude Code child started from inside a Claude session inherits none of that session\'s variables', () => {
+  const key = secret();
+  const inherited = { PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '1', USE_STAGING_OAUTH: '1', ANTHROPIC_CUSTOM_HEADERS: 'x' };
+  const env = claudeProviderEnvironment(endpoint(), { key, inherited });
+  for (const name of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH', 'USE_STAGING_OAUTH', 'ANTHROPIC_CUSTOM_HEADERS']) assert.equal(env[name], null, name);
+  assert.equal('PATH' in env, false);
+  // its own settings still win over a cleared name
+  assert.equal(claudeProviderEnvironment(endpoint(), { key, inherited: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '0' } }).CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+  assert.equal(applyProviderEnvironment(inherited, env).CLAUDE_CODE_ENTRYPOINT, undefined);
 });
 
 test('local lite workers launch Codex and Claude Code against a self-hosted model', () => {

@@ -81,6 +81,28 @@ class Profiles(unittest.TestCase):
         with self.assertRaises(ValueError):
             resolve(QWEN, 'missing')
 
+    def test_request_limit_is_one_the_starter_plan_schedules(self):
+        # Modal's starter plan never gives a GPU to a function with a request limit of 45 minutes or more.
+        for name, app in (('qwen', QWEN), ('nemotron', NEMOTRON)):
+            s = resolve(app, name)
+            self.assertLess(s.request_timeout_minutes, 45, name)
+            self.assertEqual(s.describe()['requestTimeoutMinutes'], s.request_timeout_minutes)
+        self.assertEqual(resolve(QWEN, 'qwen', {'request_timeout_minutes': 60}).request_timeout_minutes, 60)
+        for bad in (0, 1441):
+            with self.assertRaises(ValueError):
+                resolve(QWEN, 'qwen', {'request_timeout_minutes': bad})
+
+    def test_an_earlier_volume_can_hold_the_weights_and_is_never_owned(self):
+        own = resolve(NEMOTRON, 'nemotron').volumes()
+        self.assertEqual(own, {'weights': {'name': NEMOTRON + '-hf-cache', 'owned': True},
+                               'compile': {'name': NEMOTRON + '-vllm-cache', 'owned': True}})
+        reused = resolve(NEMOTRON, 'nemotron', {'weights_volume': 'earlier-hf-cache', 'compile_volume': 'earlier-vllm-cache'})
+        self.assertEqual(reused.describe()['volumes'], {'weights': {'name': 'earlier-hf-cache', 'owned': False},
+                                                        'compile': {'name': 'earlier-vllm-cache', 'owned': False}})
+        for bad in (' x', 'a/b', 'x' * 64, NEMOTRON + '-hf-cache'):
+            with self.assertRaises(ValueError, msg=bad):
+                resolve(NEMOTRON, 'nemotron', {'weights_volume': bad})
+
     def test_frozen_settings_round_trip_through_the_image_environment(self):
         s = resolve(NEMOTRON, 'nemotron', {'replicas': 2})
         restored = from_env({SETTINGS_ENV: s.to_b64()})
