@@ -291,6 +291,9 @@ export class FactoryCloudLiteFleet {
   }
   async request(path, body) {
     if (!this.connection) {
+      // A fleet being stopped or retired has no coordinator to reach: never open a proxy for it (a caller's late status
+      // read would otherwise leave a private proxy process running after the fleet is gone).
+      if (this.closed()) throw new Error('The fleet is being stopped or is retired: no connection to its coordinator is opened.');
       const upstream = await this.upstream();
       const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
       const first = this.state.machines[0];
@@ -300,6 +303,8 @@ export class FactoryCloudLiteFleet {
       }
       if (owned.state !== 'started') throw new Error('Original coordinator Machine is not started.');
       this.connection = await upstream.proxy({ app: this.state.plan.app, org: this.state.plan.org ?? 'personal', machineId: first.id, localPort: await upstream.unusedLoopbackPort() });
+      // the fleet was stopped while this proxy was being opened: close it again at once
+      if (this.closed()) { await this.disconnect(); throw new Error('The fleet was stopped while its connection was being opened.'); }
       const deadline = Date.now() + 30000;
       try {
         for (;;) {
@@ -323,9 +328,12 @@ export class FactoryCloudLiteFleet {
       if (!response.ok) throw new Error(`Fleet coordinator ${path} returned ${response.status}.`); return await response.json();
     } catch (error) { await this.disconnect(); throw error; }
   }
-  async disconnect() { if (this.connection) { await this.connection.stop(); this.connection = null; } }
+  async disconnect() { if (this.connection) { const connection = this.connection; this.connection = null; await connection.stop(); } }
+  /** Being stopped here, or retired: from then on no new connection to the coordinator is opened (start() opens it up again). */
+  closed() { return !!this.closing || this.state?.status === 'retired'; }
   async start({ attempt } = {}) {
     if (!/^[a-z0-9-]{3,64}$/.test(attempt ?? '')) throw new TypeError('Select a stable recovery attempt identity.');
+    this.closing = false;
     for (const machine of this.state.machines) await this.stage(`${machine.id}.start.${attempt}`, async () => {
       const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
       const original = inventory.find(value => value.id === machine.id);
@@ -548,10 +556,14 @@ export class FactoryCloudLiteFleet {
     if (complete) this.state.artifactsCollectedAt = new Date().toISOString(); this.save(); return { directory: artifacts, complete, collected: receipts.length, expected: this.state.machines.length };
   }
   async stop() {
-    for (const machine of [...this.state.machines].reverse()) await this.stage(`${machine.id}.stop`, async () => {
-      await this.fly(['machine', 'stop', machine.id, '--app', this.state.plan.app]); return { stopped: true, machineId: machine.id };
-    });
-    this.state.status = 'stopped'; this.save();
+    // no new connection from here on, and the one that is open goes with the machines (also when a stop fails)
+    this.closing = true;
+    try {
+      for (const machine of [...this.state.machines].reverse()) await this.stage(`${machine.id}.stop`, async () => {
+        await this.fly(['machine', 'stop', machine.id, '--app', this.state.plan.app]); return { stopped: true, machineId: machine.id };
+      });
+      this.state.status = 'stopped'; this.save();
+    } finally { await this.disconnect().catch(() => {}); }
   }
   /** Quiesce original sessions, verify remote immutable evidence, then stop exactly the owned machines. */
   async verifiedShutdown({ attempt = 'final', timeoutMs = 120000, evidenceTimeoutMs = 300000, providerTimeoutMs = 120000, retire = false } = {}) {
@@ -667,7 +679,9 @@ export class FactoryCloudLiteFleet {
         throw new Error('Retirement requires the exact original Machine and volume inventory; retain resources whose ownership differs.');
       }
     }
-    await this.stage('app.retire', async () => { await this.fly(['apps', 'destroy', this.state.plan.app, '--yes']); return { app: this.state.plan.app, retired: true }; });
-    this.state.status = 'retired'; this.save();
+    try {
+      await this.stage('app.retire', async () => { await this.fly(['apps', 'destroy', this.state.plan.app, '--yes']); return { app: this.state.plan.app, retired: true }; });
+      this.state.status = 'retired'; this.save();
+    } finally { await this.disconnect().catch(() => {}); }
   }
 }
