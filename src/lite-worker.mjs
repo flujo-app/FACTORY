@@ -35,7 +35,7 @@ export function liteWorkerCommand({ provider, database, prompt, agentId, cwd = p
   };
   if (provider === 'claude') return {
     command: 'claude', cwd,
-    ...(modelProvider ? { env: applyProviderEnvironment(env, claudeProviderEnvironment(modelProvider, { index: providerIndex, key: providerKey })) } : {}),
+    ...(modelProvider ? { env: applyProviderEnvironment(env, claudeProviderEnvironment(modelProvider, { index: providerIndex, key: providerKey, inherited: env })) } : {}),
     args: ['--dangerously-skip-permissions', '--strict-mcp-config',
       '--mcp-config', JSON.stringify({ mcpServers: { factory: server } }), ...(prompt === undefined ? [] : [prompt])],
   };

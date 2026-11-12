@@ -25,7 +25,8 @@ export function claudeEnvironment({ plan, index = 0, home, commandWrapper, githu
     ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1',
     ...(githubToken && !deployKey ? { GH_TOKEN: githubToken } : {}) };
-  if (plan.modelProvider) return applyProviderEnvironment(base, claudeProviderEnvironment(plan.modelProvider, { index, key: providerKey, model: plan.model }));
+  // The base is built from scratch: it carries no Claude session variables to clear.
+  if (plan.modelProvider) return applyProviderEnvironment(base, claudeProviderEnvironment(plan.modelProvider, { index, key: providerKey, model: plan.model, inherited: {} }));
   return { ...base, ...(oauthToken ? { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } : {}) };
 }
 

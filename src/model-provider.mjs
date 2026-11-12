@@ -122,17 +122,25 @@ export function codexProviderOverrides(provider, options = {}) {
     ...tables.flatMap(([table, entries]) => entries.map(([key, value]) => `${table}.${key}=${tomlValue(value)}`))];
 }
 
+// A caller that itself runs inside a Claude session (a desktop or SDK session) passes that
+// session's variables on; a Claude Code child then offers the session's own login to the
+// endpoint (HTTP 401) instead of the endpoint key. By name pattern, not by a list: such sessions
+// add variables with every version.
+const CLAUDE_SESSION_VARIABLE = /^(CLAUDE|ANTHROPIC_)|OAUTH/i;
+
 /**
  * Claude Code environment for a self-hosted provider (Anthropic Messages API at the server
  * root). Every model alias maps to the served model; nonessential traffic is off. Keys whose
- * value is null must be removed from the inherited environment.
+ * value is null must be removed from the inherited environment: every Claude session variable
+ * of `inherited` (default: this process) is.
  */
-export function claudeProviderEnvironment(provider, { index = 0, key, model } = {}) {
+export function claudeProviderEnvironment(provider, { index = 0, key, model, inherited = process.env } = {}) {
   requireApi(provider, 'claude');
   if (typeof key !== 'string' || key.length < 8) throw new TypeError('A model provider needs its API key.');
   const served = provider.model ?? model;
   if (typeof served !== 'string' || !served) throw new TypeError('Select the served model name.');
   return {
+    ...Object.fromEntries(Object.keys(inherited ?? {}).filter(name => CLAUDE_SESSION_VARIABLE.test(name)).map(name => [name, null])),
     ANTHROPIC_BASE_URL: providerBaseUrl(provider, index).replace(/\/+$/, '').replace(/\/v1$/, ''),
     ANTHROPIC_AUTH_TOKEN: key,
     ANTHROPIC_API_KEY: null,

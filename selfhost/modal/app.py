@@ -38,8 +38,11 @@ image = (
 )
 
 app = modal.App(S.app_name)
-hf_cache = modal.Volume.from_name(S.app_name + '-hf-cache', create_if_missing=True)
-vllm_cache = modal.Volume.from_name(S.app_name + '-vllm-cache', create_if_missing=True)
+# The app's own volumes are created on first use; a reused one (weights_volume, compile_volume)
+# must already exist and is never created here.
+_V = S.volumes()
+hf_cache = modal.Volume.from_name(_V['weights']['name'], create_if_missing=_V['weights']['owned'])
+vllm_cache = modal.Volume.from_name(_V['compile']['name'], create_if_missing=_V['compile']['owned'])
 auth = modal.Secret.from_name(S.app_name + '-auth', required_keys=['VLLM_API_KEY'])
 VOLUMES = {HF_CACHE: hf_cache, '/root/.cache/vllm': vllm_cache}
 
