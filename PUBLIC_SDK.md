@@ -1,16 +1,18 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.11.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.11.0):
+Version 0.12.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.12.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.11.0/flujo-factory-0.11.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.12.0/flujo-factory-0.12.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
 `ModalSelfHostedModel` and `factory-selfhost` deploy, verify, stop and retire a vLLM endpoint
 with Qwen3.8-27B (H100) or Nemotron 3.5 Super (B300) profiles; see
-[selfhost/README.md](selfhost/README.md). Its endpoint description is a model provider that
+[selfhost/README.md](selfhost/README.md). `RunPodSelfHostedModel` (`factory-selfhost --cloud runpod`)
+runs the same profiles on RunPod GPU pods that switch themselves off when idle; see
+[selfhost/runpod/README.md](selfhost/runpod/README.md). Its endpoint description is a model provider that
 cloud and local lite workers (Codex, Claude Code or FLUJO) use directly. See
 [Self-hosted models and operator-driven jobs](#self-hosted-models-and-operator-driven-jobs)
 for the provider, read-only deploy keys, prepare hooks, operator-driven jobs and quieter
@@ -471,6 +473,8 @@ one team per item, who may message whom, read the inbox.
 To run the model yourself, `ModalSelfHostedModel` (CLI `factory-selfhost`) deploys a
 bundled vLLM profile on your Modal account and returns this description from `endpoint()`,
 with its key from `key()`; see [selfhost/README.md](selfhost/README.md).
+`RunPodSelfHostedModel` does the same on RunPod GPU pods, with the same description and key
+([selfhost/runpod/README.md](selfhost/runpod/README.md)).
 
 Lite workers can run on a self-hosted, OpenAI-compatible model instead of the
 subscription login. Codex reaches it through the Responses API

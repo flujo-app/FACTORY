@@ -1,6 +1,6 @@
 {
   "name": "flujo-factory",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Durable FLUJO swarm engine and Factory SDK, CLI, and MCP server",
   "license": "MIT",
   "repository": {
@@ -32,6 +32,9 @@
     "selfhost/modal/prices.json",
     "selfhost/modal/profiles/*.json",
     "!selfhost/modal/test_*.py",
+    "selfhost/runpod/README.md",
+    "selfhost/runpod/boot.py",
+    "selfhost/runpod/gpus.json",
     "README.md",
     "PUBLIC_SDK.md",
     "WORKFLOWS.md",
