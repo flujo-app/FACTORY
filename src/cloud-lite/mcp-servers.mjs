@@ -13,7 +13,8 @@ const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/;
 const SETTINGS = { command: new Set(['command', 'args', 'env', 'required']), url: new Set(['url', 'headers', 'required']) };
 const plainObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-const text = value => typeof value === 'string' && value.length > 0 && value.length <= 8192 && !/[\0\r\n]/.test(value);
+const line = value => typeof value === 'string' && value.length <= 8192 && !/[\0\r\n]/.test(value);
+const text = value => line(value) && value.length > 0;
 
 function validUrl(value) {
   try {
@@ -29,7 +30,7 @@ export function validateMcpServers(servers) {
   if (!names.length || names.length > MCP_SERVER_LIMIT) throw new TypeError(`mcpServers must name 1 to ${MCP_SERVER_LIMIT} servers.`);
   const secrets = new Set();
   const value = (where, entry) => {
-    if (text(entry)) return;
+    if (line(entry)) return;
     if (plainObject(entry) && Object.keys(entry).length === 1 && SECRET_NAME.test(entry.secret ?? '')) { secrets.add(entry.secret); return; }
     throw new TypeError(`${where} must be one line of text, or { secret: 'NAME' } for a key given to deploy as mcpSecrets.NAME.`);
   };
@@ -45,7 +46,7 @@ export function validateMcpServers(servers) {
     if (server.required !== undefined && typeof server.required !== 'boolean') throw new TypeError(`${where}.required must be true or false.`);
     if (kind === 'command') {
       if (!text(server.command)) throw new TypeError(`${where}.command must be one line of text.`);
-      if (server.args !== undefined && (!Array.isArray(server.args) || server.args.length > 64 || !server.args.every(arg => typeof arg === 'string' && arg.length <= 8192 && !/[\0\r\n]/.test(arg)))) {
+      if (server.args !== undefined && (!Array.isArray(server.args) || server.args.length > 64 || !server.args.every(line))) {
         throw new TypeError(`${where}.args must be a list of up to 64 one-line texts.`);
       }
       if (server.env !== undefined) {

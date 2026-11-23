@@ -27,6 +27,7 @@ test('a plan may give every agent extra MCP servers, and refuses unclear or unsa
   assert.deepEqual(validateCloudLitePlan(base({ mcpServers: servers() })).mcpServers, servers());
   assert.deepEqual(validateCloudLitePlan(base({ workerProgram: 'codex', mcpServers: servers() })).mcpServers, servers());
   assert.equal('mcpServers' in validateCloudLitePlan(base()), false, 'no default is added to existing fleet bindings');
+  assert.deepEqual(validateMcpServers({ quiet: { command: 'x', args: [''], env: { DEBUG: '' } } }), [], 'empty text is a value too');
   const flujo = { workerProgram: 'flujo', modelProvider: { id: 'served', envKey: 'P_MODEL_KEY', baseUrls: ['https://model.example.test/v1'], apis: ['chat'], model: 'm' } };
   assert.throws(() => validateCloudLitePlan(base({ ...flujo, mcpServers: servers() })), /not available for FLUJO workers yet/);
   const many = Object.fromEntries(Array.from({ length: MCP_SERVER_LIMIT + 1 }, (_, index) => [`s${index}`, { command: 'x' }]));
@@ -116,6 +117,12 @@ test('Claude Code gets every server in a private file, may use their tools in an
     { name: 'lean', required: true, status: 'connected' }, { name: 'docs', required: false, status: 'connected' },
     { name: 'local', required: false, status: 'connected' }, { name: 'factory', required: true, status: 'connected' }] });
   assert.equal(JSON.stringify(h.notes).includes(given.LEAN_KEY), false, 'no key in what the trace records');
+  // A file an older runtime left in the state directory, which evidence collects, goes when the session is resumed.
+  const stale = join(h.root, 'state', `${thread.id}.claude-mcp.json`);
+  writeFileSync(stale, JSON.stringify({ mcpServers: { factory: board } }));
+  await h.driver.request('thread/resume', { threadId: thread.id, cwd: h.root, sandbox: 'workspace-write', config, model: 'claude-fable-5-2' });
+  assert.equal(existsSync(stale), false);
+  assert.equal(existsSync(file), true);
   h.driver.close();
 });
 

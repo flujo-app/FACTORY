@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyProviderEnvironment, claudeProviderEnvironment } from '../model-provider.mjs';
 
@@ -117,6 +117,8 @@ export class ClaudeSessionDriver extends EventEmitter {
     const servers = config?.mcp_servers ?? {};
     const policy = claudeSandboxPolicy({ sandbox, directory: cwd, writableRoots: config?.['sandbox_workspace_write.writable_roots'] ?? [] });
     let mcpConfigFile, settingsFile;
+    // An older runtime kept this file in the state directory, which evidence collects.
+    if (this.privateDirectory !== this.stateDirectory) rmSync(join(this.stateDirectory, `${id}.claude-mcp.json`), { force: true });
     if (Object.keys(servers).length) {
       mcpConfigFile = join(this.privateDirectory, `${id}.claude-mcp.json`);
       writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(servers).map(([name, server]) => [name, server.url
