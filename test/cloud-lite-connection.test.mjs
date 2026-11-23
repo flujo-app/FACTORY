@@ -79,3 +79,30 @@ test('a fleet started again after a stop connects as before', async () => {
   await fleet.start({ attempt: 'again-1' }).catch(() => {});
   assert.equal(fleet.closed(), false);
 });
+
+// Found while running a fleet on local Docker (flujo-app/FACTORY#40): a fleet that was stopped, started and stopped again kept
+// running, because the second stop found the first stop's journal entry and sent nothing, while the journal said "stopped".
+test('a fleet that was started again can be stopped again', async () => {
+  let stops = 0;
+  const { fleet } = fleetWithProxy({ onMachineStop: async () => { stops++; } });
+  await fleet.stop();
+  await fleet.stop();
+  assert.equal(stops, 1);
+  assert.equal(fleet.state.status, 'stopped');
+  await fleet.start({ attempt: 'again-1' });
+  assert.equal(fleet.state.status, 'provisioned');
+  await fleet.stop();
+  assert.equal(stops, 2);
+  assert.equal(fleet.state.status, 'stopped');
+  // the same start repeated is the same start: no new stop follows from it
+  await fleet.start({ attempt: 'again-1' });
+  await fleet.stop();
+  assert.equal(stops, 2);
+  await fleet.start({ attempt: 'again-2' });
+  await fleet.stop();
+  assert.equal(stops, 3);
+  // a sealed fleet stays stopped in the journal even when its machines are started for inspection
+  fleet.state.shutdownIntent = { createdAt: new Date().toISOString(), evidence: [] }; fleet.save();
+  await fleet.start({ attempt: 'again-3' });
+  assert.equal(fleet.state.status, 'stopped');
+});
