@@ -106,21 +106,22 @@ try {
   check('board: every agent on every machine enrolled through the shared board', { threads: first.threads,
     machinesReady: first.ready.map(event => ({ machine: event.body.machine, node: event.body.node, [program]: String(event.body[program]).trim() })) });
 
+  // One real model turn: the last agent of the last machine is told to record a claim on the shared board.
   const turnAgent = `m${machines - 1}-a${agentsPerMachine - 1}`;
-  if (flags['--turn']) {
-    const resource = `task:docker-smoke-${stamp}`;
-    await fleet.command(turnAgent, { id: `smoke-${stamp}`, message: `Call the FACTORY board tool factory_claim once with resource "${resource}". Then answer with the single word DONE. Do nothing else.` });
+  async function claimTurn(name) {
+    const resource = `task:docker-smoke-${stamp}-${name}`, after = lastTrace();
+    await fleet.command(turnAgent, { id: `smoke-${stamp}-${name}`, message: `Call the FACTORY board tool factory_claim once with resource "${resource}". Then answer with the single word DONE. Do nothing else.` });
     const deadline = Date.now() + 600000; let claim, completed;
     while (!claim || !completed) {
       claim = (await fleet.observe()).claims.find(value => value.resource === resource);
-      completed = traces().find(event => event.source === turnAgent && event.kind === 'native.turn.completed');
+      completed = traces().find(event => event.seq > after && event.source === turnAgent && event.kind === 'native.turn.completed');
       if (Date.now() >= deadline) throw new Error('The agent did not record its claim and finish its turn in time.');
       if (!claim || !completed) await sleep(5000);
     }
     assert.equal(claim.owner, turnAgent); assert.equal(claim.machine, `m${machines - 1}`); assert.equal(completed.body.turn.status, 'completed');
-    check('real turn: an agent on the last machine recorded a claim on the shared board', { agent: turnAgent, turn: completed.body.turn.status,
-      claim: { resource: claim.resource, owner: claim.owner, machine: claim.machine, status: claim.status } });
+    return { agent: turnAgent, turn: completed.body.turn.status, claim: { resource: claim.resource, owner: claim.owner, machine: claim.machine, status: claim.status } };
   }
+  if (flags['--turn']) check('real turn: an agent on the last machine recorded a claim on the shared board', await claimTurn('first'));
 
   if (!flags['--quick']) {
     let mark = lastTrace();
@@ -134,6 +135,7 @@ try {
     const afterStart = continued(second.fresh, first.threads);
     if (flags['--turn']) assert.equal(afterStart[turnAgent], 'resumed');
     check('start: the same containers came back and every agent found its earlier session', { sessions: afterStart });
+    if (flags['--turn']) check('real turn after the restart: the resumed agent took a new message and recorded a second claim', await claimTurn('restarted'));
 
     mark = lastTrace();
     const updated = await fleet.updateRuntime({ bundlePath: join(directory, 'factory-sdk.tgz') });
