@@ -380,7 +380,7 @@ export class FactorySpriteLiteFleet extends FactoryCloudLiteFleet {
   }
   /**
    * Without `bundlePath`, this installed SDK is packed into the fleet directory once and kept, so a resumed fleet
-   * uses the same bundle. Each Sprite sets itself up on its first start (a few minutes) and keeps that set-up on its disk.
+   * uses the same bundle. Each Sprite sets itself up on its first start (about 20 seconds in a real run) and keeps that set-up on its disk.
    */
   async deploy(input, { image, imageSource, channel, bundlePath, prebuild, ...options } = {}) {
     if (image !== undefined || imageSource !== undefined || channel !== undefined || prebuild !== undefined) {

@@ -858,7 +858,7 @@ What a plan turns into:
   Sprite service `factory`: `sudo` starts `/etc/factory/start.sh` as root, which
   loads the machine's settings and secrets and then runs the same bootstrap as a
   Fly Machine. The first start sets the Sprite up (system packages, the pinned
-  worker program, the SDK) in a few minutes; the Sprite keeps that set-up on its
+  worker program, the SDK) in about 20 seconds; the Sprite keeps that set-up on its
   disk, so `stop()` and `start()` take seconds.
 - **The board on the first Sprite's public address.** Sprites have no private
   network, so the first Sprite's address is public and routed to the board's
@@ -903,9 +903,25 @@ about $0.04 per CPU-hour and $0.02 per GB-hour of memory, November 2026).
 `createSpritesInfrastructure({ directory, token })` is the provider on its own, for
 use as the `infrastructure` of a `FactoryCloudLiteFleet`.
 
-The tests check the fleet against a stand-in for the Sprites API. To run a real
-fleet on your own Sprites (agents enrol and wait; add `--claude-token <file> --turn`
-for two real model turns):
+The [2026-11-23 Sprite runs](evidence/sprite-fleet-run-20261123.json) used real
+Sprites on a Free plan organization, one Sprite with four Claude Code agents on a
+subscription login. In the final run the Sprite was created in 11 seconds, set
+itself up, and all four agents had enrolled on the board through its public
+address 32 seconds after the deploy. With nothing on this computer talking to it,
+it was still running after 90 seconds. An agent took a real turn and recorded a
+claim on the board. After `stop()` the Sprite paused; after `start()` it woke,
+skipped its set-up, every agent was enrolled again 9 seconds later, and a second
+real turn recorded its claim. `retire()` deleted the Sprite. The two earlier runs
+of that record found two faults that are fixed: a stopped worker ended with its
+signal's exit code, which the Sprite recorded as a crash, and the Sprite's own
+older Claude Code stood in for the pinned one.
+
+Not shown by that record: a fleet of more than one Sprite (a second Sprite reaches
+the board the same way this computer did), memory per agent (`free` inside a Sprite
+gave readings too far apart to use), the stricter sandboxes inside a Sprite, and
+collection or a runtime update on a real Sprite, which the tests check against a
+stand-in for the Sprites API. To repeat the run on your own Sprites (agents enrol
+and wait; add `--claude-token <file> --turn` for two real model turns):
 
 ```sh
 node scripts/sprite-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json --sprites-token /absolute/private/sprites-token
