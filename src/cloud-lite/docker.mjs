@@ -128,7 +128,11 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
       if (!owned.has(mount.volume)) throw new Error(`Volume ${mount.volume} does not belong to ${app}.`);
     }
     for (const [key, value] of Object.entries(config.env ?? {})) { checked(key, /^[A-Za-z_][A-Za-z0-9_]*$/, 'environment name'); if (typeof value !== 'string') throw new TypeError('Environment values must be text.'); }
-    for (const [key, value] of Object.entries(config.metadata ?? {})) { checked(key, /^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'metadata name'); checked(value, /^[^\r\n]*$/, 'metadata value'); }
+    for (const [key, value] of Object.entries(config.metadata ?? {})) {
+      // The provider's own labels say which fleet owns a container; machine settings must not replace them.
+      if (key.startsWith('factory.docker.')) throw new TypeError('Invalid metadata name.');
+      checked(key, /^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'metadata name'); checked(value, /^[^\r\n]*$/, 'metadata value');
+    }
     const { files: _files, ...stored } = config;
     const secrets = stagedSecrets()[app] ?? {};
     await docker(['create', '--name', name, '--network', app, '--network-alias', `${id}.vm.${app}.internal`,

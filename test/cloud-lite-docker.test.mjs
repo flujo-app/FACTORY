@@ -297,6 +297,11 @@ test('an existing volume or network is never adopted', async () => {
   const infrastructure = createDockerInfrastructure({ directory: fresh(), execute: named.execute });
   await assert.rejects(infrastructure.createMachine({ app: 'factory-docker-test', name: 'factory-x-m0',
     config: { image: 'node:24', init: { exec: ['node'] }, mounts: [{ volume: 'someone-else-data', path: '/data' }] } }), /does not belong/);
+  // Machine settings cannot replace the labels that say which fleet owns a container, or pass an option as an image name.
+  await assert.rejects(infrastructure.createMachine({ app: 'factory-docker-test', name: 'factory-x-m0',
+    config: { image: 'node:24', init: { exec: ['node'] }, metadata: { 'factory.docker.app': 'another-fleet' } } }), /Invalid metadata name/);
+  await assert.rejects(infrastructure.createMachine({ app: 'factory-docker-test', name: 'factory-x-m0', config: { image: '--privileged', init: { exec: ['node'] } } }), /Invalid image/);
+  assert.equal(named.state.containers.length, 0);
 });
 
 test('every provider command a fleet sends has a Docker equivalent', async () => {
