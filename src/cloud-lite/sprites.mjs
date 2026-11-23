@@ -58,6 +58,17 @@ task DELETE
 exit "$code"
 `;
 
+/**
+ * The worker's PATH. The service starts through sudo, which resets PATH, and node and npm live in the Sprite's own
+ * folder (/.sprite/bin), so the Sprite user's PATH is kept, with two changes: /usr/local/bin, where the bootstrap puts
+ * the pinned worker program, comes first, and the Sprite user's own tools in /home (its own, older Claude Code in
+ * ~/.local/bin) are left out, so they never stand in for the pinned one.
+ */
+export function servicePath(spritePath) {
+  const kept = String(spritePath ?? '').split(':').filter(dir => dir.startsWith('/') && !dir.startsWith('/home/') && dir !== '/usr/local/sbin' && dir !== '/usr/local/bin');
+  return ['/usr/local/sbin', '/usr/local/bin', ...(kept.length ? kept : ['/usr/sbin', '/usr/bin', '/sbin', '/bin'])].join(':');
+}
+
 function parse(args) {
   const words = [], flags = {};
   for (let index = 0; index < args.length; index++) {
@@ -170,8 +181,7 @@ export function createSpritesInfrastructure({ directory, token, tokenFile, api =
 
   /** Everything a machine's service needs, as root-only files: its settings, the fleet's secrets, the start script and the config's files. */
   async function machineFiles(app, id, config) {
-    // The service starts through sudo, which resets PATH; the Sprite user's PATH is where node and npm are.
-    const env = { PATH: (await root(id, 'printf %s "$PATH"')).trim() || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', ...config.env };
+    const env = { PATH: servicePath((await root(id, 'printf %s "$PATH"')).trim()), ...config.env };
     for (const [key, value] of Object.entries(env)) { checked(key, /^[A-Za-z_][A-Za-z0-9_]*$/, 'environment name'); if (typeof value !== 'string') throw new TypeError('Environment values must be text.'); }
     // A worker machine reaches the board on the first machine's public Sprite address (Sprites have no private network).
     if (env.FACTORY_BOARD_MACHINE_ID) {

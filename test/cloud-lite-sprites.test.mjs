@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FactorySpriteLiteFleet, createSpritesInfrastructure, readExecOutput, SPRITE_IMAGE, SPRITE_START_SCRIPT, SPRITES_FLEET_COMMANDS } from '../src/cloud-lite/sprites.mjs';
+import { FactorySpriteLiteFleet, createSpritesInfrastructure, readExecOutput, servicePath, SPRITE_IMAGE, SPRITE_START_SCRIPT, SPRITES_FLEET_COMMANDS } from '../src/cloud-lite/sprites.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { hash, secret } from '../src/cloud-lite/protocol.mjs';
 import { tempDir } from './support/temp-dir.mjs';
@@ -12,7 +12,8 @@ const fresh = () => tempDir('factory-sprites-lite-');
 const API = 'https://sprites.test/v1';
 const APP = 'factory-sprite-test';
 const plan = (overrides = {}) => ({ runId: 'sprite-test', app: APP, goal: 'Work on the shared board', machines: 2, agentsPerMachine: 2, ...overrides });
-const SPRITE_PATH = '/.sprite/languages/node/bin:/usr/local/bin:/usr/bin:/bin';
+// The PATH of the Sprite user, as measured on a real Sprite.
+const SPRITE_PATH = '/home/sprite/.local/bin:/.sprite/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const framed = text => Buffer.concat([Buffer.from([1]), Buffer.from(text), Buffer.from([3, 0])]);
 const unquote = text => text.slice(1, -1).replaceAll(`'\\''`, `'`);
 
@@ -113,7 +114,8 @@ test('a Sprite fleet becomes one Sprite per machine, with the worker as a Sprite
     assert.deepEqual(service.needs, []);
     assert.equal(text(sprite, '/etc/factory/start.sh'), SPRITE_START_SCRIPT); assert.equal(sprite.files.get('/etc/factory/start.sh').mode, 0o700);
     assert.equal(text(sprite, '/etc/factory/env/FACTORY_MACHINE_INDEX'), String(index));
-    assert.equal(text(sprite, '/etc/factory/env/PATH'), SPRITE_PATH);
+    // The pinned worker program in /usr/local/bin comes first; the Sprite's own Claude Code in ~/.local/bin is left out.
+    assert.equal(text(sprite, '/etc/factory/env/PATH'), '/usr/local/sbin:/usr/local/bin:/.sprite/bin:/usr/sbin:/usr/bin:/sbin:/bin');
     assert.deepEqual(result.machines[index], { id: `${APP}-m${index}`, name: `factory-sprite-test-m${index}`, volumeId: `${APP}-factory_m${index}`,
       config: { cpuKind: 'shared', cpus: 2, memoryMb: 4096, diskGb: 20 } });
   }
@@ -302,4 +304,6 @@ test('the start script is valid bash, keeps the Sprite awake only while the work
   assert.match(SPRITE_START_SCRIPT, /\ntask DELETE\n#[^\n]*\n\[ -n "\$\{stopping:-\}" \] && exit 0\nexit "\$code"\n$/);
   assert.deepEqual(readExecOutput(Buffer.concat([Buffer.from([1]), Buffer.from('hello\n'), Buffer.from([2]), Buffer.from('warn\n'), Buffer.from([3, 7])])), { exit: 7, text: 'hello\nwarn\n' });
   assert.deepEqual(readExecOutput(Buffer.from([1, 0x6f, 0x6b])), { exit: null, text: 'ok' });
+  assert.equal(servicePath(''), '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+  assert.equal(servicePath('/home/sprite/bin:relative:/opt/tools:/usr/local/bin'), '/usr/local/sbin:/usr/local/bin:/opt/tools');
 });
