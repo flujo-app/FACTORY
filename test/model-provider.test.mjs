@@ -4,10 +4,10 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claudeProviderEnvironment, codexProviderConfig, codexProviderOverrides, liteWorkerCommand, providerPrograms, validateModelProvider } from '../src/public-sdk.mjs';
+import { claudeProviderEnvironment, codexProviderConfig, codexProviderOverrides, flujoProviderModel, liteWorkerCommand, providerPrograms, validateModelProvider, LOCAL_MODEL_HOSTS } from '../src/public-sdk.mjs';
 import { validateCloudLitePlan, secret } from '../src/cloud-lite/protocol.mjs';
 import { providerConfigToml } from '../src/cloud-lite/runtime.mjs';
-import { applyProviderEnvironment } from '../src/model-provider.mjs';
+import { applyProviderEnvironment, plainHttpHosts } from '../src/model-provider.mjs';
 import { tempDir } from './support/temp-dir.mjs';
 
 // One description of a self-hosted vLLM endpoint that serves every wire API.
@@ -95,4 +95,24 @@ test('factory-lite reads an endpoint description and refuses to start without it
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Set SELF_HOSTED_MODEL_KEY to the endpoint key/);
   assert.match(spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout, /--model-provider/);
+});
+
+test('a model server on this computer may be plain http; every other address stays https', () => {
+  assert.deepEqual(LOCAL_MODEL_HOSTS, ['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
+  for (const url of ['http://localhost:11434/v1', 'http://127.0.0.1:1234/v1', 'http://[::1]:8000/v1', 'http://host.docker.internal:11434/v1'])
+    assert.equal(validateModelProvider(endpoint({ baseUrls: [url] })).baseUrls[0], url);
+  // Anything that leaves the computer, or only looks local, still needs https.
+  for (const url of ['http://model.example.test/v1', 'http://192.168.1.20:11434/v1', 'http://localhost.example.test/v1', 'http://host.docker.internal.example.test/v1',
+    'http://user:secret@localhost:11434/v1', 'http://localhost:11434/v1?key=x', 'ftp://localhost/v1'])
+    assert.throws(() => validateModelProvider(endpoint({ baseUrls: [url] })), /plain http only for this computer/, url);
+  assert.deepEqual(plainHttpHosts(endpoint()), []);
+  assert.deepEqual(plainHttpHosts(endpoint({ baseUrls: ['https://model.example.test/v1', 'http://host.docker.internal:11434/v1', 'http://[::1]:8000/v1'] })), ['host.docker.internal', '[::1]']);
+  // Each worker program gets the plain address as it is.
+  const local = endpoint({ baseUrls: ['http://host.docker.internal:11434/v1'] });
+  assert.match(codexProviderConfig(local), /^base_url = "http:\/\/host\.docker\.internal:11434\/v1"$/m);
+  assert.equal(claudeProviderEnvironment(local, { key: 'local-key-0001' }).ANTHROPIC_BASE_URL, 'http://host.docker.internal:11434');
+  assert.equal(flujoProviderModel(local, { key: 'local-key-0001', model: 'served-model' }).baseUrl, 'http://host.docker.internal:11434/v1');
+  // A local lite worker on this computer may use a loopback address.
+  const command = liteWorkerCommand({ provider: 'codex', database: 'board.sqlite', modelProvider: endpoint({ baseUrls: ['http://127.0.0.1:11434/v1'] }), providerKey: 'local-key-0001', env: {} });
+  assert.ok(command.args.includes('model_providers.selfhosted.base_url="http://127.0.0.1:11434/v1"'));
 });

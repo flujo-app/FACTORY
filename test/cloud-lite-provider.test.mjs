@@ -162,3 +162,12 @@ test('a provider fleet observes without a subscription refresh', async () => {
   await assert.rejects(fleet.observe(), SyntaxError);
   assert.deepEqual(order, ['/operator/status']);
 });
+
+test('a Fly fleet refuses a model server on the deploying computer before anything is recorded', async () => {
+  for (const url of ['http://host.docker.internal:11434/v1', 'http://localhost:11434/v1']) {
+    const calls = [];
+    const fleet = new FactoryCloudLiteFleet({ directory: fresh(), infrastructure: providerInfrastructure(calls) });
+    await assert.rejects(fleet.deploy({ ...plan(), modelProvider: { ...provider(), baseUrls: [url] } }, { image, providerKey: secret(), deployKey: fixtureDeployKey() }), /cannot be reached from Fly machines/);
+    assert.equal(calls.length, 0); assert.equal(fleet.state, null);
+  }
+});

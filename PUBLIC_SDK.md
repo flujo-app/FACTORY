@@ -1,10 +1,10 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.9.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.9.0):
+Version 0.10.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.10.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.9.0/flujo-factory-0.9.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.10.0/flujo-factory-0.10.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
@@ -585,19 +585,97 @@ What a plan turns into:
   as `<machine id>.vm.<app>.internal`, so the worker runtime is unchanged.
 - **The host reaches the board on a loopback-only port** that Docker picks
   (`127.0.0.1`). No worker port is published, so nothing is open to the local network.
-- **`cpus` and `memoryMb` are limits for each container.** `region`, `cpuKind` and
-  `diskGb` have no effect: a Docker volume has no size limit.
-- **A model server on this computer** is reachable from workers as
-  `host.docker.internal`. A `modelProvider` still needs `https` URLs.
+- **`cpus` and `memoryMb` are limits for each container.** `region` and `cpuKind`
+  have no effect.
+- **`diskGb` has no effect.** On Fly every machine gets its own disk of that size.
+  A Docker volume is a folder on Docker's one shared disk, and Docker sets no
+  size limit per volume: every machine can write until that shared disk is full.
+  Its size is a Docker setting (Docker Desktop: Settings, Resources).
+- **A model server on this computer** (Ollama, LM Studio, llama.cpp, vLLM) can
+  serve the workers over plain `http`, as `http://host.docker.internal:<port>/v1`;
+  see below.
 
 `deploy` takes the same options as on Fly, with two defaults. Without `image`,
-workers start from `node:24-bookworm-slim` and the bootstrap installs the worker
-program at each start; any Debian-based image with a supported Node works, and a
+workers start from `node:24-bookworm-slim` and set themselves up on their first
+start; any Debian-based image with a supported Node works, and a
 digest reference (`node@sha256:...`) keeps runs repeatable. Without `bundlePath`,
 the installed SDK is packed once into `factory-sdk.tgz` in the fleet directory and
 reused when the fleet is resumed. Pass `bundlePath: false` for an image that
 already holds the runtime in `/opt/factory`. Fly image sources (`imageSource`,
 `channel`) and the plan's `network` are refused.
+
+**Set-up once instead of in every container: `prebuild: true`.** The set-up
+(system packages, the worker program, the SDK and its packages) takes minutes.
+With `deploy(plan, { prebuild: true })` it runs once, in an image built from
+`image`, and every container starts from that image in seconds:
+
+```js
+await fleet.deploy(plan, { prebuild: true });
+```
+
+The image is named `factory-worker:<program>-<hash>`. The hash follows from the
+base image, the SDK bundle and the worker program, so a later fleet with the same
+three finds the image and builds nothing. A new SDK version means one new build.
+Images stay until you remove them: `docker image ls --filter label=factory.docker.image`
+lists them. `fleet.infrastructure.buildImage({ baseImage, bundlePath, workerProgram })`
+builds one without deploying.
+
+Without `prebuild`, each container runs the set-up itself on its first start.
+Either way a container records the finished set-up and skips it when it is
+started again, so `stop()` and `start()` take seconds. `updateRuntime` with a new
+bundle makes new containers that set themselves up once more.
+
+**A model on this computer.** A `modelProvider` may use plain `http` for a server
+on the same computer. Containers reach it as `host.docker.internal`:
+
+```js
+const fleet = new FactoryDockerLiteFleet({ directory: '/absolute/private/fleet-run' });
+await fleet.deploy({
+  runId: 'my-local-run', app: 'my-local-swarm', goal: ownerGoal, machines: 2, agentsPerMachine: 3,
+  model: 'my-model', subagentModel: 'my-model',
+  modelProvider: { id: 'local', envKey: 'LOCAL_MODEL_KEY', model: 'my-model',
+    baseUrls: ['http://host.docker.internal:11434/v1'], apis: ['responses'] },
+}, { providerKey: 'any-text-if-the-server-wants-no-key', prebuild: true });
+```
+
+- Plain `http` is accepted only for names of this computer: `localhost`,
+  `127.0.0.1`, `[::1]` and `host.docker.internal`. Every other address still
+  needs `https`.
+- A Docker fleet takes only `host.docker.internal`: inside a container,
+  `localhost` is the container itself. A Fly fleet refuses all four, because a
+  Fly machine cannot reach the computer that deploys it. Local lite workers
+  (`factory-lite ... --model-provider`) run on this computer and may use `localhost`.
+- The server must offer the interface of the worker program: `responses` for
+  Codex, `anthropic` for Claude Code, any of the three for FLUJO. Ollama offers
+  all three.
+- On Docker Desktop a server that listens only on `127.0.0.1` is reachable. On
+  Docker for Linux the server must listen on the Docker bridge address too (for
+  Ollama: `OLLAMA_HOST=0.0.0.0`).
+- The model must be able to call tools for agents to use the board. A model too
+  small for that still answers, which is enough to check the connection.
+
+**The stricter sandboxes need `nestedSandbox: true`.** With the plan's default
+sandbox (`danger-full-access`) an agent's commands may do anything inside its
+container; the container is what keeps them off this computer. `workspace-write`
+lets them write only in the agent's own folder, with no network, and `read-only`
+lets them write nowhere. The worker program enforces both by running each command
+in a small isolated area of its own (bubblewrap). A default Docker container may
+not create such an area: in a real run every command of an agent failed with
+`bwrap: No permissions to create new namespace`. So a Docker fleet refuses these
+two sandboxes unless it was created for them:
+
+```js
+const fleet = new FactoryDockerLiteFleet({ directory, auth, nestedSandbox: true });
+await fleet.deploy({ ...plan, sandbox: 'workspace-write' }, { prebuild: true });
+```
+
+`nestedSandbox: true` runs the fleet's containers without Docker's system-call
+filter (`--security-opt seccomp=unconfined`), which the isolated area needs. That
+is a trade: agent commands are held more tightly, while the container as a whole
+loses one of Docker's own protections. Nothing else changes: no extra privileges
+and no access to this computer's files. As on Fly, Codex asks for approval before
+a board tool call under these sandboxes and the fleet never approves, so pair them
+with `boardTools: false` for Codex.
 
 Before anything is recorded, the fleet checks that Docker runs, uses Linux
 containers and has the CPUs one machine asks for. A stopped Docker therefore
@@ -621,12 +699,10 @@ or `/data/factory/bootstrap.log` on its volume.
 
 Containers do not restart by themselves. After `stop()`, or after the computer
 or Docker was restarted, call `start({ attempt })` with a new attempt name; a later
-`stop()` then stops them again. Every start sets the machine up again. In the
-runs below that took between one and a half and four and a half minutes for Codex
-and Claude Code, and seven and a half minutes for FLUJO's first start, which
-installs FLUJO onto the volume. An agent resumes the session it
-had; a Codex session that never ran a turn has no history to resume, so that agent
-records it and opens a new one.
+`stop()` then stops them again. A container that is started again skips its
+set-up and is back in seconds. An agent resumes the session it had; a Codex
+session that never ran a turn has no history to resume, so that agent records it
+and opens a new one.
 
 `createDockerInfrastructure({ directory })` is the provider on its own. It answers
 the provider commands a fleet sends, for use as the `infrastructure` of a
@@ -641,17 +717,46 @@ with verified archives and the removal of every container, volume and the networ
 passed too. The same record holds two shorter runs in which Claude Code and FLUJO
 workers started in containers and enrolled on the board. Those two used
 placeholder logins and called no model, so model turns of Claude Code and FLUJO
-on Docker are not asserted. The runs used the default sandbox (full access inside
-the container); `workspace-write` and `read-only` are untested in containers. To
-repeat the check on your own Docker:
+on Docker are not asserted by that record.
+
+A [second record of the same day](evidence/docker-fleet-runs-20261123.json) holds
+seven more real runs on the same computer:
+
+- **Claude Code with real turns.** Two containers with two agents each, from a
+  pre-built image, on a subscription token: a claim recorded on the shared board
+  before and after a stop and start, then a runtime update, collection and
+  removal. The image took 3 minutes 43 seconds to build, once. After that all
+  agents were enrolled 4 seconds after the deploy, and back 5 seconds after a
+  restart.
+- **Ten teams of nine workers and a lead.** Ten containers, 100 Claude Code
+  agents, every one with a real model turn. Each worker recorded its own claim
+  and messaged its lead; each lead read its inbox and found its nine messages.
+  Once the image was ready, the ten containers were created and all 100 agents
+  enrolled within 12 seconds. The 100 turns took a minute and a half, and an idle
+  container used about 46 MB of memory.
+- **A model on the same computer.** Codex, Claude Code and FLUJO workers each
+  completed a turn with an answer from a model served by Ollama over plain
+  `http`. The model was the 9 MB TinyLLama-v0, which writes story-like text and
+  cannot use tools: these runs show the connection, not useful work by a local
+  model.
+- **The `workspace-write` sandbox** with `nestedSandbox: true`, for Codex and for
+  Claude Code: the agent's command wrote a file in its work folder and could not
+  write one outside it.
+
+Not shown by either record: useful work by a model served on the same computer,
+Docker on a Linux host, the `read-only` sandbox, and more than ten machines. To
+repeat the checks on your own Docker:
 
 ```sh
-node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json
+node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json --prebuild
 ```
 
-Add `--turn` for the two real Codex messages, `--program claude --claude-token <file>`
-or `--program flujo` for the other worker programs, and `--quick` to stop after
-enrolment.
+Add `--turn` for two real messages to one agent, or `--teams --machines 10 --agents 10`
+for a real turn of every agent. `--program claude --claude-token <file>` and
+`--program flujo` select the other worker programs. `--model-url <address> --model <name>`
+uses a model server instead of a login, with `--reply` when the model cannot use
+tools. `--sandbox workspace-write` checks the sandbox. `--quick` skips the stop,
+start, update and collection.
 
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`

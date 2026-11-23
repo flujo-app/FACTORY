@@ -1,15 +1,27 @@
 #!/usr/bin/env node
 /**
  * A real lite fleet on local Docker, start to finish: containers, shared board, a stop and a start,
- * a runtime update, collection and removal. It makes no model call unless --turn is given; then one
- * agent on the last machine gets one short message and must record a claim on the shared board.
+ * a runtime update, collection and removal. It makes no model call unless --turn or --teams is given.
  *
  *   node scripts/docker-fleet-smoke.mjs --directory <absolute folder> --evidence <absolute file>
  *     [--program codex|claude|flujo] [--codex-auth <auth.json>] [--claude-token <file>]
- *     [--machines 2] [--agents 2] [--image <name>] [--turn] [--quick] [--keep]
+ *     [--model-url <http(s) address ending in /v1> --model <name> [--model-api responses|chat|anthropic] [--context <tokens>]]
+ *     [--machines 2] [--agents 2] [--cpus 1] [--memory 2048] [--image <name>] [--prebuild]
+ *     [--turn] [--sandbox workspace-write|read-only] [--reply] [--teams] [--quick] [--keep]
  *
- * --quick stops after every agent has enrolled and removes the fleet. FLUJO workers need a model
- * endpoint; without --turn none is called, so this script gives them a placeholder one.
+ * --turn      one agent on the last machine gets a short message and must record a claim on the shared
+ *             board; after the restart it gets a second one.
+ * --sandbox   workspace-write or read-only: the plan's sandbox for agent commands, with the fleet's
+ *             nestedSandbox option on. One agent then writes a file in its work folder and tries to write
+ *             one outside it; the check looks at which files exist.
+ * --reply     one agent gets a short message and only has to answer: for a model too small to use tools.
+ * --teams     every agent takes one real turn, two machines at a time: each worker records a claim and
+ *             messages its lead, then each lead reads its inbox and records how many messages it found.
+ * --model-url the workers use this model server instead of a subscription login. For a server on this
+ *             computer use http://host.docker.internal:<port>/v1. Its key is read from LOCAL_MODEL_KEY.
+ * --prebuild  the set-up runs once, in an image, instead of in every container.
+ * --quick     stops after the turns (or after enrolment) and removes the fleet.
+ * FLUJO workers need a model server; without --model-url they get a placeholder and may only enrol.
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -23,7 +35,7 @@ import { FactoryDockerLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBrok
 const flags = {};
 for (let index = 2; index < process.argv.length; index++) {
   const name = process.argv[index];
-  if (['--turn', '--keep', '--quick'].includes(name)) flags[name] = true;
+  if (['--turn', '--reply', '--teams', '--keep', '--quick', '--prebuild'].includes(name)) flags[name] = true;
   else flags[name] = process.argv[++index];
 }
 const directory = flags['--directory'], evidenceFile = flags['--evidence'];
@@ -31,11 +43,18 @@ if (!isAbsolute(directory ?? '') || !isAbsolute(evidenceFile ?? '')) throw new E
 const program = flags['--program'] ?? 'codex';
 const machines = Number(flags['--machines'] ?? 2), agentsPerMachine = Number(flags['--agents'] ?? 2);
 const image = flags['--image'] ?? DOCKER_WORKER_IMAGE;
-if (program === 'flujo' && flags['--turn']) throw new Error('A FLUJO turn needs a real model endpoint; run FLUJO without --turn.');
-const auth = program === 'flujo' ? undefined : program === 'claude' ? new ClaudeSubscriptionBroker({ tokenFile: flags['--claude-token'] })
+const modelUrl = flags['--model-url'], model = flags['--model'];
+if (modelUrl && !model) throw new Error('Name the served model with --model.');
+const realTurns = Boolean(flags['--turn'] || flags['--reply'] || flags['--teams'] || flags['--sandbox']);
+if (program === 'flujo' && realTurns && !modelUrl) throw new Error('A FLUJO turn needs a real model server; give one with --model-url.');
+const placeholder = program === 'flujo' && !modelUrl;
+const auth = modelUrl || program === 'flujo' ? undefined : program === 'claude' ? new ClaudeSubscriptionBroker({ tokenFile: flags['--claude-token'] })
   : new CodexSubscriptionBroker({ authFile: flags['--codex-auth'] ?? join(homedir(), '.codex', 'auth.json') });
-const provider = program === 'flujo' ? { modelProvider: { id: 'acceptance', envKey: 'ACCEPTANCE_MODEL_KEY', baseUrls: ['https://model.invalid/v1'], apis: ['chat'], model: 'acceptance-model' } } : {};
-const providerKey = program === 'flujo' ? 'acceptance-placeholder-key' : undefined;
+const api = flags['--model-api'] ?? { codex: 'responses', claude: 'anthropic', flujo: 'chat' }[program];
+const provider = modelUrl ? { model, subagentModel: model, modelProvider: { id: 'local', envKey: 'LOCAL_MODEL_KEY', baseUrls: [modelUrl], apis: [api], model,
+    ...(flags['--context'] ? { contextWindow: Number(flags['--context']) } : {}) } }
+  : placeholder ? { modelProvider: { id: 'acceptance', envKey: 'ACCEPTANCE_MODEL_KEY', baseUrls: ['https://model.invalid/v1'], apis: ['chat'], model: 'acceptance-model' } } : {};
+const providerKey = modelUrl ? process.env.LOCAL_MODEL_KEY ?? 'local-model-key' : placeholder ? 'acceptance-placeholder-key' : undefined;
 
 const docker = async args => (await promisify(execFile)('docker', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true })).stdout;
 const lines = text => text.split('\n').map(line => line.trim()).filter(Boolean);
@@ -48,10 +67,11 @@ mkdirSync(directory, { recursive: true, mode: 0o700 });
 const journal = join(directory, 'fleet.json'), traceFile = join(directory, 'traces.jsonl');
 const stamp = existsSync(journal) ? JSON.parse(readFileSync(journal, 'utf8')).plan.runId.split('-').at(-1) : Date.now().toString(36);
 const plan = { runId: `docker-smoke-${stamp}`, app: `factory-docker-${stamp}`, workerProgram: program, machines, agentsPerMachine,
-  cpus: 1, memoryMb: 2048, supervision: 'operator', reasoningEffort: 'low', ...provider,
+  cpus: Number(flags['--cpus'] ?? 1), memoryMb: Number(flags['--memory'] ?? 2048), supervision: 'operator', monitorIntervalMs: 4000, reasoningEffort: 'low', ...provider,
+  ...(flags['--sandbox'] ? { sandbox: flags['--sandbox'] } : {}),
   goal: 'Acceptance check of a FACTORY fleet on local Docker. Wait for operator messages.' };
-const agents = agentInventory(plan).map(agent => agent.id);
-const fleet = new FactoryDockerLiteFleet({ directory, auth, onEvent: event => events.push({ type: event.type, key: event.body?.key }) });
+const agents = agentInventory(plan);
+const fleet = new FactoryDockerLiteFleet({ directory, auth, nestedSandbox: Boolean(flags['--sandbox']), onEvent: event => events.push({ type: event.type, key: event.body?.key, atMs: Date.now() - started }) });
 const label = `label=factory.docker.app=${plan.app}`;
 const inspectAll = async () => { const ids = lines(await docker(['ps', '--all', '--no-trunc', '--filter', label, '--format', '{{.ID}}'])); return ids.length ? JSON.parse(await docker(['inspect', ...ids])) : []; };
 const traces = () => existsSync(traceFile) ? lines(readFileSync(traceFile, 'utf8')).map(line => JSON.parse(line)) : [];
@@ -61,33 +81,53 @@ const lastTrace = () => traces().at(-1)?.seq ?? 0;
  * Waits until, after trace number `after`, every machine has reported ready and every agent has
  * enrolled on the board. The board keeps earlier sessions, so only fresh trace records prove a start.
  */
-async function settled(after, timeoutMs = 900000) {
+async function settled(after, timeoutMs = 1200000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    try { await fleet.observe(); } catch { /* The board is not up yet while a machine sets itself up. */ }
+    try { await fleet.observe({ maxPages: 25 }); } catch { /* The board is not up yet while a machine sets itself up. */ }
     const fresh = traces().filter(event => event.seq > after);
     const ready = fresh.filter(event => event.kind === 'machine.ready');
     const threads = Object.fromEntries(fresh.filter(event => event.kind === 'agent.enrolled').map(event => [event.body.agentId, event.body.threadId]));
-    if (new Set(ready.map(event => event.body.machine)).size === machines && agents.every(id => threads[id])) return { fresh, ready, threads };
+    if (new Set(ready.map(event => event.body.machine)).size === machines && agents.every(agent => threads[agent.id])) return { fresh, ready, threads };
     if (Date.now() >= deadline) throw new Error('Agents did not all enrol in time; see `docker logs` of the fleet containers.');
-    await sleep(5000);
+    await sleep(3000);
   }
 }
 /** After a restart on the same volume an agent resumes its session. A session that never ran a turn has no history to resume: the agent names it and opens a new one. */
 function continued(fresh, previous) {
-  return Object.fromEntries(agents.map(id => {
+  return Object.fromEntries(agents.map(({ id }) => {
     const resumed = fresh.some(event => event.source === id && event.kind === 'native.thread.resumed' && event.body.threadId === previous[id]);
     const kept = fresh.some(event => event.source === id && event.kind === 'agent.session_unavailable' && event.body.previousThreadId === previous[id]);
     assert.equal(resumed || kept, true, `${id} did not find its earlier session on its volume`);
     return [id, resumed ? 'resumed' : 'no-history-new-session'];
   }));
 }
+/** Sends each listed agent one message and waits until each has recorded the claim it was asked for and ended its turn. */
+async function claims(jobs, timeoutMs = 900000) {
+  const after = lastTrace(), deadline = Date.now() + timeoutMs, done = new Map();
+  for (const job of jobs) await fleet.command(job.agent, { id: job.id, message: job.message });
+  while (done.size < jobs.length) {
+    const status = await fleet.observe({ maxPages: 25 }), fresh = traces().filter(event => event.seq > after);
+    for (const job of jobs) {
+      const claim = status.claims.find(value => value.owner === job.agent && job.matches(value.resource));
+      const ended = fresh.find(event => event.source === job.agent && event.kind === 'native.turn.completed');
+      if (claim && ended && !done.has(job.agent)) done.set(job.agent, { agent: job.agent, turn: ended.body.turn.status, resource: claim.resource, machine: claim.machine });
+    }
+    if (done.size < jobs.length && Date.now() >= deadline) throw new Error(`These agents did not record their claim and end their turn in time: ${jobs.filter(job => !done.has(job.agent)).map(job => job.agent).join(', ')}.`);
+    if (done.size < jobs.length) await sleep(3000);
+  }
+  return [...done.values()];
+}
+const claimJob = (agent, name) => { const resource = `task:docker-smoke-${stamp}-${name}`; return { agent, id: `smoke-${stamp}-${name}`, matches: value => value === resource,
+  message: `Call the FACTORY board tool factory_claim once with resource "${resource}". Then answer with the single word DONE. Do nothing else.` }; };
 
 let failure = null;
 try {
-  const deployed = await fleet.deploy(plan, { image, ...(providerKey ? { providerKey } : {}) });
+  const deployed = await fleet.deploy(plan, { image, ...(providerKey ? { providerKey } : {}), ...(flags['--prebuild'] ? { prebuild: true } : {}) });
   assert.equal(deployed.machines.length, machines);
-  check('deploy: one container per machine', { machines: deployed.machines.map(machine => ({ id: machine.id, name: machine.name, volumeId: machine.volumeId })) });
+  const built = events.find(event => event.type === 'image.ready');
+  check('deploy: one container per machine', { image: deployed.image, ...(built ? { imageReadyAtMs: built.atMs } : {}),
+    machines: deployed.machines.map(machine => ({ id: machine.id, name: machine.name, volumeId: machine.volumeId })) });
 
   const before = await inspectAll();
   assert.equal(before.length, machines);
@@ -103,25 +143,70 @@ try {
   check('secrets: none in container settings', { checkedSecrets: secrets.length });
 
   const first = await settled(0);
-  check('board: every agent on every machine enrolled through the shared board', { threads: first.threads,
+  check('board: every agent on every machine enrolled through the shared board', { agents: agents.length,
     machinesReady: first.ready.map(event => ({ machine: event.body.machine, node: event.body.node, [program]: String(event.body[program]).trim() })) });
 
-  // One real model turn: the last agent of the last machine is told to record a claim on the shared board.
   const turnAgent = `m${machines - 1}-a${agentsPerMachine - 1}`;
-  async function claimTurn(name) {
-    const resource = `task:docker-smoke-${stamp}-${name}`, after = lastTrace();
-    await fleet.command(turnAgent, { id: `smoke-${stamp}-${name}`, message: `Call the FACTORY board tool factory_claim once with resource "${resource}". Then answer with the single word DONE. Do nothing else.` });
-    const deadline = Date.now() + 600000; let claim, completed;
-    while (!claim || !completed) {
-      claim = (await fleet.observe()).claims.find(value => value.resource === resource);
-      completed = traces().find(event => event.seq > after && event.source === turnAgent && event.kind === 'native.turn.completed');
-      if (Date.now() >= deadline) throw new Error('The agent did not record its claim and finish its turn in time.');
-      if (!claim || !completed) await sleep(5000);
+  if (flags['--turn']) check('real turn: an agent on the last machine recorded a claim on the shared board', (await claims([claimJob(turnAgent, 'first')]))[0]);
+
+  if (flags['--sandbox']) {
+    // Does the worker program's own sandbox hold inside a container? One agent writes a file in its work folder
+    // and tries to write one outside it. The files themselves are the proof, not what the agent says.
+    const after = lastTrace(), deadline = Date.now() + 600000; let ended;
+    await fleet.command(turnAgent, { id: `smoke-${stamp}-sandbox`, message: 'Run these two shell commands, each exactly once. Do not retry them and do not work around a failure. First, in your work folder: echo sandbox-ok > proof.txt . Second: echo outside > /data/outside-proof.txt . Then answer with the single word DONE.' });
+    while (!ended) {
+      await fleet.observe({ maxPages: 25 });
+      ended = traces().find(event => event.seq > after && event.source === turnAgent && event.kind === 'native.turn.completed');
+      if (!ended && Date.now() >= deadline) throw new Error('The agent did not end its turn in time.');
+      if (!ended) await sleep(3000);
     }
-    assert.equal(claim.owner, turnAgent); assert.equal(claim.machine, `m${machines - 1}`); assert.equal(completed.body.turn.status, 'completed');
-    return { agent: turnAgent, turn: completed.body.turn.status, claim: { resource: claim.resource, owner: claim.owner, machine: claim.machine, status: claim.status } };
+    const written = async path => lines(await docker(['exec', `factory-${plan.runId}-m${machines - 1}`, '/bin/sh', '-c', `test -f ${path} && echo yes || echo no`]))[0] === 'yes';
+    const inside = await written(`/data/worktrees/${turnAgent}/proof.txt`), outside = await written('/data/outside-proof.txt');
+    assert.equal(inside, flags['--sandbox'] === 'workspace-write', `a file in the work folder was ${inside ? '' : 'not '}written`);
+    assert.equal(outside, false, 'a file outside the work folder was written');
+    check(`sandbox ${flags['--sandbox']}: an agent's command could write only where the sandbox allows`, { agent: turnAgent, turn: ended.body.turn.status,
+      fileInWorkFolder: inside ? 'written' : 'not written', fileOutsideWorkFolder: outside ? 'written' : 'not written' });
   }
-  if (flags['--turn']) check('real turn: an agent on the last machine recorded a claim on the shared board', await claimTurn('first'));
+
+  if (flags['--reply']) {
+    // For a model too small to use tools: it only has to answer, which shows the whole path to the model server.
+    const after = lastTrace(), deadline = Date.now() + 600000; let ended, reply;
+    await fleet.command(turnAgent, { id: `smoke-${stamp}-reply`, message: 'Say hello in one short sentence.' });
+    while (!ended) {
+      await fleet.observe({ maxPages: 25 });
+      const fresh = traces().filter(event => event.seq > after && event.source === turnAgent);
+      ended = fresh.find(event => event.kind === 'native.turn.completed');
+      reply = fresh.filter(event => event.kind === 'item/completed' && event.body.item?.type === 'agentMessage').map(event => event.body.item.text).join(' ');
+      if (!ended && Date.now() >= deadline) throw new Error('The agent did not end its turn in time.');
+      if (!ended) await sleep(3000);
+    }
+    assert.equal(ended.body.turn.status, 'completed'); assert.ok(reply.trim().length > 0, 'the model sent no text');
+    check('real turn: an agent on the last machine got an answer from the model server', { agent: turnAgent, turn: ended.body.turn.status, replyCharacters: reply.length, replyStart: reply.trim().slice(0, 80) });
+  }
+
+  if (flags['--teams']) {
+    // Workers first, two machines at a time, so one subscription is not asked for a hundred turns at once.
+    const workers = agents.filter(agent => agent.role === 'subagent'), leads = agents.filter(agent => agent.role === 'orchestrator');
+    const waves = [];
+    for (let index = 0; index < machines; index += 2) {
+      const wave = workers.filter(agent => [`m${index}`, `m${index + 1}`].includes(agent.machine)), from = Date.now();
+      const result = await claims(wave.map(agent => { const resource = `task:docker-smoke-${stamp}-${agent.id}`; return { agent: agent.id, id: `smoke-${stamp}-${agent.id}`, matches: value => value === resource,
+        message: `Do exactly two things with the FACTORY board tools. First call factory_claim with resource "${resource}". Then call factory_message with recipient "${agent.parentId}", messageId "${stamp}-${agent.id}" and message {"done":"${agent.id}"}. Then answer with the single word DONE.` }; }));
+      assert.equal(result.every(entry => entry.turn === 'completed'), true);
+      waves.push({ machines: [...new Set(wave.map(agent => agent.machine))], agents: wave.length, seconds: Math.round((Date.now() - from) / 1000) });
+    }
+    check('teams: every worker took a real turn, recorded its own claim and messaged its lead', { workers: workers.length, waves });
+    const prefix = agent => `task:docker-smoke-${stamp}-${agent.id}-inbox-`;
+    const reports = await claims(leads.map(agent => ({ agent: agent.id, id: `smoke-${stamp}-${agent.id}`, matches: value => value.startsWith(prefix(agent)),
+      message: `Call the FACTORY board tool factory_inbox once and count the messages it returns. Then call factory_claim with resource "${prefix(agent)}N", where N is that count as a number. Then answer with the single word DONE.` })));
+    const counted = Object.fromEntries(reports.map(entry => [entry.agent, entry.resource.split('-inbox-')[1]]));
+    assert.equal(Object.values(counted).every(count => count === String(agentsPerMachine - 1)), true, `Leads counted ${JSON.stringify(counted)}`);
+    const all = (await fleet.observe({ maxPages: 25 })).claims.filter(claim => claim.resource.startsWith(`task:docker-smoke-${stamp}-`));
+    assert.equal(all.length, agents.length); assert.equal(all.every(claim => claim.machine === claim.owner.split('-')[0]), true);
+    check('teams: every lead read its inbox and found one message from each of its workers', { leads: leads.length, messagesFound: counted, claims: all.length });
+    const usage = lines(await docker(['stats', '--no-stream', '--format', '{{.Name}} {{.MemUsage}} {{.CPUPerc}}'])).filter(line => line.includes(plan.runId));
+    check('teams: memory in use per container after the turns', { containers: usage });
+  }
 
   if (!flags['--quick']) {
     let mark = lastTrace();
@@ -135,7 +220,7 @@ try {
     const afterStart = continued(second.fresh, first.threads);
     if (flags['--turn']) assert.equal(afterStart[turnAgent], 'resumed');
     check('start: the same containers came back and every agent found its earlier session', { sessions: afterStart });
-    if (flags['--turn']) check('real turn after the restart: the resumed agent took a new message and recorded a second claim', await claimTurn('restarted'));
+    if (flags['--turn']) check('real turn after the restart: the resumed agent took a new message and recorded a second claim', (await claims([claimJob(turnAgent, 'restarted')]))[0]);
 
     mark = lastTrace();
     const updated = await fleet.updateRuntime({ bundlePath: join(directory, 'factory-sdk.tgz') });
@@ -170,11 +255,13 @@ try {
 } finally {
   await fleet.disconnect().catch(() => {});
   const info = JSON.parse(await docker(['version', '--format', '{{json .}}']).catch(() => '{}'));
-  writeFileSync(evidenceFile, JSON.stringify({ format: 'factory-docker-fleet-acceptance', schemaVersion: 1, accepted: failure === null, failure,
+  writeFileSync(evidenceFile, JSON.stringify({ format: 'factory-docker-fleet-acceptance', schemaVersion: 2, accepted: failure === null, failure,
     plan: { runId: plan.runId, app: plan.app, workerProgram: program, machines, agentsPerMachine, cpus: plan.cpus, memoryMb: plan.memoryMb, supervision: plan.supervision },
-    image, realModelTurn: Boolean(flags['--turn']), quick: Boolean(flags['--quick']),
+    image, prebuild: Boolean(flags['--prebuild']), sandbox: flags['--sandbox'] ?? 'danger-full-access', nestedSandbox: Boolean(flags['--sandbox']), login: modelUrl ? 'model server' : placeholder ? 'placeholder' : 'subscription',
+    ...(modelUrl ? { modelServer: { address: modelUrl, model, api } } : {}),
+    realModelTurns: (flags['--teams'] ? agents.length : 0) + (flags['--turn'] ? (flags['--quick'] ? 1 : 2) : 0) + (flags['--reply'] ? 1 : 0) + (flags['--sandbox'] ? 1 : 0), quick: Boolean(flags['--quick']),
     host: { platform: process.platform, node: process.version, dockerServer: info.Server?.Version, dockerClient: info.Client?.Version },
     checks, providerOperations: events.filter(event => event.type === 'provider.succeeded').map(event => event.key),
     durationMs: Date.now() - started, completedAt: new Date().toISOString(),
-    scope: 'Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only when realModelTurn is true; otherwise agents enrol and wait.' }, null, 2));
+    scope: 'Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only for the turns counted in realModelTurns; otherwise agents enrol and wait.' }, null, 2));
 }

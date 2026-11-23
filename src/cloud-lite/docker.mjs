@@ -3,8 +3,9 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { FactoryCloudLiteFleet } from './fleet.mjs';
-import { validateCloudLitePlan } from './protocol.mjs';
+import { hash, validateCloudLitePlan } from './protocol.mjs';
 import { packFactorySdk, tarHeader } from './bundle.mjs';
+import { cloudLiteImageSetup } from './bootstrap.mjs';
 
 /** A stock image the bootstrap can prepare: Debian with apt-get and a Node this SDK supports. */
 export const DOCKER_WORKER_IMAGE = 'node:24-bookworm-slim';
@@ -14,6 +15,8 @@ export const DOCKER_FLEET_COMMANDS = Object.freeze(['apps create', 'apps destroy
   'machine list', 'machine start', 'machine stop', 'machine update', 'machine exec', 'ssh sftp']);
 
 const APP_LABEL = 'factory.docker.app', ID_LABEL = 'factory.docker.id', CONFIG_LABEL = 'factory.docker.config', VOLUME_LABEL = 'factory.docker.volume';
+const IMAGE_LABEL = 'factory.docker.image';
+const IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.\-/:@]*$/;
 const SECRETS_FOLDER = 'run/factory/secrets';
 const BOARD_PORT = 4200;
 // Every machine starts through this: each secret file becomes an environment variable, then the real command runs.
@@ -87,8 +90,9 @@ function writePrivate(file, text) {
  * an app is a private network, a Fly volume is a Docker volume, a Machine is a container. Everything
  * it creates carries the app's label, and only labelled resources are listed, changed or removed.
  */
-export function createDockerInfrastructure({ directory, command = 'docker', env = process.env, execute } = {}) {
+export function createDockerInfrastructure({ directory, command = 'docker', env = process.env, execute, nestedSandbox = false } = {}) {
   if (!isAbsolute(directory ?? '')) throw new TypeError('An absolute private fleet directory is required.');
+  if (typeof nestedSandbox !== 'boolean') throw new TypeError('nestedSandbox must be true or false.');
   const secretsFile = join(directory, 'docker-secrets.json');
   const docker = (args, options = {}) => execute ? execute(command, args, { env, ...options }) : runDocker(command, args, { env, ...options });
   const stagedSecrets = () => existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, 'utf8')) : {};
@@ -119,7 +123,7 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
 
   async function createContainer({ app, name, id, config, files = [] }) {
     checked(name, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,200}$/, 'machine name');
-    checked(config?.image, /^[A-Za-z0-9][A-Za-z0-9_.\-/:@]*$/, 'image');
+    checked(config?.image, IMAGE_NAME, 'image');
     const start = config.init?.exec ?? [...(config.init?.entrypoint ?? []), ...(config.init?.cmd ?? [])];
     if (!start.length || start.some(word => typeof word !== 'string')) throw new TypeError('A Docker machine needs its start command.');
     const owned = new Set(await volumeNames(app));
@@ -143,6 +147,9 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
       ...(config.guest?.memory_mb ? ['--memory', `${config.guest.memory_mb}m`] : []),
       // Workers reach a model server on this computer as host.docker.internal.
       '--restart', 'no', '--init', '--add-host', 'host.docker.internal:host-gateway',
+      // Only when the fleet was created for it: without Docker's system-call filter the worker program's
+      // own sandbox (bubblewrap) may create the isolated area it runs agent commands in.
+      ...(config.docker?.seccomp === 'unconfined' ? ['--security-opt', 'seccomp=unconfined'] : []),
       ...Object.entries(config.env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
       // The host reaches the board on a loopback-only port that Docker picks; nothing is open to the network.
       ...(config.metadata?.['factory.machine'] === 'm0' ? ['--publish', `127.0.0.1::${boardPort(config)}`] : []),
@@ -245,6 +252,29 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
       if (Number.isFinite(cpus) && Number.isFinite(info.NCPU) && cpus > info.NCPU) throw new Error(`The plan gives each machine ${cpus} CPUs, but this Docker has ${info.NCPU}. Lower cpus in the plan.`);
       return { version: info.ServerVersion, cpus: info.NCPU, memoryBytes: info.MemTotal };
     },
+    /**
+     * Builds, once, an image that already holds the set-up for this SDK bundle and worker program, and
+     * returns its name. Containers made from it skip the set-up and start in seconds. The name follows
+     * from the base image, the bundle and the program, so the same request finds the image again.
+     */
+    async buildImage({ baseImage, bundlePath, workerProgram = 'codex' } = {}) {
+      checked(baseImage, IMAGE_NAME, 'image');
+      if (!isAbsolute(bundlePath ?? '')) throw new TypeError('Select an absolute SDK tarball path.');
+      const bundle = readFileSync(bundlePath);
+      const setup = cloudLiteImageSetup(hash(bundle), { workerProgram });
+      const dockerfile = [`FROM ${baseImage}`, 'COPY factory-sdk.tgz /tmp/factory-sdk.tgz', 'COPY factory-image-setup.sh /opt/factory-image-setup.sh',
+        'RUN /bin/bash /opt/factory-image-setup.sh', ''].join('\n');
+      const image = `factory-worker:${workerProgram}-${hash(dockerfile + setup).slice(0, 16)}`;
+      const present = async () => lines(await docker(['image', 'ls', '--filter', `reference=${image}`, '--format', '{{.Repository}}:{{.Tag}}'])).includes(image);
+      if (await present()) return { image, built: false };
+      // The build context goes to Docker as one tar stream; nothing is written beside the fleet's files.
+      await docker(['build', '--tag', image, '--label', `${IMAGE_LABEL}=${workerProgram}`, '-'], { timeoutMs: 3600000, input: archive([
+        { path: 'Dockerfile', mode: 0o644, bytes: Buffer.from(dockerfile) },
+        { path: 'factory-sdk.tgz', mode: 0o644, bytes: bundle },
+        { path: 'factory-image-setup.sh', mode: 0o644, bytes: Buffer.from(setup) }]) });
+      if (!await present()) throw new Error(`Docker reported a finished build, but the image ${image} is not there.`);
+      return { image, built: true };
+    },
     async createMachine({ app, name, config }) {
       const id = randomBytes(7).toString('hex');
       await createContainer({ app: appName(app), name, id, config,
@@ -258,9 +288,13 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
       if (!port) throw new Error('The coordinator container has no loopback port for its board.');
       return { origin: `http://127.0.0.1:${port}`, check() {}, async stop() {} };
     },
+    // The name under which a container reaches a model server on this computer (see --add-host above).
+    localModelHost: 'host.docker.internal',
     unusedLoopbackPort: async () => 0,
     // Everything a container needs comes from the fleet's own machine settings.
-    buildMachineConfig: () => ({}),
+    // It travels in the machine settings, so a container replaced by a runtime update keeps it.
+    buildMachineConfig: () => (nestedSandbox ? { docker: { seccomp: 'unconfined' } } : {}),
+    nestedSandbox,
     resolveWorkerImage: async () => { throw new TypeError('A Docker fleet takes an image name; Fly image sources do not apply.'); },
   };
 }
@@ -270,15 +304,23 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
  * volume each for /data, one private network, and the same shared board on the first machine.
  * Plans, worker programs, logins and every fleet action are those of FactoryCloudLiteFleet.
  * `region`, `cpuKind` and `diskGb` have no effect here; `cpus` and `memoryMb` limit each container.
+ *
+ * `nestedSandbox: true` is needed for the plan's `workspace-write` and `read-only` sandboxes. The worker
+ * program runs agent commands in an isolated area of its own (bubblewrap), and a default container may
+ * not create one: every command of an agent then fails. With this option the fleet's containers run
+ * without Docker's system-call filter (`seccomp=unconfined`), which that isolated area needs.
  */
 export class FactoryDockerLiteFleet extends FactoryCloudLiteFleet {
-  constructor({ directory, dockerCommand = 'docker', dockerEnv = process.env, dockerExecute, auth, onEvent } = {}) {
+  constructor({ directory, dockerCommand = 'docker', dockerEnv = process.env, dockerExecute, nestedSandbox = false, auth, onEvent } = {}) {
     if (!isAbsolute(directory ?? '')) throw new TypeError('An absolute private fleet directory is required.');
-    super({ directory, auth, onEvent, infrastructure: createDockerInfrastructure({ directory, command: dockerCommand, env: dockerEnv, execute: dockerExecute }) });
+    super({ directory, auth, onEvent, infrastructure: createDockerInfrastructure({ directory, command: dockerCommand, env: dockerEnv, execute: dockerExecute, nestedSandbox }) });
   }
   async prepare(input) {
     const plan = validateCloudLitePlan(input);
     if (plan.network !== undefined) throw new TypeError('network is a Fly setting; a Docker fleet always gets its own private network.');
+    if (plan.sandbox !== undefined && plan.sandbox !== 'danger-full-access' && !this.infrastructure.nestedSandbox) {
+      throw new TypeError(`The ${plan.sandbox} sandbox does not work in a default Docker container: the worker program may not create its own isolated area there, so every command of an agent fails. Create the fleet with nestedSandbox: true, which runs its containers without Docker's system-call filter.`);
+    }
     await this.infrastructure.preflight({ cpus: plan.cpus });
     return super.prepare(input);
   }
@@ -286,12 +328,24 @@ export class FactoryDockerLiteFleet extends FactoryCloudLiteFleet {
    * Without `image`, workers start from the stock Node image. Without `bundlePath`, this installed SDK
    * is packed into the fleet directory once and kept, so a resumed fleet uses the same bundle. Pass
    * `bundlePath: false` for an image that already has the runtime in /opt/factory.
+   * With `prebuild: true` the set-up (system packages, the worker program, the SDK) runs once, in an
+   * image built from `image`, instead of in every container; later fleets with the same bundle reuse it.
    */
-  async deploy(input, { image = DOCKER_WORKER_IMAGE, imageSource, channel, bundlePath, ...options } = {}) {
+  async deploy(input, { image = DOCKER_WORKER_IMAGE, imageSource, channel, bundlePath, prebuild = false, ...options } = {}) {
     if (imageSource !== undefined || channel !== undefined) throw new TypeError('A Docker fleet takes an image name; Fly image sources do not apply.');
+    if (typeof prebuild !== 'boolean') throw new TypeError('prebuild must be true or false.');
+    if (prebuild && bundlePath === false) throw new TypeError('prebuild builds an image around the SDK bundle; it cannot be combined with bundlePath: false.');
     if (bundlePath === undefined) {
       bundlePath = join(this.directory, 'factory-sdk.tgz');
       if (!existsSync(bundlePath)) packFactorySdk(bundlePath);
+    }
+    if (prebuild) {
+      const plan = validateCloudLitePlan(input);
+      await this.infrastructure.preflight({ cpus: plan.cpus });
+      this.event('image.started', { baseImage: image });
+      const built = await this.infrastructure.buildImage({ baseImage: image, bundlePath, workerProgram: plan.workerProgram ?? 'codex' });
+      this.event('image.ready', built);
+      image = built.image;
     }
     return super.deploy(input, { ...options, image, bundlePath: bundlePath === false ? undefined : bundlePath });
   }
