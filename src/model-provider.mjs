@@ -12,10 +12,21 @@ export const WORKER_PROGRAM_APIS = Object.freeze({ codex: Object.freeze(['respon
 // Variables the launchers set for the worker process itself; a provider key must not replace them.
 const RESERVED_ENVIRONMENT = new Set(['PATH', 'HOME', 'CODEX_HOME', 'GH_TOKEN', 'GIT_TERMINAL_PROMPT',
   'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN']);
-const credentialFreeHttps = value => {
-  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash; }
-  catch { return false; }
+/**
+ * Names for this computer itself. Plain http to them never leaves it, so a model server running here
+ * (Ollama, LM Studio, llama.cpp, vLLM) needs no certificate. `host.docker.internal` is this computer as
+ * a Docker container sees it.
+ */
+export const LOCAL_MODEL_HOSTS = Object.freeze(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
+const credentialFreeModelUrl = value => {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'https:' || url.protocol === 'http:' && LOCAL_MODEL_HOSTS.includes(url.hostname))
+      && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
 };
+/** The hosts of a provider's plain-http addresses: all of them are names for this computer. */
+export const plainHttpHosts = provider => provider.baseUrls.filter(value => new URL(value).protocol === 'http:').map(value => new URL(value).hostname);
 
 /**
  * A self-hosted, OpenAI-compatible model endpoint. `baseUrls` are OpenAI-style base URLs
@@ -26,8 +37,8 @@ export function validateModelProvider(provider) {
   if (!provider || typeof provider !== 'object' || Array.isArray(provider)) throw new TypeError('modelProvider must be an object.');
   if (!/^[a-z][a-z0-9_-]{1,40}$/.test(provider.id ?? '')) throw new TypeError('modelProvider.id must be a short lowercase name.');
   if (!/^[A-Z][A-Z0-9_]{2,60}$/.test(provider.envKey ?? '') || RESERVED_ENVIRONMENT.has(provider.envKey)) throw new TypeError('modelProvider.envKey must name a dedicated environment variable.');
-  if (!Array.isArray(provider.baseUrls) || !provider.baseUrls.length || provider.baseUrls.length > 64 || !provider.baseUrls.every(credentialFreeHttps))
-    throw new TypeError('modelProvider.baseUrls must list https URLs without credentials, query or fragment.');
+  if (!Array.isArray(provider.baseUrls) || !provider.baseUrls.length || provider.baseUrls.length > 64 || !provider.baseUrls.every(credentialFreeModelUrl))
+    throw new TypeError(`modelProvider.baseUrls must list https URLs without credentials, query or fragment; plain http only for this computer (${LOCAL_MODEL_HOSTS.join(', ')}).`);
   for (const name of ['name', 'model']) if (provider[name] !== undefined && (typeof provider[name] !== 'string' || !provider[name].trim() || provider[name].length > 200)) throw new TypeError(`modelProvider.${name} must be short text.`);
   if (provider.apis !== undefined && (!Array.isArray(provider.apis) || !provider.apis.length || !provider.apis.every(api => MODEL_PROVIDER_APIS.includes(api))))
     throw new TypeError(`modelProvider.apis must list ${MODEL_PROVIDER_APIS.join(', ')}.`);

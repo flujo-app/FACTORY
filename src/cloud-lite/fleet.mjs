@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { createEvidenceClient } from '../evidence.mjs';
+import { plainHttpHosts } from '../model-provider.mjs';
 
 const TRACE_PAGE_SIZE = 100;
 const DEFAULT_OBSERVATION_PAGES = 5;
@@ -199,6 +200,14 @@ export class FactoryCloudLiteFleet {
   async prepare(input) {
     if (existsSync(this.journalPath)) this.state = JSON.parse(readFileSync(this.journalPath, 'utf8'));
     const plan = validateCloudLitePlan(input);
+    // A plain-http model address is a server on the deploying computer. Machines can use it only where the
+    // provider says under which name they reach that computer; Fly machines cannot reach it at all.
+    const localHosts = plan.modelProvider ? plainHttpHosts(plan.modelProvider) : [];
+    if (localHosts.length) {
+      const reachableAs = this.infrastructure?.localModelHost;
+      if (!reachableAs) throw new TypeError('A model server on this computer (plain http) cannot be reached from Fly machines; give them an https address.');
+      if (localHosts.some(host => host !== reachableAs)) throw new TypeError(`Inside a container, localhost is the container itself; reach a model server on this computer as http://${reachableAs}:<port>.`);
+    }
     if (this.state) {
       if (JSON.stringify(this.state.plan) !== JSON.stringify(plan)) throw new Error('Existing fleet binding differs.');
     } else {

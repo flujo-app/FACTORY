@@ -98,11 +98,11 @@ export { createPresentationServer, startPresentationServer } from './presentatio
 export { createObservatoryClient } from './observatory-client.mjs';
 export { liteWorkerCommand, startLiteWorker, startFlujoLiteWorker } from './lite-worker.mjs';
 export { ModalSelfHostedModel, selfHostedProfiles, probeSelfHostedModel, modalResult, readBoundedJson, modalEndpointOrigin, runCommand, SELFHOST_MODAL_DIR, SELFHOSTED_KEY_ENV } from './selfhost/modal.mjs';
-export { MODEL_PROVIDER_APIS, WORKER_PROGRAM_APIS, validateModelProvider, providerPrograms, codexProviderConfig, codexProviderOverrides, claudeProviderEnvironment, flujoProviderModel, programApi } from './model-provider.mjs';
+export { MODEL_PROVIDER_APIS, WORKER_PROGRAM_APIS, LOCAL_MODEL_HOSTS, validateModelProvider, providerPrograms, codexProviderConfig, codexProviderOverrides, claudeProviderEnvironment, flujoProviderModel, programApi } from './model-provider.mjs';
 export { FlujoProgram, FlujoSessionDriver, flujoEnvironment } from './cloud-lite/flujo-driver.mjs';
 export { FactoryCloudLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBroker } from './cloud-lite/fleet.mjs';
 export { FactoryDockerLiteFleet, createDockerInfrastructure, DOCKER_WORKER_IMAGE } from './cloud-lite/docker.mjs';
 export { validateCloudLitePlan, agentInventory, machineConfig as cloudLiteMachineConfig } from './cloud-lite/protocol.mjs';
-export { cloudLiteBootstrap } from './cloud-lite/bootstrap.mjs';
+export { cloudLiteBootstrap, cloudLiteImageSetup } from './cloud-lite/bootstrap.mjs';
 export { packFactorySdk } from './cloud-lite/bundle.mjs';
 export * from './workflows/index.mjs';

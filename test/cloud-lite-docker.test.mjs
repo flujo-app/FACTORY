@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { FactoryDockerLiteFleet, createDockerInfrastructure, DOCKER_FLEET_COMMANDS, DOCKER_WORKER_IMAGE } from '../src/cloud-lite/docker.mjs';
 import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
+import { cloudLiteBootstrap, cloudLiteImageSetup } from '../src/cloud-lite/bootstrap.mjs';
 import { hash, secret } from '../src/cloud-lite/protocol.mjs';
 import { tempDir } from './support/temp-dir.mjs';
 
@@ -29,7 +30,7 @@ function untar(bytes) {
 
 /** A Docker that keeps its networks, volumes and containers in memory and answers the CLI calls the fleet makes. */
 function fakeDocker({ info = { ServerVersion: '29.0.0', NCPU: 8, MemTotal: 16e9, OSType: 'linux' } } = {}) {
-  const state = { networks: new Map(), volumes: new Map(), containers: [], calls: [], boardPort: 0, failNextCreate: null, exec: () => '', archive: Buffer.alloc(0), sequence: 0 };
+  const state = { networks: new Map(), volumes: new Map(), images: new Map(), containers: [], calls: [], boardPort: 0, failNextCreate: null, exec: () => '', archive: Buffer.alloc(0), sequence: 0 };
   const fail = message => { throw new Error(message); };
   const find = reference => state.containers.find(value => value.Id === reference || value.Name === `/${reference}`) ?? fail(`No such container: ${reference}`);
   const filtered = (collection, args) => {
@@ -51,6 +52,8 @@ function fakeDocker({ info = { ServerVersion: '29.0.0', NCPU: 8, MemTotal: 16e9,
       if (rest[0] === 'ls') return filtered(state.volumes, rest).map(([name]) => name).join('\n');
       if (rest[0] === 'rm') { if (!state.volumes.delete(rest[1])) fail('no such volume'); return ''; }
     }
+    if (verb === 'image' && rest[0] === 'ls') { const wanted = rest[rest.indexOf('--filter') + 1].replace('reference=', ''); return state.images.has(wanted) ? wanted : ''; }
+    if (verb === 'build') { state.images.set(rest[rest.indexOf('--tag') + 1], { labels: labelsOf(rest), context: untar(options.input) }); return ''; }
     if (verb === 'ps') return state.containers.filter(value => filtered([[value.Id, value.Config.Labels]], rest).length).map(value => value.Id).join('\n');
     if (verb === 'inspect') return JSON.stringify(rest.slice(2).map(find).map(({ files, ...value }) => value));
     if (verb === 'create') {
@@ -315,4 +318,89 @@ test('every provider command a fleet sends has a Docker equivalent', async () =>
   await assert.rejects(infrastructure.run(['machine', 'list', '--app', 'Not A Valid App']), /Invalid app/);
   await assert.rejects(infrastructure.run(['secrets', 'import', '--app', 'factory-docker-test'], { input: 'lower-case=value\n' }), /Invalid secret name/);
   assert.equal(docker.state.calls.length, 0);
+});
+
+test('a machine skips a set-up that was already done for the same bundle and program', () => {
+  const digest = 'c'.repeat(64);
+  for (const program of ['codex', 'claude', 'flujo']) {
+    const script = cloudLiteBootstrap(digest, { workerProgram: program }).split('\n');
+    const record = script.indexOf(`echo '${digest} ${program}' > /opt/factory/.factory-setup`);
+    const order = [script.indexOf(`echo '${digest}  /tmp/factory-sdk.tgz' | sha256sum -c -`),
+      script.indexOf(`if [ "$(cat /opt/factory/.factory-setup 2>/dev/null || true)" != '${digest} ${program}' ]; then`), script.indexOf('apt-get update'),
+      script.findIndex(line => line.startsWith('npm install --prefix /opt/flujo-bash')), record, script.indexOf('fi', record), script.indexOf('exec node bin/factory-cloud-runtime.mjs')];
+    // The bundle is checked every time; the record is written only after every set-up step; the runtime starts either way.
+    assert.equal(order.includes(-1), false, program); assert.deepEqual(order, [...order].sort((a, b) => a - b), program);
+    assert.equal(script[record + 1], 'fi');
+  }
+  // The same steps as an image build: nothing touches a machine's volume, and FLUJO goes into the image.
+  const codex = cloudLiteImageSetup(digest), flujo = cloudLiteImageSetup(digest, { workerProgram: 'flujo' });
+  assert.equal(codex.includes('/data'), false); assert.equal(flujo.includes('/data'), false);
+  assert.match(flujo, /^npm install --prefix \/opt\/flujo-program /m);
+  assert.equal(codex.trimEnd().split('\n').at(-1), `echo '${digest} codex' > /opt/factory/.factory-setup`);
+  assert.equal(codex.includes('factory-cloud-runtime'), false);
+  assert.throws(() => cloudLiteImageSetup('short'), /exact SDK bundle/);
+  assert.throws(() => cloudLiteImageSetup(digest, { workerProgram: 'other' }), /Unknown worker program/);
+});
+
+test('prebuild builds one image for a bundle and program and every later fleet reuses it', async () => {
+  const docker = fakeDocker(), directory = fresh(), file = bundle(directory), events = [];
+  const builds = () => docker.state.calls.filter(call => call.args[0] === 'build').length;
+  const fleet = new FactoryDockerLiteFleet({ directory, dockerExecute: docker.execute, auth: auth(), onEvent: event => events.push(event.type) });
+  const result = await fleet.deploy(plan(), { bundlePath: file, prebuild: true });
+  assert.equal(builds(), 1);
+  const [[tag, built]] = [...docker.state.images];
+  assert.match(tag, /^factory-worker:codex-[a-f0-9]{16}$/); assert.equal(result.image, tag);
+  assert.deepEqual(built.labels, { 'factory.docker.image': 'codex' });
+  assert.equal(built.context.get('Dockerfile').bytes.toString(),
+    `FROM ${DOCKER_WORKER_IMAGE}\nCOPY factory-sdk.tgz /tmp/factory-sdk.tgz\nCOPY factory-image-setup.sh /opt/factory-image-setup.sh\nRUN /bin/bash /opt/factory-image-setup.sh\n`);
+  assert.equal(built.context.get('factory-sdk.tgz').bytes.toString(), 'sdk-bytes');
+  assert.equal(built.context.get('factory-image-setup.sh').bytes.toString(), cloudLiteImageSetup(hash('sdk-bytes')));
+  // Containers come from that image and still get the bundle and the start script, which finds the set-up done.
+  assert.deepEqual(docker.state.containers.map(value => value.Config.Image), [tag, tag]);
+  assert.equal(docker.state.containers[0].files.get('tmp/factory-sdk.tgz').bytes.toString(), 'sdk-bytes');
+  assert.match(docker.state.containers[0].files.get('opt/factory-bootstrap.sh').bytes.toString(), new RegExp(`!= '${hash('sdk-bytes')} codex' \\]; then`));
+  assert.deepEqual(events.filter(type => type.startsWith('image.')), ['image.started', 'image.ready']);
+  // The same bundle and program in another fleet: no second build. Another program: its own image.
+  const second = fresh();
+  await new FactoryDockerLiteFleet({ directory: second, dockerExecute: docker.execute, auth: auth() })
+    .deploy(plan({ runId: 'docker-second', app: 'factory-docker-second' }), { bundlePath: bundle(second), prebuild: true });
+  assert.equal(builds(), 1);
+  const third = fresh();
+  await new FactoryDockerLiteFleet({ directory: third, dockerExecute: docker.execute, auth: { program: 'claude', read: () => ({ accessToken: secret() }) } })
+    .deploy(plan({ runId: 'docker-third', app: 'factory-docker-third', workerProgram: 'claude' }), { bundlePath: bundle(third), prebuild: true });
+  assert.equal(builds(), 2); assert.equal([...docker.state.images.keys()].some(name => name.startsWith('factory-worker:claude-')), true);
+  // Resuming the first fleet names the same image, so its journal still matches.
+  assert.equal((await new FactoryDockerLiteFleet({ directory, dockerExecute: docker.execute, auth: auth() }).deploy(plan(), { bundlePath: file, prebuild: true })).image, tag);
+  assert.equal(builds(), 2);
+  // Refused before any build: a wrong setting, an image that needs no bundle, a Docker that does not run.
+  const refused = async (options, engine = docker) => {
+    const folder = fresh(), before = engine.state.images.size;
+    const outcome = await new FactoryDockerLiteFleet({ directory: folder, dockerExecute: engine.execute, auth: auth() })
+      .deploy(plan({ runId: 'docker-refused', app: 'factory-docker-refused' }), { bundlePath: bundle(folder), ...options }).then(() => null, error => error);
+    assert.equal(engine.state.images.size, before); assert.equal(existsSync(join(folder, 'fleet.json')), false);
+    return outcome.message;
+  };
+  assert.match(await refused({ prebuild: 'yes' }), /prebuild must be true or false/);
+  assert.match(await refused({ prebuild: true, bundlePath: false }), /cannot be combined with bundlePath: false/);
+  assert.match(await refused({ prebuild: true }, fakeDocker({ info: () => { throw new Error('Cannot connect to the Docker daemon'); } })), /Docker is not running/);
+});
+
+test('containers may use a model server on this computer, but only under the name they can reach', async () => {
+  const attempt = async url => {
+    const docker = fakeDocker(), directory = fresh();
+    const outcome = await new FactoryDockerLiteFleet({ directory, dockerExecute: docker.execute })
+      .deploy(plan({ machines: 1, model: 'served-model', subagentModel: 'served-model', modelProvider: { id: 'local', envKey: 'LOCAL_MODEL_KEY', baseUrls: [url], model: 'served-model' } }),
+        { bundlePath: bundle(directory), providerKey: 'local-key-0001' }).then(() => null, error => error);
+    return { outcome, docker, recorded: existsSync(join(directory, 'fleet.json')) };
+  };
+  const reachable = await attempt('http://host.docker.internal:11434/v1');
+  assert.equal(reachable.outcome, null);
+  assert.deepEqual(reachable.docker.state.containers[0].HostConfig.ExtraHosts, ['host.docker.internal:host-gateway']);
+  const config = JSON.parse(Buffer.from(reachable.docker.state.containers[0].files.get('run/factory/secrets/FACTORY_CLOUD_BOOTSTRAP_B64').bytes.toString(), 'base64').toString());
+  assert.deepEqual(config.plan.modelProvider.baseUrls, ['http://host.docker.internal:11434/v1']); assert.equal(config.providerKey, 'local-key-0001');
+  for (const url of ['http://localhost:11434/v1', 'http://127.0.0.1:11434/v1']) {
+    const loopback = await attempt(url);
+    assert.match(loopback.outcome.message, /localhost is the container itself; reach a model server on this computer as http:\/\/host\.docker\.internal:<port>/);
+    assert.equal(loopback.recorded, false); assert.equal(loopback.docker.state.networks.size, 0);
+  }
 });

@@ -41,22 +41,40 @@ fi`,
   },
 };
 
-export function cloudLiteBootstrap(bundleSha256, { workerProgram = 'codex' } = {}) {
+// Where a finished set-up records which SDK bundle and worker program it holds.
+const SETUP_RECORD = '/opt/factory/.factory-setup';
+function selected(bundleSha256, workerProgram) {
   if (!/^[a-f0-9]{64}$/.test(bundleSha256)) throw new TypeError('Bind the exact SDK bundle SHA256.');
   const program = programInstall[workerProgram];
   if (!program) throw new TypeError('Unknown worker program.');
-  return `#!/bin/bash
-set -euo pipefail
-mkdir -p /data/factory ${program.folder} /opt/factory
-exec > >(tee -a /data/factory/bootstrap.log) 2>&1
-echo '${bundleSha256}  /tmp/factory-sdk.tgz' | sha256sum -c -
-apt-get update
+  return { program, setup: `${bundleSha256} ${workerProgram}` };
+}
+/** Everything that takes minutes: system packages, the worker program, the SDK and its packages. */
+const setupSteps = program => `apt-get update
 apt-get install -y --no-install-recommends git gh openssh-client ca-certificates curl procps python3 make g++ xz-utils bubblewrap${program.packages}
 ${program.install}
 tar -xzf /tmp/factory-sdk.tgz --strip-components=1 -C /opt/factory
 cd /opt/factory
 npm install --omit=dev --ignore-scripts --no-audit --no-fund
-npm install --prefix /opt/flujo-bash --no-audit --no-fund @mario.andreschak/mcp-bash@3.46.2
+npm install --prefix /opt/flujo-bash --no-audit --no-fund @mario.andreschak/mcp-bash@3.46.2`;
+
+/**
+ * The start script of a machine. The set-up runs only where it has not been done for this exact bundle
+ * and program: a Fly Machine starts from its image every time and always runs it, while a Docker
+ * container that is started again, or one made from a pre-built image, goes straight to the runtime.
+ */
+export function cloudLiteBootstrap(bundleSha256, { workerProgram = 'codex' } = {}) {
+  const { program, setup } = selected(bundleSha256, workerProgram);
+  return `#!/bin/bash
+set -euo pipefail
+mkdir -p /data/factory ${program.folder} /opt/factory
+exec > >(tee -a /data/factory/bootstrap.log) 2>&1
+echo '${bundleSha256}  /tmp/factory-sdk.tgz' | sha256sum -c -
+if [ "$(cat ${SETUP_RECORD} 2>/dev/null || true)" != '${setup}' ]; then
+${setupSteps(program)}
+echo '${setup}' > ${SETUP_RECORD}
+fi
+cd /opt/factory
 export HOME=/data ${program.home}
 node --input-type=module - <<'FACTORY_PIN_SOURCE'
 import { execFileSync } from 'node:child_process';
@@ -77,5 +95,20 @@ if (config.plan.repositoryRevision && !config.deployKey) {
 }
 FACTORY_PIN_SOURCE
 exec node bin/factory-cloud-runtime.mjs
+`;
+}
+
+/**
+ * The same set-up as a script for an image build, so it runs once instead of in every container.
+ * FLUJO goes into the image rather than onto a machine's volume; the start script then finds it on the path.
+ */
+export function cloudLiteImageSetup(bundleSha256, { workerProgram = 'codex' } = {}) {
+  const { program, setup } = selected(bundleSha256, workerProgram);
+  return `#!/bin/bash
+set -euo pipefail
+mkdir -p /opt/factory
+echo '${bundleSha256}  /tmp/factory-sdk.tgz' | sha256sum -c -
+${setupSteps(program).replaceAll('/data/flujo-program', '/opt/flujo-program')}
+echo '${setup}' > ${SETUP_RECORD}
 `;
 }
