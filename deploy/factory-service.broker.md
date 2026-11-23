@@ -9,12 +9,12 @@ The broker's peer ledger contains advisory messages and grants, not a second
 spending authority. There is no multiprocess supervisor or independent replica
 of the authority volume.
 
-The image vendors the exact clean `flujo-cloud` source commit
+The image vendors the clean `flujo-cloud` base source commit
 `c36ceef69d6563b4839b605a377b3757ee8e4958` in `deploy/managed-cloud`.
-`provenance.json` records byte lengths and SHA256 for its package metadata and
+`provenance.json` documents local CPU-selection changes and records byte lengths and SHA256 for its package metadata and
 all eleven original library modules. The ManagedCloud import closure uses only
 Node builtins. The build verifies the manifest SHA256
-`c2c4db31be0ceb7d2f53fcb2920553bbd41d6012e26f8e330b5a90b06ed88490`
+`6bdf27ec48a67c88ac329793d84da59bf664e3bbcca7cbd5001396c3152cb163`
 and every copied file; no owner workspace, host dependencies or credentials
 enter the build context. Preserve those exact LF bytes when copying sources.
 

@@ -597,6 +597,28 @@ retirement. This is an accounting admission boundary; it cannot enforce a
 provider-side spending cap or establish final charges.
 `fleet.paidReservationId(app)` returns the stable reservation key for later
 meter observations and final billing reconciliation through the shared ledger.
+One setting picks the CPU of a Fly worker: `cpuKind`, either `'performance'`
+(the default) or `'shared'`. Pass it to `adapter.preflight(...)`,
+`adapter.provision(...)`, or in a managed fleet worker's `provisionInput`:
+
+```js
+provisionInput: { app: 'my-worker', workspace: 'my-workspace', cpuKind: 'shared' }
+```
+
+A worker has two CPUs, and `memoryMb` follows the kind, within Fly's limits per
+CPU: `'performance'` takes 4096 to 16384 in steps of 2048 (4096 when omitted),
+`'shared'` takes 1024 to 4096 in steps of 256 (2048 when omitted). A size outside
+that range is refused before anything is created; a call that sets
+`memoryMb: 2048` therefore also needs `cpuKind: 'shared'`. A shared CPU is
+throttled to a small share of its time after a short burst, a performance CPU is
+not, and a running performance worker costs about five times as much (Fly lists
+$66.00 against $13.39 a month for the two default sizes, November 2026).
+The bundled ManagedCloud bridge applies the selection to both initial creation
+and bootstrap, and the journal and receipts record it. An external `flujo-cloud`
+module must support `cpuKind` to apply this setting. A cloud lite fleet has the
+same setting in its plan (`cpuKind`, beside `cpus` and `memoryMb`), where
+`'shared'` stays the default.
+
 Each worker's `provisionInput` is its exact `ManagedCloud.up` input, including
 `app`; each conversation supplies its exact `conversationId`, FLUJO request
 and absolute private output path. FACTORY persists input digests and effect

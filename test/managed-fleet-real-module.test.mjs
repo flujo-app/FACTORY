@@ -14,7 +14,7 @@ const image = `ghcr.io/mario-andreschak/flujo@sha256:${'a'.repeat(64)}`;
 const compatibility = { applicationVersion: '3.45.0', snapshotFormatVersion: 2,
   layoutVersion: 2, workerProtocolVersion: 1 };
 
-test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic provider operations', async t => {
+for (const cpuKind of [undefined, 'shared']) test(`paid FACTORY fleet drives real ManagedCloud with ${cpuKind ?? 'default performance'} CPU`, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'factory-managed-module-'));
   const paid = new SpendingLedger(path.join(directory, 'spending.sqlite'));
   paid.initialize({ limitCents: 100, currency: 'USD' });
@@ -24,6 +24,7 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
   const bridge = {
     async up(options, env) {
       calls.push(['up', options.app]);
+      assert.equal(options.cpuKind, cpuKind ?? 'performance');
       assert.equal(env.FLUJO_SNAPSHOT_CONTROL_TOKEN, sourceToken);
       const owner = randomUUID(), createdAt = new Date().toISOString();
       await new Journal(options.journal).create({ format: 'flujo-cloud-journal', version: 1,
@@ -73,7 +74,7 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
     projectId: 'managed-module', baseline: 'vendored-managed-source', workers: [{
       id: 'managed-fixture', app: 'managed-fixture', budgetCents: 0, paidCeilingCents: 100,
       purpose: 'Verify actual ManagedCloud application service',
-      provisionInput: { app: 'managed-fixture', workspace: 'test-cloud', flowIds: ['default-agent-flujo'] },
+      provisionInput: { cpuKind, app: 'managed-fixture', workspace: 'test-cloud', flowIds: ['default-agent-flujo'] },
       conversations: [{ id: 'managed-job', input: { conversationId: 'managed-conversation',
         request: { model: 'default-agent-flujo', messages: [{ role: 'user', content: 'Synthetic task' }] } },
         outputPath: path.join(directory, 'answer.txt') }],
@@ -86,6 +87,7 @@ test('paid FACTORY fleet drives the real ManagedCloud journal with synthetic pro
     assert.equal(receipt.workspace, 'test-cloud');
     assert.equal(receipt.org, 'personal');
     assert.equal(receipt.region, 'iad');
+    assert.equal(receipt.cpuKind, cpuKind ?? 'performance');
     assert.equal(receipt.machineId, 'synthetic-machine');
   } finally { control.close(); }
   assert.equal(result.conversations[0].status, 'completed');

@@ -21,6 +21,13 @@ function object(value, label) {
   return value;
 }
 
+function provisioningInput(input, label) {
+  const value = object(input, label);
+  const cpuKind = value.cpuKind === undefined ? 'performance' : value.cpuKind;
+  if (!['performance', 'shared'].includes(cpuKind)) throw inputError('cpuKind must be performance or shared.');
+  return { ...value, cpuKind };
+}
+
 function workerId(value) {
   if (typeof value !== 'string' || !/^[a-z][a-z0-9-]{2,62}$/.test(value)) {
     throw inputError('Provide a valid managed worker ID.');
@@ -95,7 +102,7 @@ function imageReceipt(image) {
 function deploymentReceipt(value) {
   object(value, 'Managed result');
   const receipt = selected(value, [
-    'app', 'worker', 'workspace', 'org', 'region', 'machineId', 'state', 'phase', 'localOnly', 'stateSource',
+    'app', 'worker', 'workspace', 'org', 'region', 'cpuKind', 'machineId', 'state', 'phase', 'localOnly', 'stateSource',
   ]);
   if (value.source !== undefined) receipt.source = origin(value.source);
   if (value.flows !== undefined) receipt.flows = flowReceipt(value.flows);
@@ -179,7 +186,7 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
       });
     },
     async preflight(input) {
-      const value = object(input, 'Preflight input');
+      const value = provisioningInput(input, 'Preflight input');
       const admitted = binding ? binding.input(value) : value;
       if (binding) {
         try { await binding.discover({ source: admitted.source }); }
@@ -188,7 +195,7 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
       return invoke('preflight', 'preflight', [admitted], deploymentReceipt);
     },
     async provision(input) {
-      const value = object(input, 'Provision input');
+      const value = provisioningInput(input, 'Provision input');
       const admitted = binding ? binding.input(value) : value;
       if (binding) {
         try { await binding.discover({ source: admitted.source }); }

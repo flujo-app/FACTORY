@@ -41,7 +41,7 @@ test('maps existing ManagedCloud operations and keeps status distinct from outpu
   const call = { request: { model: 'flow-1', messages: [] }, conversationId: 'conversation-1', timeoutMs: 5000 };
   assert.deepEqual(await adapter.call('flujo-test', call), { contentType: 'application/json', body: '{"status":"unknown"}' });
   assert.deepEqual(await adapter.retire('flujo-test'), { worker: 'flujo-test', state: 'destroyed', localOnly: false });
-  assert.deepEqual(service.calls, [['preflight', input], ['up', input], ['call', 'flujo-test', call], ['down', 'flujo-test']]);
+  assert.deepEqual(service.calls, [['preflight', { ...input, cpuKind: 'performance' }], ['up', { ...input, cpuKind: 'performance' }], ['call', 'flujo-test', call], ['down', 'flujo-test']]);
 });
 
 test('sources strips authentication fields and rejects credential-bearing origins', async () => {
@@ -122,7 +122,10 @@ test('invalid inputs are rejected before service side effects', async () => {
   const service = fakeService();
   const adapter = await createManagedCloudAdapter({ service });
   for (const task of [
-    () => adapter.preflight([]), () => adapter.provision(null),
+    () => adapter.preflight([]),
+    ...['invalid', '', null, 1].flatMap(cpuKind => [
+      () => adapter.preflight({ cpuKind }), () => adapter.provision({ cpuKind }),
+    ]), () => adapter.provision(null),
     () => adapter.inspect('../worker'), () => adapter.retire('bad/id'),
     () => adapter.call('flujo-test', { request: [] }),
     () => adapter.call('flujo-test', { request: {}, timeoutMs: 0 }),

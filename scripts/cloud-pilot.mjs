@@ -372,7 +372,7 @@ export async function runCloudPilot(input, dependencies = {}) {
     if (recovery) await fixtureInventory(context, source);
     await stage('source-preflight');
     const deploymentInput = app => ({ source: options.source, workspace: WORKSPACE, flowIds: [FLOW], org: 'personal',
-      region: 'iad', app, memoryMb: 2048, volumeGb: 1, timeoutMs: remaining(), maxSnapshotBytes: 32 * 1024 * 1024,
+      region: 'iad', app, cpuKind: 'shared', memoryMb: 2048, volumeGb: 1, timeoutMs: remaining(), maxSnapshotBytes: 32 * 1024 * 1024,
       image: evidence.image.image });
     // Check the exact dedicated workspace and selected Flow before recording provision intent.
     await context.adapter.preflight(deploymentInput(options.apps.parent));
