@@ -62,8 +62,11 @@ function fakeSprites({ token = `sprites-${secret()}` } = {}) {
       const words = address.searchParams.getAll('cmd');
       assert.deepEqual(words.slice(0, 2), ['/bin/sh', '-c']);
       const outer = words[2], marker = `exec sudo -n env "PATH=$PATH" /bin/sh -c `;
-      assert.equal(outer.startsWith(marker), true, outer);
-      const script = unquote(outer.slice(marker.length));
+      // A long script arrives as the command's input instead of in the address.
+      const fromInput = outer === `exec sudo -n env "PATH=$PATH" /bin/sh -s`;
+      if (fromInput) { assert.equal(address.searchParams.get('stdin'), 'true'); state.scriptsFromInput = (state.scriptsFromInput ?? 0) + 1; }
+      else assert.equal(outer.startsWith(marker), true, outer);
+      const script = fromInput ? body.toString() : unquote(outer.slice(marker.length));
       if (script === 'printf %s "$PATH"') return reply(200, framed(SPRITE_PATH));
       if (script.startsWith('umask 077 && node -e ')) {
         assert.equal(address.searchParams.get('stdin'), 'true');
@@ -220,6 +223,9 @@ test('collection runs its job on the Sprite as root and streams the archive out'
   fleet.quiesce = async () => ({ agents: 2 });
   const collected = await fleet.collect({ concurrency: 1 });
   assert.equal(collected.complete, true);
+  // The collection commands are long: they reached the Sprite as input, and no address carried them.
+  assert.equal(sprites.state.scriptsFromInput > 0, true);
+  assert.equal(sprites.state.calls.every(call => call.url.length < 4096), true);
   const read = sprites.state.calls.find(call => call.path.endsWith('/fs/read'));
   assert.equal(new URL(read.url).searchParams.get('path'), '/data/evidence.tgz');
   assert.deepEqual(readFileSync(fleet.state.artifacts[0].file), archive);

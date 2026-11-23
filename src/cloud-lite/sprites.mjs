@@ -23,6 +23,8 @@ const STAGING = '/home/sprite/.factory-staging';
 const BOARD_PORT = 4200;
 // Larger files go through the Sprite's file API to a staging folder; smaller ones travel inside one command's input.
 const INLINE_LIMIT = 4 * 1024 * 1024;
+// A command longer than this goes to the Sprite as its input: an address that long may be refused.
+const SCRIPT_IN_ADDRESS = 2048;
 const STOP_SECONDS = 30;
 const STATES = { running: 'started', starting: 'starting', stopping: 'stopping', stopped: 'stopped', failed: 'failed' };
 const VALUE_FLAGS = new Set(['--app', '--org', '--network', '--region', '--size', '--machine-config', '--file-local', '--timeout', '--machine']);
@@ -122,10 +124,14 @@ export function createSpritesInfrastructure({ directory, token, tokenFile, api =
     return found;
   }
 
-  /** Runs a shell script as root on a Sprite (the Sprite user has password-less sudo) and returns its output. */
+  /**
+   * Runs a shell script as root on a Sprite (the Sprite user has password-less sudo) and returns its output.
+   * A long script without its own input travels as the command's input rather than in the address.
+   */
   async function root(name, script, { input, timeoutMs = 120000 } = {}) {
     const query = new URLSearchParams();
-    for (const word of ['/bin/sh', '-c', `exec sudo -n env "PATH=$PATH" /bin/sh -c ${quote(script)}`]) query.append('cmd', word);
+    if (input === undefined && script.length > SCRIPT_IN_ADDRESS) input = script, script = null;
+    for (const word of ['/bin/sh', '-c', `exec sudo -n env "PATH=$PATH" /bin/sh ${script === null ? '-s' : `-c ${quote(script)}`}`]) query.append('cmd', word);
     if (input !== undefined) query.set('stdin', 'true');
     const bytes = await call('POST', `/sprites/${name}/exec?${query}`, { body: input, timeoutMs, headers: input !== undefined ? { 'content-type': 'application/octet-stream' } : {} });
     const { exit, text } = readExecOutput(bytes);
