@@ -7,10 +7,12 @@
  *     [--program codex|claude|flujo] [--codex-auth <auth.json>] [--claude-token <file>]
  *     [--model-url <http(s) address ending in /v1> --model <name> [--model-api responses|chat|anthropic] [--context <tokens>]]
  *     [--machines 2] [--agents 2] [--cpus 1] [--memory 2048] [--image <name>] [--prebuild]
- *     [--turn] [--reply] [--teams] [--quick] [--keep]
+ *     [--turn] [--sandbox workspace-write|read-only] [--reply] [--teams] [--quick] [--keep]
  *
  * --turn      one agent on the last machine gets a short message and must record a claim on the shared
  *             board; after the restart it gets a second one.
+ * --sandbox   workspace-write or read-only: the plan's sandbox for agent commands. One agent then runs a
+ *             shell command in its work folder, tries to write outside it, and reports what happened.
  * --reply     one agent gets a short message and only has to answer: for a model too small to use tools.
  * --teams     every agent takes one real turn, two machines at a time: each worker records a claim and
  *             messages its lead, then each lead reads its inbox and records how many messages it found.
@@ -42,7 +44,7 @@ const machines = Number(flags['--machines'] ?? 2), agentsPerMachine = Number(fla
 const image = flags['--image'] ?? DOCKER_WORKER_IMAGE;
 const modelUrl = flags['--model-url'], model = flags['--model'];
 if (modelUrl && !model) throw new Error('Name the served model with --model.');
-const realTurns = Boolean(flags['--turn'] || flags['--reply'] || flags['--teams']);
+const realTurns = Boolean(flags['--turn'] || flags['--reply'] || flags['--teams'] || flags['--sandbox']);
 if (program === 'flujo' && realTurns && !modelUrl) throw new Error('A FLUJO turn needs a real model server; give one with --model-url.');
 const placeholder = program === 'flujo' && !modelUrl;
 const auth = modelUrl || program === 'flujo' ? undefined : program === 'claude' ? new ClaudeSubscriptionBroker({ tokenFile: flags['--claude-token'] })
@@ -65,6 +67,7 @@ const journal = join(directory, 'fleet.json'), traceFile = join(directory, 'trac
 const stamp = existsSync(journal) ? JSON.parse(readFileSync(journal, 'utf8')).plan.runId.split('-').at(-1) : Date.now().toString(36);
 const plan = { runId: `docker-smoke-${stamp}`, app: `factory-docker-${stamp}`, workerProgram: program, machines, agentsPerMachine,
   cpus: Number(flags['--cpus'] ?? 1), memoryMb: Number(flags['--memory'] ?? 2048), supervision: 'operator', monitorIntervalMs: 4000, reasoningEffort: 'low', ...provider,
+  ...(flags['--sandbox'] ? { sandbox: flags['--sandbox'] } : {}),
   goal: 'Acceptance check of a FACTORY fleet on local Docker. Wait for operator messages.' };
 const agents = agentInventory(plan);
 const fleet = new FactoryDockerLiteFleet({ directory, auth, onEvent: event => events.push({ type: event.type, key: event.body?.key, atMs: Date.now() - started }) });
@@ -144,6 +147,18 @@ try {
 
   const turnAgent = `m${machines - 1}-a${agentsPerMachine - 1}`;
   if (flags['--turn']) check('real turn: an agent on the last machine recorded a claim on the shared board', (await claims([claimJob(turnAgent, 'first')]))[0]);
+
+  if (flags['--sandbox']) {
+    // Does the worker program's own sandbox hold inside a container? One agent runs a shell command in its folder,
+    // tries to write outside it, and reports both outcomes in the name of its claim.
+    const base = `task:docker-smoke-${stamp}-sandbox`;
+    const [result] = await claims([{ agent: turnAgent, id: `smoke-${stamp}-sandbox`, matches: value => /-inside-(yes|no)-outside-(yes|no)$/.test(value) && value.startsWith(base),
+      message: `Do these steps in order. 1. Run this shell command in your work folder: echo sandbox-ok > proof.txt && cat proof.txt . Note whether it printed sandbox-ok (INSIDE is yes) or failed (INSIDE is no). 2. Run this shell command: echo outside > /data/outside-proof.txt . Note whether it succeeded (OUTSIDE is yes) or was refused or failed (OUTSIDE is no). Do not retry or work around a refusal. 3. Call the FACTORY board tool factory_claim once with resource "${base}-inside-INSIDE-outside-OUTSIDE", with INSIDE and OUTSIDE replaced by your yes or no. 4. Answer with the single word DONE.` }]);
+    const [, inside, outside] = /-inside-(yes|no)-outside-(yes|no)$/.exec(result.resource);
+    const wrote = lines(await docker(['exec', `factory-${plan.runId}-m${machines - 1}`, '/bin/sh', '-c', 'test -f /data/outside-proof.txt && echo written || echo absent']))[0];
+    check(`sandbox ${flags['--sandbox']}: what an agent's shell command could do inside a container`, { agent: turnAgent, turn: result.turn,
+      commandInWorkFolder: inside === 'yes' ? 'worked' : 'failed', writeOutsideWorkFolder: outside === 'yes' ? 'succeeded' : 'refused', fileOutsideWorkFolder: wrote });
+  }
 
   if (flags['--reply']) {
     // For a model too small to use tools: it only has to answer, which shows the whole path to the model server.
@@ -236,7 +251,7 @@ try {
     plan: { runId: plan.runId, app: plan.app, workerProgram: program, machines, agentsPerMachine, cpus: plan.cpus, memoryMb: plan.memoryMb, supervision: plan.supervision },
     image, prebuild: Boolean(flags['--prebuild']), login: modelUrl ? 'model server' : placeholder ? 'placeholder' : 'subscription',
     ...(modelUrl ? { modelServer: { address: modelUrl, model, api } } : {}),
-    realModelTurns: (flags['--teams'] ? agents.length : 0) + (flags['--turn'] ? (flags['--quick'] ? 1 : 2) : 0) + (flags['--reply'] ? 1 : 0), quick: Boolean(flags['--quick']),
+    realModelTurns: (flags['--teams'] ? agents.length : 0) + (flags['--turn'] ? (flags['--quick'] ? 1 : 2) : 0) + (flags['--reply'] ? 1 : 0) + (flags['--sandbox'] ? 1 : 0), quick: Boolean(flags['--quick']),
     host: { platform: process.platform, node: process.version, dockerServer: info.Server?.Version, dockerClient: info.Client?.Version },
     checks, providerOperations: events.filter(event => event.type === 'provider.succeeded').map(event => event.key),
     durationMs: Date.now() - started, completedAt: new Date().toISOString(),
