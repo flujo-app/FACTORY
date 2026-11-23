@@ -585,19 +585,74 @@ What a plan turns into:
   as `<machine id>.vm.<app>.internal`, so the worker runtime is unchanged.
 - **The host reaches the board on a loopback-only port** that Docker picks
   (`127.0.0.1`). No worker port is published, so nothing is open to the local network.
-- **`cpus` and `memoryMb` are limits for each container.** `region`, `cpuKind` and
-  `diskGb` have no effect: a Docker volume has no size limit.
-- **A model server on this computer** is reachable from workers as
-  `host.docker.internal`. A `modelProvider` still needs `https` URLs.
+- **`cpus` and `memoryMb` are limits for each container.** `region` and `cpuKind`
+  have no effect.
+- **`diskGb` has no effect.** On Fly every machine gets its own disk of that size.
+  A Docker volume is a folder on Docker's one shared disk, and Docker sets no
+  size limit per volume: every machine can write until that shared disk is full.
+  Its size is a Docker setting (Docker Desktop: Settings, Resources).
+- **A model server on this computer** (Ollama, LM Studio, llama.cpp, vLLM) can
+  serve the workers over plain `http`, as `http://host.docker.internal:<port>/v1`;
+  see below.
 
 `deploy` takes the same options as on Fly, with two defaults. Without `image`,
-workers start from `node:24-bookworm-slim` and the bootstrap installs the worker
-program at each start; any Debian-based image with a supported Node works, and a
+workers start from `node:24-bookworm-slim` and set themselves up on their first
+start; any Debian-based image with a supported Node works, and a
 digest reference (`node@sha256:...`) keeps runs repeatable. Without `bundlePath`,
 the installed SDK is packed once into `factory-sdk.tgz` in the fleet directory and
 reused when the fleet is resumed. Pass `bundlePath: false` for an image that
 already holds the runtime in `/opt/factory`. Fly image sources (`imageSource`,
 `channel`) and the plan's `network` are refused.
+
+**Set-up once instead of in every container: `prebuild: true`.** The set-up
+(system packages, the worker program, the SDK and its packages) takes minutes.
+With `deploy(plan, { prebuild: true })` it runs once, in an image built from
+`image`, and every container starts from that image in seconds:
+
+```js
+await fleet.deploy(plan, { prebuild: true });
+```
+
+The image is named `factory-worker:<program>-<hash>`. The hash follows from the
+base image, the SDK bundle and the worker program, so a later fleet with the same
+three finds the image and builds nothing. A new SDK version means one new build.
+Images stay until you remove them: `docker image ls --filter label=factory.docker.image`
+lists them. `fleet.infrastructure.buildImage({ baseImage, bundlePath, workerProgram })`
+builds one without deploying.
+
+Without `prebuild`, each container runs the set-up itself on its first start.
+Either way a container records the finished set-up and skips it when it is
+started again, so `stop()` and `start()` take seconds. `updateRuntime` with a new
+bundle makes new containers that set themselves up once more.
+
+**A model on this computer.** A `modelProvider` may use plain `http` for a server
+on the same computer. Containers reach it as `host.docker.internal`:
+
+```js
+const fleet = new FactoryDockerLiteFleet({ directory: '/absolute/private/fleet-run' });
+await fleet.deploy({
+  runId: 'my-local-run', app: 'my-local-swarm', goal: ownerGoal, machines: 2, agentsPerMachine: 3,
+  model: 'my-model', subagentModel: 'my-model',
+  modelProvider: { id: 'local', envKey: 'LOCAL_MODEL_KEY', model: 'my-model',
+    baseUrls: ['http://host.docker.internal:11434/v1'], apis: ['responses'] },
+}, { providerKey: 'any-text-if-the-server-wants-no-key', prebuild: true });
+```
+
+- Plain `http` is accepted only for names of this computer: `localhost`,
+  `127.0.0.1`, `[::1]` and `host.docker.internal`. Every other address still
+  needs `https`.
+- A Docker fleet takes only `host.docker.internal`: inside a container,
+  `localhost` is the container itself. A Fly fleet refuses all four, because a
+  Fly machine cannot reach the computer that deploys it. Local lite workers
+  (`factory-lite ... --model-provider`) run on this computer and may use `localhost`.
+- The server must offer the interface of the worker program: `responses` for
+  Codex, `anthropic` for Claude Code, any of the three for FLUJO. Ollama offers
+  all three.
+- On Docker Desktop a server that listens only on `127.0.0.1` is reachable. On
+  Docker for Linux the server must listen on the Docker bridge address too (for
+  Ollama: `OLLAMA_HOST=0.0.0.0`).
+- The model must be able to call tools for agents to use the board. A model too
+  small for that still answers, which is enough to check the connection.
 
 Before anything is recorded, the fleet checks that Docker runs, uses Linux
 containers and has the CPUs one machine asks for. A stopped Docker therefore
@@ -621,12 +676,10 @@ or `/data/factory/bootstrap.log` on its volume.
 
 Containers do not restart by themselves. After `stop()`, or after the computer
 or Docker was restarted, call `start({ attempt })` with a new attempt name; a later
-`stop()` then stops them again. Every start sets the machine up again. In the
-runs below that took between one and a half and four and a half minutes for Codex
-and Claude Code, and seven and a half minutes for FLUJO's first start, which
-installs FLUJO onto the volume. An agent resumes the session it
-had; a Codex session that never ran a turn has no history to resume, so that agent
-records it and opens a new one.
+`stop()` then stops them again. A container that is started again skips its
+set-up and is back in seconds. An agent resumes the session it had; a Codex
+session that never ran a turn has no history to resume, so that agent records it
+and opens a new one.
 
 `createDockerInfrastructure({ directory })` is the provider on its own. It answers
 the provider commands a fleet sends, for use as the `infrastructure` of a
