@@ -30,6 +30,16 @@ export function isCurrentNativeTurn(turns, threadId, notificationTurnId) {
   const current = turns.get(threadId);
   return !notificationTurnId || !current || notificationTurnId === current;
 }
+/**
+ * The last turn the board recorded for a thread that was just resumed. A restarted runtime has forgotten
+ * it, yet a stop command names the turn the board shows, so the runtime must know it again. A turn the
+ * board still shows running while the thread is idle ended with the old process: it is closed as interrupted.
+ */
+export function resumedNativeTurn(known, threadId, threadStatus) {
+  if (!known || known.threadId !== threadId || !known.turnId || threadStatus === 'active') return null;
+  if (['completed', 'interrupted', 'failed'].includes(known.turnStatus)) return { id: known.turnId, status: known.turnStatus, closed: false };
+  return known.turnStatus === 'inProgress' ? { id: known.turnId, status: 'interrupted', closed: true } : null;
+}
 export async function finalizeNativeStopCommand({ prove, publish, flush, acknowledge, isRevoked, markStopped }) {
   await prove();
   if (isRevoked()) return false;
@@ -309,6 +319,15 @@ export async function runCloudLiteMachine(config) {
       turns.set(threadId, result.recoveredTurn.id);
       terminalTurns.set(threadId, result.recoveredTurn);
       traces.get(agent.id).record('native.turn.completed', { threadId, turn: result.recoveredTurn });
+    } else if (recovering) {
+      const known = resumedNativeTurn(agent.nativeRuntime, threadId, observedThreadStatus);
+      if (known) {
+        turns.set(threadId, known.id);
+        terminalTurns.set(threadId, { id: known.id, status: known.status });
+        // As after a live turn end: the next operator message starts a new turn.
+        states.set(threadId, { status: known.status, completed: Date.now(), inboxVersion: 0 });
+        if (known.closed) traces.get(agent.id).record('native.turn.completed', { threadId, turn: { id: known.id, status: known.status } });
+      }
     }
     // Operator-supervised agents start idle; every turn comes from a durable operator message.
     if (!operatorSupervised && current?.thread.status?.type !== 'active') {
