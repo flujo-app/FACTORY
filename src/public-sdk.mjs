@@ -101,6 +101,7 @@ export { ModalSelfHostedModel, selfHostedProfiles, probeSelfHostedModel, modalRe
 export { MODEL_PROVIDER_APIS, WORKER_PROGRAM_APIS, validateModelProvider, providerPrograms, codexProviderConfig, codexProviderOverrides, claudeProviderEnvironment, flujoProviderModel, programApi } from './model-provider.mjs';
 export { FlujoProgram, FlujoSessionDriver, flujoEnvironment } from './cloud-lite/flujo-driver.mjs';
 export { FactoryCloudLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBroker } from './cloud-lite/fleet.mjs';
+export { FactoryDockerLiteFleet, createDockerInfrastructure, DOCKER_WORKER_IMAGE } from './cloud-lite/docker.mjs';
 export { validateCloudLitePlan, agentInventory, machineConfig as cloudLiteMachineConfig } from './cloud-lite/protocol.mjs';
 export { cloudLiteBootstrap } from './cloud-lite/bootstrap.mjs';
 export { packFactorySdk } from './cloud-lite/bundle.mjs';

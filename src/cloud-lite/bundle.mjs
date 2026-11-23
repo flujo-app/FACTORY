@@ -7,7 +7,8 @@ const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const FOLDERS = ['src', 'bin', 'scripts', 'selfhost'];
 const FILES = ['package.json', 'README.md', 'PUBLIC_SDK.md', 'WORKFLOWS.md', 'LICENSE'];
 
-function tarHeader(name, size, mode) {
+/** One ustar header. `type` is '0' for a file and '5' for a folder. */
+export function tarHeader(name, size, mode, type = '0') {
   const header = Buffer.alloc(512);
   let path = name, prefix = '';
   if (Buffer.byteLength(path) > 100) {
@@ -18,7 +19,7 @@ function tarHeader(name, size, mode) {
   const put = (text, offset, length) => header.write(text, offset, length, 'utf8');
   const octal = (value, length) => value.toString(8).padStart(length - 1, '0') + '\0';
   put(path, 0, 100); put(octal(mode, 8), 100, 8); put(octal(0, 8), 108, 8); put(octal(0, 8), 116, 8);
-  put(octal(size, 12), 124, 12); put(octal(0, 12), 136, 12); put('        ', 148, 8); put('0', 156, 1);
+  put(octal(size, 12), 124, 12); put(octal(0, 12), 136, 12); put('        ', 148, 8); put(type, 156, 1);
   put('ustar\0', 257, 6); put('00', 263, 2); put(prefix, 345, 155);
   const checksum = header.reduce((sum, byte) => sum + byte, 0);
   put(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8);

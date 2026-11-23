@@ -20,6 +20,8 @@ for (const name of [
   'liteWorkerCommand',
   'startLiteWorker',
   'FactoryCloudLiteFleet',
+  'FactoryDockerLiteFleet',
+  'createDockerInfrastructure',
   'CodexSubscriptionBroker',
   'validateCloudLitePlan',
   'cloudLiteMachineConfig',
