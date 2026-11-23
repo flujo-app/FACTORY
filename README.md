@@ -30,7 +30,7 @@
 ## Try it in a minute
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.11.0/flujo-factory-0.11.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.12.0/flujo-factory-0.12.0.tgz
 ```
 
 ```js
@@ -62,7 +62,7 @@ Your agents, your choice of brain. Switching is one setting.
 
 | | 💳 Your subscription | 🖥️ Your own GPUs | 🔌 Any server |
 |---|---|---|---|
-| **Runs on** | Claude Code or Codex | Qwen or Nemotron, on your Modal account | Anything that speaks the OpenAI or Anthropic API |
+| **Runs on** | Claude Code or Codex | Qwen or Nemotron on your Modal account, Nemotron on RunPod GPUs | Anything that speaks the OpenAI or Anthropic API |
 | **You pay** | The plan you already have | From about $4.84 an hour while running, nothing when idle | Whatever that server costs |
 | **Your code goes to** | That AI company | Nowhere. It stays in your account | That server |
 | **Setup** | Sign in once | One function call | One setting |
@@ -87,6 +87,8 @@ factory.startLiteWorker({
 ```
 
 When you're done, `await model.retire()` deletes it all. [More on self-hosting →](selfhost/README.md)
+
+**On RunPod instead,** for example on RunPod credits: `new RunPodSelfHostedModel({ directory })` with your key in `RUNPOD_API_KEY`, then the same calls. It starts Nemotron on a B300 (or a B200 or H200 when none is free), and the pod switches itself off after 8 idle minutes. A stopped pod only costs its weights disk, about $22 a month, until you retire it. [How to start and stop it →](selfhost/runpod/README.md)
 
 </details>
 
