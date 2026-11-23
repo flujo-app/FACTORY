@@ -73,13 +73,13 @@ async function settled(after, timeoutMs = 900000) {
     await sleep(5000);
   }
 }
-/** After a restart on the same volume an agent resumes its session, or reports the kept session it could not resume. */
+/** After a restart on the same volume an agent resumes its session. A session that never ran a turn has no history to resume: the agent names it and opens a new one. */
 function continued(fresh, previous) {
   return Object.fromEntries(agents.map(id => {
     const resumed = fresh.some(event => event.source === id && event.kind === 'native.thread.resumed' && event.body.threadId === previous[id]);
     const kept = fresh.some(event => event.source === id && event.kind === 'agent.session_unavailable' && event.body.previousThreadId === previous[id]);
     assert.equal(resumed || kept, true, `${id} did not find its earlier session on its volume`);
-    return [id, resumed ? 'resumed' : 'kept-but-empty'];
+    return [id, resumed ? 'resumed' : 'no-history-new-session'];
   }));
 }
 

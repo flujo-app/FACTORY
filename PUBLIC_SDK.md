@@ -619,9 +619,35 @@ aside until the new one runs and is put back if the replacement fails. A machine
 whose setup fails stops its container: read `docker logs factory-<runId>-m<index>`
 or `/data/factory/bootstrap.log` on its volume.
 
+Containers do not restart by themselves. After `stop()`, or after the computer
+or Docker was restarted, call `start({ attempt })` with a new attempt name; a later
+`stop()` then stops them again. Every start installs the worker program again,
+which took two to four minutes in the run below. An agent resumes the session it
+had; a Codex session that never ran a turn has no history to resume, so that agent
+records it and opens a new one.
+
 `createDockerInfrastructure({ directory })` is the provider on its own. It answers
 the provider commands a fleet sends, for use as the `infrastructure` of a
 `FactoryCloudLiteFleet`.
+
+The [2026-11-23 Docker run](evidence/docker-fleet-acceptance-20261123.json) used
+real containers on Docker Desktop for Windows: two machines with two Codex agents
+each, on a subscription login. All four agents enrolled through the shared board.
+An agent in the second container recorded a claim on the board in the first,
+once before and once after a stop and start. The runtime update, the collection
+with verified archives and the removal of every container, volume and the network
+passed too. The same record holds two shorter runs in which Claude Code and FLUJO
+workers started in containers and enrolled on the board. Those two used
+placeholder logins and called no model, so model turns of Claude Code and FLUJO
+on Docker are not asserted. To repeat the check on your own Docker:
+
+```sh
+node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json
+```
+
+Add `--turn` for the two real Codex messages, `--program claude --claude-token <file>`
+or `--program flujo` for the other worker programs, and `--quick` to stop after
+enrolment.
 
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`
