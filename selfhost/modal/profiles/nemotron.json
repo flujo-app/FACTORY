@@ -6,6 +6,7 @@
   "served_name": "nemotron-3.5-super-vl",
   "weights_gib": 70,
   "gpu": "B300",
+  "gpu_fallbacks": ["B200", "H200"],
   "cpu": 12,
   "memory_mib": 98304,
   "max_model_len": 262144,

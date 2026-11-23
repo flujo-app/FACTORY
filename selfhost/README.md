@@ -8,6 +8,9 @@ run any of their programs on it (`plan.workerProgram`: Codex, Claude Code or FLU
 
 This folder is separate from `modal/`, which holds the earlier pilot definitions.
 
+The same profiles also run on RunPod GPUs (B300, B200, H200), for example on RunPod credits:
+see [runpod/README.md](runpod/README.md).
+
 ## Profiles
 
 | Profile | Model (served name) | GPU | Price while running | Context | Notes |

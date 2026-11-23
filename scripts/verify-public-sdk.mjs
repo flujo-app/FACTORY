@@ -114,3 +114,8 @@ for (const file of ['app.py', 'settings.py', 'discovery.py', 'deploy.py', 'price
 }
 assert.equal(existsSync(join(sdk.SELFHOST_MODAL_DIR, 'test_settings.py')), false);
 assert.equal(typeof sdk.ModalSelfHostedModel, 'function');
+// The RunPod path ships its in-pod script and GPU table, but not its tests.
+for (const file of ['boot.py', 'gpus.json', 'README.md']) assert.equal(existsSync(join(sdk.SELFHOST_RUNPOD_DIR, file)), true, `runpod/${file} is missing`);
+assert.equal(existsSync(join(sdk.SELFHOST_RUNPOD_DIR, 'test_boot.py')), false);
+assert.equal(typeof sdk.RunPodSelfHostedModel, 'function');
+assert.deepEqual(Object.keys(sdk.runpodGpus().gpus), ['B300', 'B200', 'H200']);

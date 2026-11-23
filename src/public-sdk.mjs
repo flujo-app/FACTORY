@@ -98,6 +98,7 @@ export { createPresentationServer, startPresentationServer } from './presentatio
 export { createObservatoryClient } from './observatory-client.mjs';
 export { liteWorkerCommand, startLiteWorker, startFlujoLiteWorker } from './lite-worker.mjs';
 export { ModalSelfHostedModel, selfHostedProfiles, probeSelfHostedModel, modalResult, readBoundedJson, modalEndpointOrigin, runCommand, SELFHOST_MODAL_DIR, SELFHOSTED_KEY_ENV } from './selfhost/modal.mjs';
+export { RunPodSelfHostedModel, runpodGpus, runpodEndpointOrigin, runpodPodRequest, SELFHOST_RUNPOD_DIR, RUNPOD_API, RUNPOD_KEY_ENV } from './selfhost/runpod.mjs';
 export { MODEL_PROVIDER_APIS, WORKER_PROGRAM_APIS, LOCAL_MODEL_HOSTS, validateModelProvider, providerPrograms, codexProviderConfig, codexProviderOverrides, claudeProviderEnvironment, flujoProviderModel, programApi } from './model-provider.mjs';
 export { FlujoProgram, FlujoSessionDriver, flujoEnvironment } from './cloud-lite/flujo-driver.mjs';
 export { FactoryCloudLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBroker } from './cloud-lite/fleet.mjs';

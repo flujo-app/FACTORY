@@ -28,6 +28,9 @@ VOLUME_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,62}')
 SETTINGS_ENV = 'FACTORY_SELFHOST_SETTINGS_B64'
 # Profile keys that describe the model for clients, not the server.
 CLIENT_KEYS = ('comment', 'compact_tokens', 'efforts')
+# Profile keys for the launcher, not the server: GPUs to try in order when the profile's own GPU
+# is not free (RunPod places one GPU type per request).
+LAUNCH_KEYS = ('gpu_fallbacks',)
 
 
 @dataclass(frozen=True)
@@ -183,7 +186,10 @@ class Settings:
                 'requestTimeoutMinutes': self.request_timeout_minutes, 'volumes': self.volumes(),
                 'contextWindow': self.max_model_len, 'variant': self.variant or None,
                 'inputModalities': list(self.input_modalities), 'estimateGib': self.estimate_gib(),
-                'vllmCommand': self.vllm_command()}
+                'vllmCommand': self.vllm_command(),
+                # What a launcher outside Modal needs to start the same server.
+                'source': self.model, 'revision': self.revision, 'image': self.image, 'gpuCount': self.gpu_count,
+                'weightsGib': self.weights_gib, 'port': self.port, 'env': dict(self.env)}
 
     def to_json(self):
         data = asdict(self)
@@ -226,7 +232,7 @@ def from_dict(data):
 
 def resolve(app_name, profile, overrides=None):
     """The profile's settings with explicit overrides, bound to an owned app name."""
-    data = {key: value for key, value in profile_data(profile).items() if key not in CLIENT_KEYS}
+    data = {key: value for key, value in profile_data(profile).items() if key not in CLIENT_KEYS + LAUNCH_KEYS}
     overrides = dict(overrides or {})
     for key in ('app_name', 'profile'):
         if key in overrides:

@@ -14,16 +14,16 @@ const SOURCES = ['app.py', 'settings.py', 'discovery.py', 'deploy.py', 'prices.j
 const OWNED_NAME = /^[a-z][a-z0-9]{1,15}-[a-z][a-z0-9]{1,15}-[a-f0-9]{12}$/;
 const MINUTE = 60_000;
 
-const notApplied = message => Object.assign(new Error(message), { outcome: 'not_applied' });
+export const notApplied = message => Object.assign(new Error(message), { outcome: 'not_applied' });
 const unknown = message => Object.assign(new Error(message), { code: 'UNKNOWN', outcome: 'unknown', unknown: true });
-const pause = (ms, signal) => new Promise((resolve, reject) => {
+export const pause = (ms, signal) => new Promise((resolve, reject) => {
   if (signal?.aborted) { reject(uncertain()); return; }
   const timer = setTimeout(resolve, ms);
   signal?.addEventListener('abort', () => { clearTimeout(timer); reject(uncertain()); }, { once: true });
 });
-const uncertain = () => unknown('The self-hosted model has an uncertain outcome. Its owned resources are kept for reconciliation; retire them before deploying again.');
+export const uncertain = () => unknown('The self-hosted model has an uncertain outcome. Its owned resources are kept for reconciliation; retire them before deploying again.');
 const json = raw => { try { return JSON.parse(raw); } catch { return null; } };
-const lastJsonLine = raw => json(String(raw ?? '').trim().split(/\r?\n/).reverse().find(line => line.trim().startsWith('{')) ?? '');
+export const lastJsonLine = raw => json(String(raw ?? '').trim().split(/\r?\n/).reverse().find(line => line.trim().startsWith('{')) ?? '');
 
 /** The bundled model profiles with list-price estimates per running replica. */
 export function selfHostedProfiles() {
@@ -32,7 +32,7 @@ export function selfHostedProfiles() {
     const profile = JSON.parse(readFileSync(join(SELFHOST_MODAL_DIR, 'profiles', name), 'utf8'));
     const cpu = profile.cpu ?? 8, memoryMib = profile.memory_mib ?? 65536, gpuCount = profile.gpu_count ?? 1;
     const usdPerSecond = prices.gpuPerSecond[profile.gpu] * gpuCount + cpu * prices.cpuCorePerSecond + memoryMib / 1024 * prices.memoryGibPerSecond;
-    return { id: name.slice(0, -5), label: profile.label, model: profile.served_name, source: profile.model, gpu: profile.gpu, gpuCount, cpu, memoryMib,
+    return { id: name.slice(0, -5), label: profile.label, model: profile.served_name, source: profile.model, gpu: profile.gpu, gpuFallbacks: profile.gpu_fallbacks ?? [], gpuCount, cpu, memoryMib,
       contextWindow: profile.max_model_len, autoCompactTokenLimit: profile.compact_tokens ?? null, efforts: profile.efforts ?? null,
       variant: profile.variant ?? null, variants: Object.keys(profile.variants ?? {}), scaledownMinutes: profile.scaledown_minutes ?? 10,
       usdPerSecond, usdPerHour: Math.round(usdPerSecond * 3600 * 100) / 100, pricesCheckedAt: prices.checkedAt, estimate: 'list price, not an invoice' };
@@ -157,7 +157,7 @@ export function runCommand(command, args, { input = '', env = process.env, cwd, 
   });
 }
 
-function fileCredentialStore(directory) {
+export function fileCredentialStore(directory) {
   const file = name => join(directory, `${name}.key`);
   return {
     get: async name => existsSync(file(name)) ? readFileSync(file(name), 'utf8') : null,
@@ -185,7 +185,8 @@ export class ModalSelfHostedModel {
     this.record = null;
     if (existsSync(this.path)) {
       const record = json(readFileSync(this.path, 'utf8'));
-      this.record = record?.version === 1 && OWNED_NAME.test(record.appName ?? '') ? record : { version: 1, phase: 'unknown' };
+      // A journal of another cloud (RunPod) is not this model's.
+      this.record = record?.version === 1 && !record.cloud && OWNED_NAME.test(record.appName ?? '') ? record : { version: 1, phase: 'unknown' };
     }
   }
 
