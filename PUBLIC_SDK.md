@@ -615,9 +615,10 @@ not, and a running performance worker costs about five times as much (Fly lists
 $66.00 against $13.39 a month for the two default sizes, November 2026).
 The bundled ManagedCloud bridge applies the selection to both initial creation
 and bootstrap, and the journal and receipts record it. An external `flujo-cloud`
-module must support `cpuKind` to apply this setting. A cloud lite fleet has the
-same setting in its plan (`cpuKind`, beside `cpus` and `memoryMb`), where
-`'shared'` stays the default.
+module must support `cpuKind` to apply this setting; a receipt without `cpuKind`
+means the module did not apply it. A cloud lite fleet has the same setting in
+its plan (`cpuKind`, beside `cpus` and `memoryMb`), where `'shared'` stays the
+default.
 
 Each worker's `provisionInput` is its exact `ManagedCloud.up` input, including
 `app`; each conversation supplies its exact `conversationId`, FLUJO request

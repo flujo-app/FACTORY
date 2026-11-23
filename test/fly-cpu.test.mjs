@@ -40,6 +40,30 @@ test('a machine configuration built without a memory size takes the default of i
   assert.throws(() => buildMachineConfig(record, { idle: true, cpuKind: 'dedicated' }), /cpuKind/);
 });
 
+test('the SDK refuses a memory size that does not fit the CPU kind, with the reason, before the service is called', async () => {
+  const calls = [];
+  const adapter = await createManagedCloudAdapter({ service: {
+    async sources() { return []; }, async preflight(value) { calls.push(value); return {}; },
+    async up(value) { calls.push(value); return {}; }, async call() {}, async list() { return []; }, async down() {},
+  } });
+  for (const [options, reason] of [
+    [{ memoryMb: 2048 }, /memoryMb must be 4096 to 16384 in steps of 2048 with cpuKind performance; cpuKind shared takes 1024 to 4096/],
+    [{ cpuKind: 'performance', memoryMb: 6000 }, /in steps of 2048 with cpuKind performance/],
+    [{ cpuKind: 'shared', memoryMb: 8192 }, /memoryMb must be 1024 to 4096 in steps of 256 with cpuKind shared; cpuKind performance takes 4096 to 16384/],
+    [{ cpuKind: 'shared', memoryMb: 'plenty' }, /memoryMb/],
+  ]) {
+    for (const operation of ['preflight', 'provision']) {
+      await assert.rejects(adapter[operation]({ ...input, ...options }),
+        error => error.code === 'MANAGED_CLOUD_INPUT_INVALID' && reason.test(error.message));
+    }
+  }
+  assert.deepEqual(calls, []);
+  await adapter.preflight({ ...input, cpuKind: 'shared', memoryMb: 2048 });
+  await adapter.provision({ ...input, memoryMb: 8192 });
+  await adapter.provision({ ...input });
+  assert.deepEqual(calls.map(value => [value.cpuKind, value.memoryMb]), [['shared', 2048], ['performance', 8192], ['performance', undefined]]);
+});
+
 for (const cpuKind of [undefined, 'performance', 'shared']) {
   test(`SDK to Fly creation and bootstrap preserves ${cpuKind ?? 'default performance'} CPU`, async t => {
     const directory = await mkdtemp(path.join(tmpdir(), 'factory-fly-cpu-'));
