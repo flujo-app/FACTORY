@@ -621,8 +621,10 @@ or `/data/factory/bootstrap.log` on its volume.
 
 Containers do not restart by themselves. After `stop()`, or after the computer
 or Docker was restarted, call `start({ attempt })` with a new attempt name; a later
-`stop()` then stops them again. Every start installs the worker program again,
-which took two to four minutes in the run below. An agent resumes the session it
+`stop()` then stops them again. Every start sets the machine up again. In the
+runs below that took between one and a half and four and a half minutes for Codex
+and Claude Code, and seven and a half minutes for FLUJO's first start, which
+installs FLUJO onto the volume. An agent resumes the session it
 had; a Codex session that never ran a turn has no history to resume, so that agent
 records it and opens a new one.
 
@@ -639,7 +641,9 @@ with verified archives and the removal of every container, volume and the networ
 passed too. The same record holds two shorter runs in which Claude Code and FLUJO
 workers started in containers and enrolled on the board. Those two used
 placeholder logins and called no model, so model turns of Claude Code and FLUJO
-on Docker are not asserted. To repeat the check on your own Docker:
+on Docker are not asserted. The runs used the default sandbox (full access inside
+the container); `workspace-write` and `read-only` are untested in containers. To
+repeat the check on your own Docker:
 
 ```sh
 node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json
