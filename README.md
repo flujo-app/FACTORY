@@ -164,6 +164,34 @@ await fleet.deploy({
 
 </details>
 
+<details>
+<summary><b>🧚 Or on Fly.io Sprites, with no image to build</b></summary>
+
+<br>
+
+A [Sprite](https://sprites.dev) is a ready-made Linux computer with Node, git and Claude Code already on it. One Sprite per machine, the board on the first one, and only a Sprites token from the Fly dashboard. Sprites stay awake while the workers run and pause when the fleet stops. [How it works.](PUBLIC_SDK.md#lite-fleets-on-flyio-sprites)
+
+```js
+import { FactorySpriteLiteFleet, ClaudeSubscriptionBroker } from 'flujo-factory';
+
+const fleet = new FactorySpriteLiteFleet({
+  directory: '/private/fleet',
+  tokenFile: '/private/sprites-token',
+  auth: new ClaudeSubscriptionBroker({ tokenFile: '/private/claude-token' }),
+});
+
+await fleet.deploy({
+  runId: 'launch',
+  app: 'my-swarm',
+  goal: 'Fix every open bug',
+  workerProgram: 'claude',
+  machines: 3,
+  agentsPerMachine: 10,
+});
+```
+
+</details>
+
 <table>
   <tr>
     <td align="center" width="33%"><h1>100</h1>agents on 10 cloud machines<br><sub><a href="evidence/cloud-lite-run-20261014.json">in one real run</a></sub></td>

@@ -27,6 +27,7 @@
     "scripts/local-flujo-live-smoke.mjs",
     "scripts/savia-local-live-smoke.mjs",
     "scripts/docker-fleet-smoke.mjs",
+    "scripts/sprite-fleet-smoke.mjs",
     "selfhost/README.md",
     "selfhost/modal/*.py",
     "selfhost/modal/prices.json",
@@ -67,6 +68,7 @@
     "smoke:local-flujo": "node scripts/local-flujo-live-smoke.mjs",
     "smoke:savia-local-flujo": "node scripts/savia-local-live-smoke.mjs",
     "smoke:docker-fleet": "node scripts/docker-fleet-smoke.mjs",
+    "smoke:sprite-fleet": "node scripts/sprite-fleet-smoke.mjs",
     "pilot": "node scripts/pilot.mjs",
     "factory": "node bin/factory.mjs"
   },

@@ -828,6 +828,89 @@ uses a model server instead of a login, with `--reply` when the model cannot use
 tools. `--sandbox workspace-write` checks the sandbox. `--quick` skips the stop,
 start, update and collection.
 
+### Lite fleets on Fly.io Sprites
+
+`FactorySpriteLiteFleet` runs the same fleet on [Fly.io Sprites](https://sprites.dev)
+instead of Fly Machines. A Sprite is a ready-made Linux computer (Ubuntu, 8 CPUs,
+100 GB of disk, Node, git and Claude Code already on it) that keeps its files and
+pauses when nothing runs on it. There is no image to build and no flujo-cloud: a
+Sprites token from the Fly dashboard (Sprites, Tokens) is all it needs.
+
+```js
+import { FactorySpriteLiteFleet, ClaudeSubscriptionBroker } from 'flujo-factory';
+
+const fleet = new FactorySpriteLiteFleet({
+  directory: '/absolute/private/fleet-run',
+  tokenFile: '/absolute/private/sprites-token',   // or token: '...', or SPRITES_TOKEN
+  auth: new ClaudeSubscriptionBroker({ tokenFile: '/absolute/private/claude-token' }),
+});
+await fleet.deploy({
+  runId: 'my-sprite-run', app: 'my-sprite-swarm', goal: ownerGoal,
+  workerProgram: 'claude', machines: 3, agentsPerMachine: 10,
+});
+const observation = await fleet.observe();
+await fleet.retire();
+```
+
+What a plan turns into:
+
+- **One Sprite per machine**, named `<app>-m<index>`. The worker runs as the
+  Sprite service `factory`: `sudo` starts `/etc/factory/start.sh` as root, which
+  loads the machine's settings and secrets and then runs the same bootstrap as a
+  Fly Machine. The first start sets the Sprite up (system packages, the pinned
+  worker program, the SDK) in a few minutes; the Sprite keeps that set-up on its
+  disk, so `stop()` and `start()` take seconds.
+- **The board on the first Sprite's public address.** Sprites have no private
+  network, so the first Sprite's address is public and routed to the board's
+  port, and the other machines reach the board there (`FACTORY_BOARD_ORIGIN`).
+  Every call to the board still needs that agent's own credential or the operator
+  token, as on Fly; only `/health` answers without one. The other Sprites stay
+  private. The host reaches the board on the same address; nothing runs on this
+  computer.
+- **Awake while the workers run, asleep after.** A Sprite pauses about 30 seconds
+  after its last connection, even in the middle of a model call. The start script
+  therefore holds a Sprite task (renewed every minute, five minutes at a time)
+  for as long as the worker runs, and gives it back when the worker stops. A
+  stopped fleet's Sprites pause and cost only their disk.
+- **A volume is the Sprite's own disk.** `/data` is a folder on it, and it stays
+  until `retire()` deletes the Sprite.
+- **`cpus`, `cpuKind`, `memoryMb`, `diskGb` and `region` have no effect.** Every
+  Sprite has 8 CPUs and 100 GB; its memory is managed by the platform.
+- **Secrets** (logins, board credentials, the plan's MCP keys) reach each Sprite as
+  root-only files under `/etc/factory/secrets`, written through the input of one
+  command, never in an address or a command line. The fleet directory keeps them
+  in `sprites-secrets.json` until `retire()`, and records the fleet's Sprites in
+  `sprites-state.json`; store the directory privately. The Sprites token itself is
+  never written there.
+
+`deploy` takes the same options as on Fly, except the image: Sprites have none, so
+`image`, `imageSource`, `channel` and `prebuild` are refused, and so is the plan's
+`network`. Without `bundlePath` the installed SDK is packed once into
+`factory-sdk.tgz` in the fleet directory. A model server on this computer cannot be
+reached from a Sprite; give it an `https` address.
+
+Sprites named like the fleet's (`<app>-m<index>`) that this fleet directory did not
+create are never adopted: `deploy` refuses to start, and `retire()` refuses to
+delete anything while one exists. A machine whose set-up fails is deleted again by
+the call that created it. Read a Sprite's start with
+`sprite exec -s <app>-m0 sudo cat /data/factory/bootstrap.log` or its service log in
+`/.sprite/logs/services/factory.log`.
+
+On Fly's Free plan an organization may have 3 Sprites at a time, and usage counts
+against its monthly $5; Sprites are billed only while they are awake (Fly lists
+about $0.04 per CPU-hour and $0.02 per GB-hour of memory, November 2026).
+
+`createSpritesInfrastructure({ directory, token })` is the provider on its own, for
+use as the `infrastructure` of a `FactoryCloudLiteFleet`.
+
+The tests check the fleet against a stand-in for the Sprites API. To run a real
+fleet on your own Sprites (agents enrol and wait; add `--claude-token <file> --turn`
+for two real model turns):
+
+```sh
+node scripts/sprite-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json --sprites-token /absolute/private/sprites-token
+```
+
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`
 task lease. `provisionWorker` reserves a child cell and records a provider
