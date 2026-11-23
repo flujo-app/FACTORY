@@ -10,7 +10,7 @@ import { startCloudLiteCoordinator } from '../src/cloud-lite/server.mjs';
 import { CloudLiteTrace } from '../src/cloud-lite/trace.mjs';
 import { NativeOperatorStop } from '../src/cloud-lite/operator-stop.mjs';
 import { collectCloudLiteSnapshot } from '../src/cloud-lite/collect.mjs';
-import { finalizeNativeStopCommand, isCurrentNativeTurn, nativeStopTurn } from '../src/cloud-lite/runtime.mjs';
+import { finalizeNativeStopCommand, isCurrentNativeTurn, nativeStopTurn, resumedNativeTurn } from '../src/cloud-lite/runtime.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { tempDir } from './support/temp-dir.mjs';
 
@@ -493,6 +493,30 @@ test('native turn projection keeps the active turn across a late prior completio
     assert.equal(terminal.turnId, terminalTurn); assert.equal(terminal.turnStatus, 'failed');
     assert.deepEqual(terminal.failure, { category: 'turn_failed', errorCode: -32000 });
   } finally { board.close(); }
+});
+
+// Found in a real run on local Docker (flujo-app/FACTORY#40): after a stop and a start, an agent that had finished a turn
+// could not be stopped. The board still showed that turn, the restarted runtime had forgotten it, so the stop command
+// named a turn the runtime did not know and was refused; quiesce and collect then timed out.
+test('a restarted runtime knows the last turn the board shows, so the agent can be stopped', async () => {
+  const threadId = '01a13916-1da9-76a1-0a6e-af0c060ec3a4', turnId = '01a13917-1da9-76a1-0a6e-af0c060ec3a4';
+  const stopWith = (turns, terminalTurns) => new NativeOperatorStop({ threadId,
+    rpc: { request: async () => ({ thread: { id: threadId, status: { type: 'idle' } } }) },
+    getTurn: () => nativeStopTurn(turns, terminalTurns, threadId), trace: () => {}, flush: async () => {} })
+    .stop('stop-after-restart', { expectedThreadId: threadId, expectedTurnId: turnId });
+  await assert.rejects(stopWith(new Map(), new Map()), /Current native turn differs from the stop command target/);
+  const known = resumedNativeTurn({ threadId, turnId, turnStatus: 'completed' }, threadId, 'idle');
+  assert.deepEqual(known, { id: turnId, status: 'completed', closed: false });
+  const receipt = await stopWith(new Map([[threadId, known.id]]), new Map([[threadId, { id: known.id, status: known.status }]]));
+  assert.deepEqual(receipt.turn, { id: turnId, status: 'completed' });
+  // A turn that was running when the old process ended is over: it is closed as interrupted, once, for the board.
+  assert.deepEqual(resumedNativeTurn({ threadId, turnId, turnStatus: 'inProgress' }, threadId, 'idle'), { id: turnId, status: 'interrupted', closed: true });
+  assert.deepEqual(resumedNativeTurn({ threadId, turnId, turnStatus: 'failed' }, threadId, 'idle'), { id: turnId, status: 'failed', closed: false });
+  // Nothing is assumed for a thread that is working, has no recorded turn, or is a new session.
+  assert.equal(resumedNativeTurn({ threadId, turnId, turnStatus: 'inProgress' }, threadId, 'active'), null);
+  assert.equal(resumedNativeTurn({ threadId }, threadId, 'idle'), null);
+  assert.equal(resumedNativeTurn({ threadId: '01a13919-1da9-76a1-0a6e-af0c060ec3a4', turnId, turnStatus: 'completed' }, threadId, 'idle'), null);
+  assert.equal(resumedNativeTurn(undefined, threadId, 'idle'), null);
 });
 
 test('runtime stop targeting recovers terminal-only turn identity and ignores a late prior completion', async () => {

@@ -30,7 +30,7 @@
 ## Try it in a minute
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.7.1/flujo-factory-0.7.1.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.9.0/flujo-factory-0.9.0.tgz
 ```
 
 ```js
@@ -134,6 +134,33 @@ await fleet.deploy({
   agentsPerMachine: 10,
 }, { image, bundlePath });
 ```
+
+<details>
+<summary><b>🐳 Or on your own computer, with Docker</b></summary>
+
+<br>
+
+The same fleet in local containers: no cloud account, no extra setup beyond Docker. [How it works.](PUBLIC_SDK.md#lite-fleets-on-local-docker)
+
+```js
+import { FactoryDockerLiteFleet, ClaudeSubscriptionBroker } from 'flujo-factory';
+
+const fleet = new FactoryDockerLiteFleet({
+  directory: '/private/fleet',
+  auth: new ClaudeSubscriptionBroker({ tokenFile: '/private/claude-token' }),
+});
+
+await fleet.deploy({
+  runId: 'launch',
+  app: 'my-swarm',
+  goal: 'Fix every open bug',
+  workerProgram: 'claude',
+  machines: 3,
+  agentsPerMachine: 4,
+});
+```
+
+</details>
 
 <table>
   <tr>

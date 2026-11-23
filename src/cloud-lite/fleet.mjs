@@ -334,6 +334,8 @@ export class FactoryCloudLiteFleet {
   async start({ attempt } = {}) {
     if (!/^[a-z0-9-]{3,64}$/.test(attempt ?? '')) throw new TypeError('Select a stable recovery attempt identity.');
     this.closing = false;
+    // A stop that follows this start is a new stop, with its own journal entries (see stop()).
+    if (this.state.startAttempt !== attempt) { this.state.startAttempt = attempt; this.save(); }
     for (const machine of this.state.machines) await this.stage(`${machine.id}.start.${attempt}`, async () => {
       const inventory = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json']));
       const original = inventory.find(value => value.id === machine.id);
@@ -345,6 +347,8 @@ export class FactoryCloudLiteFleet {
       const readback = JSON.parse(await this.fly(['machine', 'list', '--app', this.state.plan.app, '--json'])).find(value => value.id === machine.id);
       return { machineId: machine.id, state: readback?.state };
     });
+    // A sealed fleet stays stopped in the journal: its sessions cannot resume work.
+    if (this.state.status === 'stopped' && !this.state.shutdownIntent) { this.state.status = 'provisioned'; this.save(); }
     return this.snapshot();
   }
   async observe({ maxPages = DEFAULT_OBSERVATION_PAGES } = {}) {
@@ -558,8 +562,11 @@ export class FactoryCloudLiteFleet {
   async stop() {
     // no new connection from here on, and the one that is open goes with the machines (also when a stop fails)
     this.closing = true;
+    // One journal entry per machine and start, so a fleet that was started again can be stopped again;
+    // repeating a stop without a start in between still sends nothing.
+    const cycle = this.state.startAttempt ? `.${this.state.startAttempt}` : '';
     try {
-      for (const machine of [...this.state.machines].reverse()) await this.stage(`${machine.id}.stop`, async () => {
+      for (const machine of [...this.state.machines].reverse()) await this.stage(`${machine.id}.stop${cycle}`, async () => {
         await this.fly(['machine', 'stop', machine.id, '--app', this.state.plan.app]); return { stopped: true, machineId: machine.id };
       });
       this.state.status = 'stopped'; this.save();

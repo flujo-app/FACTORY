@@ -1,0 +1,382 @@
+{
+  "format": "factory-docker-fleet-acceptance",
+  "schemaVersion": 1,
+  "accepted": true,
+  "sourceCommit": "beaaf5e35434ea5ab3d1225d8c84a9ae48b91fff",
+  "command": "node scripts/docker-fleet-smoke.mjs --directory <folder> --evidence <file> [--turn | --program claude --claude-token <file> --quick | --program flujo --quick]",
+  "scope": "Real Docker containers, volumes and networks on one host (Docker Desktop on Windows 10), run from a clean source snapshot of sourceCommit. No Fly resource.",
+  "notAsserted": [
+    "Model turns of Claude Code or FLUJO workers on Docker.",
+    "A Docker host running Linux directly.",
+    "The workspace-write and read-only sandboxes inside containers.",
+    "More than two machines."
+  ],
+  "runs": [
+    {
+      "name": "codex-full",
+      "about": "Two containers with two Codex agents each on a subscription login. Two real model turns, one before and one after a stop and start; then a runtime update, collection and removal.",
+      "accepted": true,
+      "failure": null,
+      "plan": {
+        "runId": "docker-smoke-mwt78q82",
+        "app": "factory-docker-mwt78q82",
+        "workerProgram": "codex",
+        "machines": 2,
+        "agentsPerMachine": 2,
+        "cpus": 1,
+        "memoryMb": 2048,
+        "supervision": "operator"
+      },
+      "image": "node:24.22.1-bookworm-slim",
+      "realModelTurn": true,
+      "quick": false,
+      "host": {
+        "platform": "win32",
+        "node": "v24.22.1",
+        "dockerServer": "29.6.1",
+        "dockerClient": "29.6.1"
+      },
+      "checks": [
+        {
+          "name": "deploy: one container per machine",
+          "atMs": 3309,
+          "machines": [
+            {
+              "id": "91b76e746df55b",
+              "name": "factory-docker-smoke-mwt78q82-m0",
+              "volumeId": "factory-docker-mwt78q82-factory_m0"
+            },
+            {
+              "id": "949df15c9d7fd7",
+              "name": "factory-docker-smoke-mwt78q82-m1",
+              "volumeId": "factory-docker-mwt78q82-factory_m1"
+            }
+          ]
+        },
+        {
+          "name": "network: only the board of the first machine is published, on loopback only",
+          "atMs": 3467,
+          "published": [
+            {
+              "name": "/factory-docker-smoke-mwt78q82-m0",
+              "port": "4200/tcp",
+              "host": "127.0.0.1"
+            }
+          ]
+        },
+        {
+          "name": "secrets: none in container settings",
+          "atMs": 3468,
+          "checkedSecrets": 7
+        },
+        {
+          "name": "board: every agent on every machine enrolled through the shared board",
+          "atMs": 203756,
+          "threads": {
+            "m0-a0": "01a2083c-ba99-7283-97c1-66afb45c7890",
+            "m0-a1": "01a2083c-bf4e-7512-acbc-37e7ccab1b93",
+            "m1-a0": "01a2083c-c15d-7e40-a082-065b762f80eb",
+            "m1-a1": "01a2083c-c58e-7132-8fee-daa02d3fe139"
+          },
+          "machinesReady": [
+            {
+              "machine": "m0",
+              "node": "v24.22.1",
+              "codex": "codex-cli 0.162.1"
+            },
+            {
+              "machine": "m1",
+              "node": "v24.22.1",
+              "codex": "codex-cli 0.162.1"
+            }
+          ]
+        },
+        {
+          "name": "real turn: an agent on the last machine recorded a claim on the shared board",
+          "atMs": 223854,
+          "agent": "m1-a1",
+          "turn": "completed",
+          "claim": {
+            "resource": "task:docker-smoke-mwt78q82-first",
+            "owner": "m1-a1",
+            "machine": "m1",
+            "status": "claimed"
+          }
+        },
+        {
+          "name": "stop: every container stopped",
+          "atMs": 225252,
+          "exitCodes": [
+            0,
+            0
+          ]
+        },
+        {
+          "name": "start: the same containers came back and every agent found its earlier session",
+          "atMs": 312289,
+          "sessions": {
+            "m0-a0": "no-history-new-session",
+            "m0-a1": "no-history-new-session",
+            "m1-a0": "no-history-new-session",
+            "m1-a1": "resumed"
+          }
+        },
+        {
+          "name": "real turn after the restart: the resumed agent took a new message and recorded a second claim",
+          "atMs": 327350,
+          "agent": "m1-a1",
+          "turn": "completed",
+          "claim": {
+            "resource": "task:docker-smoke-mwt78q82-restarted",
+            "owner": "m1-a1",
+            "machine": "m1",
+            "status": "claimed"
+          }
+        },
+        {
+          "name": "runtime update: new containers on the same volumes, every agent found its earlier session",
+          "atMs": 506649,
+          "digest": "f1be472388f5517b6132c25ac3c36d9125295c42055fb3bececee222ef3cd6a4",
+          "sessions": {
+            "m0-a0": "no-history-new-session",
+            "m0-a1": "no-history-new-session",
+            "m1-a0": "no-history-new-session",
+            "m1-a1": "resumed"
+          }
+        },
+        {
+          "name": "collect: one verified archive per machine",
+          "atMs": 553317,
+          "artifacts": [
+            {
+              "machineId": "949df15c9d7fd7",
+              "bytes": 52918035,
+              "sha256": "e3bde641ff8c86af3da68a091eb3a305a55ecc8705f0645af9614871b384537c"
+            },
+            {
+              "machineId": "91b76e746df55b",
+              "bytes": 52886336,
+              "sha256": "67d30c0a8bf4793adc21dcec3e75c10b213c0e47f50fe4036f8fe87e93c9d531"
+            }
+          ]
+        },
+        {
+          "name": "retire: containers, volumes, network and staged secrets are gone",
+          "atMs": 556019
+        }
+      ],
+      "providerOperations": [
+        "app.create",
+        "app.credentials",
+        "m0.volume",
+        "m0.machine-create",
+        "m1.volume",
+        "m1.machine-create",
+        "949df15c9d7fd7.stop",
+        "91b76e746df55b.stop",
+        "91b76e746df55b.start.smoke-mwt78q82",
+        "949df15c9d7fd7.start.smoke-mwt78q82",
+        "91b76e746df55b.runtime.f1be472388f5517b6132c25ac3c36d9125295c42055fb3bececee222ef3cd6a4",
+        "949df15c9d7fd7.runtime.f1be472388f5517b6132c25ac3c36d9125295c42055fb3bececee222ef3cd6a4",
+        "app.retire"
+      ],
+      "durationMs": 556123,
+      "completedAt": "2026-11-23T11:54:44.636Z",
+      "scope": "Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only when realModelTurn is true; otherwise agents enrol and wait."
+    },
+    {
+      "name": "claude-enrolment",
+      "about": "Claude Code workers started in containers and enrolled on the board. Placeholder login, no model call.",
+      "accepted": true,
+      "failure": null,
+      "plan": {
+        "runId": "docker-smoke-mwt7knof",
+        "app": "factory-docker-mwt7knof",
+        "workerProgram": "claude",
+        "machines": 2,
+        "agentsPerMachine": 2,
+        "cpus": 1,
+        "memoryMb": 2048,
+        "supervision": "operator"
+      },
+      "image": "node:24.22.1-bookworm-slim",
+      "realModelTurn": false,
+      "quick": true,
+      "host": {
+        "platform": "win32",
+        "node": "v24.22.1",
+        "dockerServer": "29.6.1",
+        "dockerClient": "29.6.1"
+      },
+      "checks": [
+        {
+          "name": "deploy: one container per machine",
+          "atMs": 2143,
+          "machines": [
+            {
+              "id": "7ac587718c7117",
+              "name": "factory-docker-smoke-mwt7knof-m0",
+              "volumeId": "factory-docker-mwt7knof-factory_m0"
+            },
+            {
+              "id": "4997cb2b71bb27",
+              "name": "factory-docker-smoke-mwt7knof-m1",
+              "volumeId": "factory-docker-mwt7knof-factory_m1"
+            }
+          ]
+        },
+        {
+          "name": "network: only the board of the first machine is published, on loopback only",
+          "atMs": 2289,
+          "published": [
+            {
+              "name": "/factory-docker-smoke-mwt7knof-m0",
+              "port": "4200/tcp",
+              "host": "127.0.0.1"
+            }
+          ]
+        },
+        {
+          "name": "secrets: none in container settings",
+          "atMs": 2289,
+          "checkedSecrets": 7
+        },
+        {
+          "name": "board: every agent on every machine enrolled through the shared board",
+          "atMs": 257928,
+          "threads": {
+            "m0-a0": "564313aa-1854-4f1b-b098-9083f97ad8c8",
+            "m0-a1": "c4f0d12f-e71e-45e3-9402-7440236466ab",
+            "m1-a0": "1d448dde-d92e-444c-9602-e15c6103665f",
+            "m1-a1": "25ca5f42-ce70-40cc-b8d0-2ffcff97db2d"
+          },
+          "machinesReady": [
+            {
+              "machine": "m0",
+              "node": "v24.22.1",
+              "claude": "2.1.311 (Claude Code)"
+            },
+            {
+              "machine": "m1",
+              "node": "v24.22.1",
+              "claude": "2.1.311 (Claude Code)"
+            }
+          ]
+        },
+        {
+          "name": "retire: containers, volumes, network and staged secrets are gone",
+          "atMs": 260163
+        }
+      ],
+      "providerOperations": [
+        "app.create",
+        "app.credentials",
+        "m0.volume",
+        "m0.machine-create",
+        "m1.volume",
+        "m1.machine-create",
+        "app.retire"
+      ],
+      "durationMs": 260262,
+      "completedAt": "2026-11-23T11:59:05.348Z",
+      "scope": "Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only when realModelTurn is true; otherwise agents enrol and wait."
+    },
+    {
+      "name": "flujo-enrolment",
+      "about": "FLUJO workers started in containers and enrolled on the board. Placeholder model endpoint, no model call.",
+      "accepted": true,
+      "failure": null,
+      "plan": {
+        "runId": "docker-smoke-mwt7q8s2",
+        "app": "factory-docker-mwt7q8s2",
+        "workerProgram": "flujo",
+        "machines": 2,
+        "agentsPerMachine": 2,
+        "cpus": 1,
+        "memoryMb": 2048,
+        "supervision": "operator"
+      },
+      "image": "node:24.22.1-bookworm-slim",
+      "realModelTurn": false,
+      "quick": true,
+      "host": {
+        "platform": "win32",
+        "node": "v24.22.1",
+        "dockerServer": "29.6.1",
+        "dockerClient": "29.6.1"
+      },
+      "checks": [
+        {
+          "name": "deploy: one container per machine",
+          "atMs": 2059,
+          "machines": [
+            {
+              "id": "10f0f731ecaa84",
+              "name": "factory-docker-smoke-mwt7q8s2-m0",
+              "volumeId": "factory-docker-mwt7q8s2-factory_m0"
+            },
+            {
+              "id": "f65f5e72c852b3",
+              "name": "factory-docker-smoke-mwt7q8s2-m1",
+              "volumeId": "factory-docker-mwt7q8s2-factory_m1"
+            }
+          ]
+        },
+        {
+          "name": "network: only the board of the first machine is published, on loopback only",
+          "atMs": 2192,
+          "published": [
+            {
+              "name": "/factory-docker-smoke-mwt7q8s2-m0",
+              "port": "4200/tcp",
+              "host": "127.0.0.1"
+            }
+          ]
+        },
+        {
+          "name": "secrets: none in container settings",
+          "atMs": 2193,
+          "checkedSecrets": 7
+        },
+        {
+          "name": "board: every agent on every machine enrolled through the shared board",
+          "atMs": 451239,
+          "threads": {
+            "m0-a0": "c0ef204c-f255-4ca5-b7f8-3fbdea32f2d6",
+            "m1-a0": "3cc4e0e6-9b23-4b92-a33e-db874f0ab472",
+            "m0-a1": "8db45e67-87ae-443c-b9db-4af30002b012",
+            "m1-a1": "853b872a-cc38-4451-8fbb-3412c9c387be"
+          },
+          "machinesReady": [
+            {
+              "machine": "m0",
+              "node": "v24.22.1",
+              "flujo": "3.48.3"
+            },
+            {
+              "machine": "m1",
+              "node": "v24.22.1",
+              "flujo": "3.48.3"
+            }
+          ]
+        },
+        {
+          "name": "retire: containers, volumes, network and staged secrets are gone",
+          "atMs": 455834
+        }
+      ],
+      "providerOperations": [
+        "app.create",
+        "app.credentials",
+        "m0.volume",
+        "m0.machine-create",
+        "m1.volume",
+        "m1.machine-create",
+        "app.retire"
+      ],
+      "durationMs": 455936,
+      "completedAt": "2026-11-23T12:06:41.649Z",
+      "scope": "Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only when realModelTurn is true; otherwise agents enrol and wait."
+    }
+  ]
+}

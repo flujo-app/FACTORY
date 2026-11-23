@@ -1,10 +1,10 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.7.1 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.7.1):
+Version 0.9.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.9.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.7.1/flujo-factory-0.7.1.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.9.0/flujo-factory-0.9.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
@@ -551,6 +551,107 @@ This proves the configured launch and communication path. FLUJO reviews retained
 real test receipts and findings, but other owners performed the observed merges;
 five owned drafts retain their original acceptance holds. Full production
 qualification and those held FLUJO deliveries are not asserted.
+
+### Lite fleets on local Docker
+
+`FactoryDockerLiteFleet` runs the same fleet on this computer's Docker instead of
+Fly. It needs Docker with Linux containers, no Fly account and no flujo-cloud.
+The plan, the worker programs (Codex, Claude Code, FLUJO), the logins, the shared
+board and every fleet action (`observe`, `command`, `stop`, `start`,
+`updateRuntime`, `quiesce`, `collect`, `supervise`, `retire`) are those of
+`FactoryCloudLiteFleet`.
+
+```js
+import { FactoryDockerLiteFleet, CodexSubscriptionBroker } from 'flujo-factory';
+
+const fleet = new FactoryDockerLiteFleet({
+  directory: '/absolute/private/fleet-run',
+  auth: new CodexSubscriptionBroker({ authFile: '/absolute/private/.codex/auth.json' }),
+});
+await fleet.deploy({
+  runId: 'my-local-run', app: 'my-local-swarm', goal: ownerGoal,
+  machines: 3, agentsPerMachine: 4, cpus: 2, memoryMb: 4096,
+});
+const observation = await fleet.observe();
+await fleet.retire();
+```
+
+What a plan turns into:
+
+- **One container per machine**, named `factory-<runId>-m<index>`, with one Docker
+  volume `<app>-factory_m<index>` on `/data` and one private network named after
+  the app. The first container holds the board, as on Fly.
+- **The same private name for the board.** Each container answers on the network
+  as `<machine id>.vm.<app>.internal`, so the worker runtime is unchanged.
+- **The host reaches the board on a loopback-only port** that Docker picks
+  (`127.0.0.1`). No worker port is published, so nothing is open to the local network.
+- **`cpus` and `memoryMb` are limits for each container.** `region`, `cpuKind` and
+  `diskGb` have no effect: a Docker volume has no size limit.
+- **A model server on this computer** is reachable from workers as
+  `host.docker.internal`. A `modelProvider` still needs `https` URLs.
+
+`deploy` takes the same options as on Fly, with two defaults. Without `image`,
+workers start from `node:24-bookworm-slim` and the bootstrap installs the worker
+program at each start; any Debian-based image with a supported Node works, and a
+digest reference (`node@sha256:...`) keeps runs repeatable. Without `bundlePath`,
+the installed SDK is packed once into `factory-sdk.tgz` in the fleet directory and
+reused when the fleet is resumed. Pass `bundlePath: false` for an image that
+already holds the runtime in `/opt/factory`. Fly image sources (`imageSource`,
+`channel`) and the plan's `network` are refused.
+
+Before anything is recorded, the fleet checks that Docker runs, uses Linux
+containers and has the CPUs one machine asks for. A stopped Docker therefore
+leaves no half-made fleet directory behind.
+
+Logins and board credentials are copied into each container as root-only files
+under `/run/factory/secrets` and become environment variables of the worker
+runtime only. They are never part of a command line or of `docker inspect`. The
+fleet directory keeps them in `docker-secrets.json` until `retire()`; store the
+directory privately. Anyone who may use Docker on this computer can read inside
+the containers, as with any local container.
+
+Everything the fleet creates carries the label `factory.docker.app=<app>`. A
+volume or network that already exists under a needed name is never adopted, and
+`retire()` removes only labelled containers, volumes and the network, after the
+same inventory check as on Fly. `updateRuntime` replaces each container with a new
+one that keeps its machine identity, name and volume; the old container is set
+aside until the new one runs and is put back if the replacement fails. A machine
+whose setup fails stops its container: read `docker logs factory-<runId>-m<index>`
+or `/data/factory/bootstrap.log` on its volume.
+
+Containers do not restart by themselves. After `stop()`, or after the computer
+or Docker was restarted, call `start({ attempt })` with a new attempt name; a later
+`stop()` then stops them again. Every start sets the machine up again. In the
+runs below that took between one and a half and four and a half minutes for Codex
+and Claude Code, and seven and a half minutes for FLUJO's first start, which
+installs FLUJO onto the volume. An agent resumes the session it
+had; a Codex session that never ran a turn has no history to resume, so that agent
+records it and opens a new one.
+
+`createDockerInfrastructure({ directory })` is the provider on its own. It answers
+the provider commands a fleet sends, for use as the `infrastructure` of a
+`FactoryCloudLiteFleet`.
+
+The [2026-11-23 Docker run](evidence/docker-fleet-acceptance-20261123.json) used
+real containers on Docker Desktop for Windows: two machines with two Codex agents
+each, on a subscription login. All four agents enrolled through the shared board.
+An agent in the second container recorded a claim on the board in the first,
+once before and once after a stop and start. The runtime update, the collection
+with verified archives and the removal of every container, volume and the network
+passed too. The same record holds two shorter runs in which Claude Code and FLUJO
+workers started in containers and enrolled on the board. Those two used
+placeholder logins and called no model, so model turns of Claude Code and FLUJO
+on Docker are not asserted. The runs used the default sandbox (full access inside
+the container); `workspace-write` and `read-only` are untested in containers. To
+repeat the check on your own Docker:
+
+```sh
+node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json
+```
+
+Add `--turn` for the two real Codex messages, `--program claude --claude-token <file>`
+or `--program flujo` for the other worker programs, and `--quick` to stop after
+enrolment.
 
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`
