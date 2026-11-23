@@ -58,7 +58,7 @@ function fakeDocker({ info = { ServerVersion: '29.0.0', NCPU: 8, MemTotal: 16e9,
     if (verb === 'inspect') return JSON.stringify(rest.slice(2).map(find).map(({ files, ...value }) => value));
     if (verb === 'create') {
       if (state.failNextCreate) { const message = state.failNextCreate; state.failNextCreate = null; fail(message); }
-      const valued = new Set(['--name', '--network', '--network-alias', '--label', '--mount', '--cpus', '--memory', '--restart', '--add-host', '--env', '--publish', '--entrypoint']);
+      const valued = new Set(['--name', '--network', '--network-alias', '--label', '--mount', '--cpus', '--memory', '--restart', '--add-host', '--env', '--publish', '--entrypoint', '--security-opt']);
       const options = {}; let index = 0;
       for (; index < rest.length && rest[index].startsWith('--'); index++) {
         if (valued.has(rest[index])) (options[rest[index]] ??= []).push(rest[++index]);
@@ -72,7 +72,7 @@ function fakeDocker({ info = { ServerVersion: '29.0.0', NCPU: 8, MemTotal: 16e9,
       state.containers.push({ Id: (++state.sequence).toString(16).padStart(64, 'c'), Name: `/${name}`, State: { Status: 'created' }, files: new Map(),
         Config: { Image: rest[index], Labels: labelsOf(rest.slice(0, index)), Env: options['--env'] ?? [], Entrypoint: options['--entrypoint'], Cmd: rest.slice(index + 1) },
         HostConfig: { NetworkMode: options['--network'][0], NanoCpus: Number(options['--cpus']?.[0] ?? 0) * 1e9, Memory: options['--memory']?.[0], Init: options['--init'] === true,
-          RestartPolicy: { Name: options['--restart']?.[0] }, ExtraHosts: options['--add-host'] ?? [], PortBindings: Object.fromEntries((options['--publish'] ?? []).map(spec => [`${spec.split(':').at(-1)}/tcp`, [{ HostIp: spec.split(':')[0], HostPort: '' }]])) },
+          RestartPolicy: { Name: options['--restart']?.[0] }, ExtraHosts: options['--add-host'] ?? [], SecurityOpt: options['--security-opt'] ?? null, PortBindings: Object.fromEntries((options['--publish'] ?? []).map(spec => [`${spec.split(':').at(-1)}/tcp`, [{ HostIp: spec.split(':')[0], HostPort: '' }]])) },
         NetworkSettings: { Networks: { [options['--network'][0]]: { Aliases: options['--network-alias'] } } },
         Mounts: mounts.map(mount => ({ Type: 'volume', Name: mount.source, Destination: mount.target })) });
       return state.containers.at(-1).Id;
@@ -383,6 +383,29 @@ test('prebuild builds one image for a bundle and program and every later fleet r
   assert.match(await refused({ prebuild: 'yes' }), /prebuild must be true or false/);
   assert.match(await refused({ prebuild: true, bundlePath: false }), /cannot be combined with bundlePath: false/);
   assert.match(await refused({ prebuild: true }, fakeDocker({ info: () => { throw new Error('Cannot connect to the Docker daemon'); } })), /Docker is not running/);
+});
+
+// Found in a real run on Docker Desktop: with sandbox 'workspace-write' every command of a Codex agent failed with
+// "bwrap: No permissions to create new namespace". A default container may not create the isolated area the worker
+// program runs agent commands in; without Docker's system-call filter it may.
+test('a stricter sandbox is refused unless the fleet was created for it, and then its containers allow it', async () => {
+  const directory = fresh(), docker = fakeDocker();
+  const plain = new FactoryDockerLiteFleet({ directory, dockerExecute: docker.execute, auth: auth() });
+  for (const sandbox of ['workspace-write', 'read-only']) {
+    await assert.rejects(plain.deploy(plan({ sandbox }), { bundlePath: bundle(directory) }), new RegExp(`The ${sandbox} sandbox does not work in a default Docker container.*nestedSandbox: true`));
+  }
+  assert.equal(existsSync(join(directory, 'fleet.json')), false); assert.equal(docker.state.networks.size, 0);
+  // The default sandbox needs nothing, and gets nothing.
+  await plain.deploy(plan({ sandbox: 'danger-full-access' }), { bundlePath: bundle(directory) });
+  assert.deepEqual(docker.state.containers.map(value => value.HostConfig.SecurityOpt), [null, null]);
+  const allowed = fresh(), engine = fakeDocker();
+  const nested = new FactoryDockerLiteFleet({ directory: allowed, dockerExecute: engine.execute, auth: auth(), nestedSandbox: true });
+  await nested.deploy(plan({ sandbox: 'workspace-write' }), { bundlePath: bundle(allowed) });
+  assert.deepEqual(engine.state.containers.map(value => value.HostConfig.SecurityOpt), [['seccomp=unconfined'], ['seccomp=unconfined']]);
+  // A container replaced by a runtime update keeps the setting, also when the fleet object was made without it.
+  await new FactoryDockerLiteFleet({ directory: allowed, dockerExecute: engine.execute, auth: auth() }).updateRuntime({ bundlePath: bundle(allowed, 'next.tgz', 'newer-sdk-bytes') });
+  assert.deepEqual(engine.state.containers.map(value => value.HostConfig.SecurityOpt), [['seccomp=unconfined'], ['seccomp=unconfined']]);
+  assert.throws(() => new FactoryDockerLiteFleet({ directory: fresh(), nestedSandbox: 'yes' }), /nestedSandbox must be true or false/);
 });
 
 test('containers may use a model server on this computer, but only under the name they can reach', async () => {

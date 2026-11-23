@@ -90,8 +90,9 @@ function writePrivate(file, text) {
  * an app is a private network, a Fly volume is a Docker volume, a Machine is a container. Everything
  * it creates carries the app's label, and only labelled resources are listed, changed or removed.
  */
-export function createDockerInfrastructure({ directory, command = 'docker', env = process.env, execute } = {}) {
+export function createDockerInfrastructure({ directory, command = 'docker', env = process.env, execute, nestedSandbox = false } = {}) {
   if (!isAbsolute(directory ?? '')) throw new TypeError('An absolute private fleet directory is required.');
+  if (typeof nestedSandbox !== 'boolean') throw new TypeError('nestedSandbox must be true or false.');
   const secretsFile = join(directory, 'docker-secrets.json');
   const docker = (args, options = {}) => execute ? execute(command, args, { env, ...options }) : runDocker(command, args, { env, ...options });
   const stagedSecrets = () => existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, 'utf8')) : {};
@@ -146,6 +147,9 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
       ...(config.guest?.memory_mb ? ['--memory', `${config.guest.memory_mb}m`] : []),
       // Workers reach a model server on this computer as host.docker.internal.
       '--restart', 'no', '--init', '--add-host', 'host.docker.internal:host-gateway',
+      // Only when the fleet was created for it: without Docker's system-call filter the worker program's
+      // own sandbox (bubblewrap) may create the isolated area it runs agent commands in.
+      ...(config.docker?.seccomp === 'unconfined' ? ['--security-opt', 'seccomp=unconfined'] : []),
       ...Object.entries(config.env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
       // The host reaches the board on a loopback-only port that Docker picks; nothing is open to the network.
       ...(config.metadata?.['factory.machine'] === 'm0' ? ['--publish', `127.0.0.1::${boardPort(config)}`] : []),
@@ -288,7 +292,9 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
     localModelHost: 'host.docker.internal',
     unusedLoopbackPort: async () => 0,
     // Everything a container needs comes from the fleet's own machine settings.
-    buildMachineConfig: () => ({}),
+    // It travels in the machine settings, so a container replaced by a runtime update keeps it.
+    buildMachineConfig: () => (nestedSandbox ? { docker: { seccomp: 'unconfined' } } : {}),
+    nestedSandbox,
     resolveWorkerImage: async () => { throw new TypeError('A Docker fleet takes an image name; Fly image sources do not apply.'); },
   };
 }
@@ -298,15 +304,23 @@ export function createDockerInfrastructure({ directory, command = 'docker', env 
  * volume each for /data, one private network, and the same shared board on the first machine.
  * Plans, worker programs, logins and every fleet action are those of FactoryCloudLiteFleet.
  * `region`, `cpuKind` and `diskGb` have no effect here; `cpus` and `memoryMb` limit each container.
+ *
+ * `nestedSandbox: true` is needed for the plan's `workspace-write` and `read-only` sandboxes. The worker
+ * program runs agent commands in an isolated area of its own (bubblewrap), and a default container may
+ * not create one: every command of an agent then fails. With this option the fleet's containers run
+ * without Docker's system-call filter (`seccomp=unconfined`), which that isolated area needs.
  */
 export class FactoryDockerLiteFleet extends FactoryCloudLiteFleet {
-  constructor({ directory, dockerCommand = 'docker', dockerEnv = process.env, dockerExecute, auth, onEvent } = {}) {
+  constructor({ directory, dockerCommand = 'docker', dockerEnv = process.env, dockerExecute, nestedSandbox = false, auth, onEvent } = {}) {
     if (!isAbsolute(directory ?? '')) throw new TypeError('An absolute private fleet directory is required.');
-    super({ directory, auth, onEvent, infrastructure: createDockerInfrastructure({ directory, command: dockerCommand, env: dockerEnv, execute: dockerExecute }) });
+    super({ directory, auth, onEvent, infrastructure: createDockerInfrastructure({ directory, command: dockerCommand, env: dockerEnv, execute: dockerExecute, nestedSandbox }) });
   }
   async prepare(input) {
     const plan = validateCloudLitePlan(input);
     if (plan.network !== undefined) throw new TypeError('network is a Fly setting; a Docker fleet always gets its own private network.');
+    if (plan.sandbox !== undefined && plan.sandbox !== 'danger-full-access' && !this.infrastructure.nestedSandbox) {
+      throw new TypeError(`The ${plan.sandbox} sandbox does not work in a default Docker container: the worker program may not create its own isolated area there, so every command of an agent fails. Create the fleet with nestedSandbox: true, which runs its containers without Docker's system-call filter.`);
+    }
     await this.infrastructure.preflight({ cpus: plan.cpus });
     return super.prepare(input);
   }

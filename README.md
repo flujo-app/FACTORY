@@ -30,7 +30,7 @@
 ## Try it in a minute
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.9.0/flujo-factory-0.9.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.10.0/flujo-factory-0.10.0.tgz
 ```
 
 ```js
@@ -140,7 +140,7 @@ await fleet.deploy({
 
 <br>
 
-The same fleet in local containers: no cloud account, no extra setup beyond Docker. [How it works.](PUBLIC_SDK.md#lite-fleets-on-local-docker)
+The same fleet in local containers: no cloud account, no extra setup beyond Docker. `prebuild: true` sets the workers up once, so every container starts in seconds. A model server on your own computer (Ollama, LM Studio) works too. [How it works.](PUBLIC_SDK.md#lite-fleets-on-local-docker)
 
 ```js
 import { FactoryDockerLiteFleet, ClaudeSubscriptionBroker } from 'flujo-factory';
@@ -157,7 +157,7 @@ await fleet.deploy({
   workerProgram: 'claude',
   machines: 3,
   agentsPerMachine: 4,
-});
+}, { prebuild: true });
 ```
 
 </details>

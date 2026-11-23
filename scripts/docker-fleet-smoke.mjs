@@ -11,8 +11,9 @@
  *
  * --turn      one agent on the last machine gets a short message and must record a claim on the shared
  *             board; after the restart it gets a second one.
- * --sandbox   workspace-write or read-only: the plan's sandbox for agent commands. One agent then runs a
- *             shell command in its work folder, tries to write outside it, and reports what happened.
+ * --sandbox   workspace-write or read-only: the plan's sandbox for agent commands, with the fleet's
+ *             nestedSandbox option on. One agent then writes a file in its work folder and tries to write
+ *             one outside it; the check looks at which files exist.
  * --reply     one agent gets a short message and only has to answer: for a model too small to use tools.
  * --teams     every agent takes one real turn, two machines at a time: each worker records a claim and
  *             messages its lead, then each lead reads its inbox and records how many messages it found.
@@ -70,7 +71,7 @@ const plan = { runId: `docker-smoke-${stamp}`, app: `factory-docker-${stamp}`, w
   ...(flags['--sandbox'] ? { sandbox: flags['--sandbox'] } : {}),
   goal: 'Acceptance check of a FACTORY fleet on local Docker. Wait for operator messages.' };
 const agents = agentInventory(plan);
-const fleet = new FactoryDockerLiteFleet({ directory, auth, onEvent: event => events.push({ type: event.type, key: event.body?.key, atMs: Date.now() - started }) });
+const fleet = new FactoryDockerLiteFleet({ directory, auth, nestedSandbox: Boolean(flags['--sandbox']), onEvent: event => events.push({ type: event.type, key: event.body?.key, atMs: Date.now() - started }) });
 const label = `label=factory.docker.app=${plan.app}`;
 const inspectAll = async () => { const ids = lines(await docker(['ps', '--all', '--no-trunc', '--filter', label, '--format', '{{.ID}}'])); return ids.length ? JSON.parse(await docker(['inspect', ...ids])) : []; };
 const traces = () => existsSync(traceFile) ? lines(readFileSync(traceFile, 'utf8')).map(line => JSON.parse(line)) : [];
@@ -149,15 +150,22 @@ try {
   if (flags['--turn']) check('real turn: an agent on the last machine recorded a claim on the shared board', (await claims([claimJob(turnAgent, 'first')]))[0]);
 
   if (flags['--sandbox']) {
-    // Does the worker program's own sandbox hold inside a container? One agent runs a shell command in its folder,
-    // tries to write outside it, and reports both outcomes in the name of its claim.
-    const base = `task:docker-smoke-${stamp}-sandbox`;
-    const [result] = await claims([{ agent: turnAgent, id: `smoke-${stamp}-sandbox`, matches: value => /-inside-(yes|no)-outside-(yes|no)$/.test(value) && value.startsWith(base),
-      message: `Do these steps in order. 1. Run this shell command in your work folder: echo sandbox-ok > proof.txt && cat proof.txt . Note whether it printed sandbox-ok (INSIDE is yes) or failed (INSIDE is no). 2. Run this shell command: echo outside > /data/outside-proof.txt . Note whether it succeeded (OUTSIDE is yes) or was refused or failed (OUTSIDE is no). Do not retry or work around a refusal. 3. Call the FACTORY board tool factory_claim once with resource "${base}-inside-INSIDE-outside-OUTSIDE", with INSIDE and OUTSIDE replaced by your yes or no. 4. Answer with the single word DONE.` }]);
-    const [, inside, outside] = /-inside-(yes|no)-outside-(yes|no)$/.exec(result.resource);
-    const wrote = lines(await docker(['exec', `factory-${plan.runId}-m${machines - 1}`, '/bin/sh', '-c', 'test -f /data/outside-proof.txt && echo written || echo absent']))[0];
-    check(`sandbox ${flags['--sandbox']}: what an agent's shell command could do inside a container`, { agent: turnAgent, turn: result.turn,
-      commandInWorkFolder: inside === 'yes' ? 'worked' : 'failed', writeOutsideWorkFolder: outside === 'yes' ? 'succeeded' : 'refused', fileOutsideWorkFolder: wrote });
+    // Does the worker program's own sandbox hold inside a container? One agent writes a file in its work folder
+    // and tries to write one outside it. The files themselves are the proof, not what the agent says.
+    const after = lastTrace(), deadline = Date.now() + 600000; let ended;
+    await fleet.command(turnAgent, { id: `smoke-${stamp}-sandbox`, message: 'Run these two shell commands, each exactly once. Do not retry them and do not work around a failure. First, in your work folder: echo sandbox-ok > proof.txt . Second: echo outside > /data/outside-proof.txt . Then answer with the single word DONE.' });
+    while (!ended) {
+      await fleet.observe({ maxPages: 25 });
+      ended = traces().find(event => event.seq > after && event.source === turnAgent && event.kind === 'native.turn.completed');
+      if (!ended && Date.now() >= deadline) throw new Error('The agent did not end its turn in time.');
+      if (!ended) await sleep(3000);
+    }
+    const written = async path => lines(await docker(['exec', `factory-${plan.runId}-m${machines - 1}`, '/bin/sh', '-c', `test -f ${path} && echo yes || echo no`]))[0] === 'yes';
+    const inside = await written(`/data/worktrees/${turnAgent}/proof.txt`), outside = await written('/data/outside-proof.txt');
+    assert.equal(inside, flags['--sandbox'] === 'workspace-write', `a file in the work folder was ${inside ? '' : 'not '}written`);
+    assert.equal(outside, false, 'a file outside the work folder was written');
+    check(`sandbox ${flags['--sandbox']}: an agent's command could write only where the sandbox allows`, { agent: turnAgent, turn: ended.body.turn.status,
+      fileInWorkFolder: inside ? 'written' : 'not written', fileOutsideWorkFolder: outside ? 'written' : 'not written' });
   }
 
   if (flags['--reply']) {
@@ -249,7 +257,7 @@ try {
   const info = JSON.parse(await docker(['version', '--format', '{{json .}}']).catch(() => '{}'));
   writeFileSync(evidenceFile, JSON.stringify({ format: 'factory-docker-fleet-acceptance', schemaVersion: 2, accepted: failure === null, failure,
     plan: { runId: plan.runId, app: plan.app, workerProgram: program, machines, agentsPerMachine, cpus: plan.cpus, memoryMb: plan.memoryMb, supervision: plan.supervision },
-    image, prebuild: Boolean(flags['--prebuild']), login: modelUrl ? 'model server' : placeholder ? 'placeholder' : 'subscription',
+    image, prebuild: Boolean(flags['--prebuild']), sandbox: flags['--sandbox'] ?? 'danger-full-access', nestedSandbox: Boolean(flags['--sandbox']), login: modelUrl ? 'model server' : placeholder ? 'placeholder' : 'subscription',
     ...(modelUrl ? { modelServer: { address: modelUrl, model, api } } : {}),
     realModelTurns: (flags['--teams'] ? agents.length : 0) + (flags['--turn'] ? (flags['--quick'] ? 1 : 2) : 0) + (flags['--reply'] ? 1 : 0) + (flags['--sandbox'] ? 1 : 0), quick: Boolean(flags['--quick']),
     host: { platform: process.platform, node: process.version, dockerServer: info.Server?.Version, dockerClient: info.Client?.Version },

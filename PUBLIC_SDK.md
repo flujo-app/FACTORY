@@ -1,10 +1,10 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.9.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.9.0):
+Version 0.10.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.10.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.9.0/flujo-factory-0.9.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.10.0/flujo-factory-0.10.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
@@ -654,6 +654,29 @@ await fleet.deploy({
 - The model must be able to call tools for agents to use the board. A model too
   small for that still answers, which is enough to check the connection.
 
+**The stricter sandboxes need `nestedSandbox: true`.** With the plan's default
+sandbox (`danger-full-access`) an agent's commands may do anything inside its
+container; the container is what keeps them off this computer. `workspace-write`
+lets them write only in the agent's own folder, with no network, and `read-only`
+lets them write nowhere. The worker program enforces both by running each command
+in a small isolated area of its own (bubblewrap). A default Docker container may
+not create such an area: in a real run every command of an agent failed with
+`bwrap: No permissions to create new namespace`. So a Docker fleet refuses these
+two sandboxes unless it was created for them:
+
+```js
+const fleet = new FactoryDockerLiteFleet({ directory, auth, nestedSandbox: true });
+await fleet.deploy({ ...plan, sandbox: 'workspace-write' }, { prebuild: true });
+```
+
+`nestedSandbox: true` runs the fleet's containers without Docker's system-call
+filter (`--security-opt seccomp=unconfined`), which the isolated area needs. That
+is a trade: agent commands are held more tightly, while the container as a whole
+loses one of Docker's own protections. Nothing else changes: no extra privileges
+and no access to this computer's files. As on Fly, Codex asks for approval before
+a board tool call under these sandboxes and the fleet never approves, so pair them
+with `boardTools: false` for Codex.
+
 Before anything is recorded, the fleet checks that Docker runs, uses Linux
 containers and has the CPUs one machine asks for. A stopped Docker therefore
 leaves no half-made fleet directory behind.
@@ -694,17 +717,46 @@ with verified archives and the removal of every container, volume and the networ
 passed too. The same record holds two shorter runs in which Claude Code and FLUJO
 workers started in containers and enrolled on the board. Those two used
 placeholder logins and called no model, so model turns of Claude Code and FLUJO
-on Docker are not asserted. The runs used the default sandbox (full access inside
-the container); `workspace-write` and `read-only` are untested in containers. To
-repeat the check on your own Docker:
+on Docker are not asserted by that record.
+
+A [second record of the same day](evidence/docker-fleet-runs-20261123.json) holds
+seven more real runs on the same computer:
+
+- **Claude Code with real turns.** Two containers with two agents each, from a
+  pre-built image, on a subscription token: a claim recorded on the shared board
+  before and after a stop and start, then a runtime update, collection and
+  removal. The image took 3 minutes 43 seconds to build, once. After that all
+  agents were enrolled 4 seconds after the deploy, and back 5 seconds after a
+  restart.
+- **Ten teams of nine workers and a lead.** Ten containers, 100 Claude Code
+  agents, every one with a real model turn. Each worker recorded its own claim
+  and messaged its lead; each lead read its inbox and found its nine messages.
+  Once the image was ready, the ten containers were created and all 100 agents
+  enrolled within 12 seconds. The 100 turns took a minute and a half, and an idle
+  container used about 46 MB of memory.
+- **A model on the same computer.** Codex, Claude Code and FLUJO workers each
+  completed a turn with an answer from a model served by Ollama over plain
+  `http`. The model was the 9 MB TinyLLama-v0, which writes story-like text and
+  cannot use tools: these runs show the connection, not useful work by a local
+  model.
+- **The `workspace-write` sandbox** with `nestedSandbox: true`, for Codex and for
+  Claude Code: the agent's command wrote a file in its work folder and could not
+  write one outside it.
+
+Not shown by either record: useful work by a model served on the same computer,
+Docker on a Linux host, the `read-only` sandbox, and more than ten machines. To
+repeat the checks on your own Docker:
 
 ```sh
-node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json
+node scripts/docker-fleet-smoke.mjs --directory /absolute/empty/folder --evidence /absolute/result.json --prebuild
 ```
 
-Add `--turn` for the two real Codex messages, `--program claude --claude-token <file>`
-or `--program flujo` for the other worker programs, and `--quick` to stop after
-enrolment.
+Add `--turn` for two real messages to one agent, or `--teams --machines 10 --agents 10`
+for a real turn of every agent. `--program claude --claude-token <file>` and
+`--program flujo` select the other worker programs. `--model-url <address> --model <name>`
+uses a model server instead of a login, with `--reply` when the model cannot use
+tools. `--sandbox workspace-write` checks the sandbox. `--quick` skips the stop,
+start, update and collection.
 
 `FactorySwarmEngine` and `createManagedCloudAdapter` are exported from the same
 package. The engine accepts a configured adapter and a claimed `FactoryControl`

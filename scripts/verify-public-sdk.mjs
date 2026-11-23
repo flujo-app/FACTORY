@@ -22,6 +22,8 @@ for (const name of [
   'FactoryCloudLiteFleet',
   'FactoryDockerLiteFleet',
   'createDockerInfrastructure',
+  'cloudLiteImageSetup',
+  'LOCAL_MODEL_HOSTS',
   'CodexSubscriptionBroker',
   'validateCloudLitePlan',
   'cloudLiteMachineConfig',
