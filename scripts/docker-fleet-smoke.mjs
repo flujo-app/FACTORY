@@ -249,10 +249,14 @@ try {
     check('mcp: an agent called the extra MCP server, whose answer proves its key arrived, and recorded that answer as a claim', { ...result, ...(configured ? { servers: configured.mcpServers } : {}) });
     // The key may sit in the private session settings and the staged secrets, and nowhere else.
     const containers = await inspectAll(), holders = [];
-    for (const value of containers) holders.push(...lines(await docker(['exec', value.Name.replace(/^\//, ''), '/bin/sh', '-c', `grep -rlF -- '${probeSecret}' /data --exclude-dir=factory-private 2>/dev/null; true`])));
+    for (const value of containers) holders.push(...lines(await docker(['exec', value.Name.replace(/^\//, ''), '/bin/sh', '-c', `grep -rlF --exclude-dir=factory-private -- '${probeSecret}' /data 2>/dev/null; true`])));
     const hostFiles = ['traces.jsonl', 'fleet.json', 'observation.json'].filter(name => existsSync(join(directory, name)) && readFileSync(join(directory, name), 'utf8').includes(probeSecret));
     assert.deepEqual([...holders, ...hostFiles], [], 'the MCP key turned up outside the private settings');
-    check('mcp: the key is in no file under /data outside the private settings, nor in the fleet journal, observation or traces', { containersSearched: containers.length });
+    // The same search finds it where it belongs: Claude Code reads its MCP file there (Codex keeps it in memory).
+    const privateFiles = [];
+    for (const value of containers) privateFiles.push(...lines(await docker(['exec', value.Name.replace(/^\//, ''), '/bin/sh', '-c', `grep -rlF -- '${probeSecret}' /data/factory-private 2>/dev/null; true`])));
+    if (program === 'claude') assert.equal(privateFiles.length, agents.length, 'the search did not find the key in the private MCP files');
+    check('mcp: the key is in no file under /data outside the private settings, nor in the fleet journal, observation or traces', { containersSearched: containers.length, privateFilesWithKey: privateFiles.length });
   }
 
   if (program === 'claude' && realTurns && (flags['--lead-model'] || flags['--worker-model'])) {
