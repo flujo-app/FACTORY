@@ -14,6 +14,7 @@ import { NativeOperatorStop } from './operator-stop.mjs';
 import { NativeWorkflowWake } from './workflow-wake.mjs';
 import { hash } from './protocol.mjs';
 import { codexProviderConfig, flujoProviderModel } from '../model-provider.mjs';
+import { resolveMcpServers } from './mcp-servers.mjs';
 
 const threadStatuses = new Set(['active','idle','archived','notLoaded','systemError','notFound']);
 const turnStatuses = new Set(['inProgress','completed','interrupted','failed']);
@@ -72,7 +73,8 @@ const WORKER_PROGRAMS = {
   claude: {
     home: '/data/claude', sessions: '/data/claude/projects', exitTrace: 'codex.exit', resumeNeedsSettings: true,
     prepare: ({ providerMode }) => writeFileSync(CLAUDE_COMMAND_WRAPPER, claudeCommandWrapper({ provider: providerMode }), { mode: 0o700 }),
-    driver: ({ plan, index, home, githubToken, deployKey, providerKey, onStderr, getLiveAuth }) => new ClaudeSessionDriver({ configDirectory: home, stateDirectory: '/data/factory', fixedModel: plan.modelProvider?.model, partialMessages: plan.traceDeltas === true, onStderr,
+    // Server settings carry the board credential and MCP keys: they stay out of /data/factory, which evidence collects.
+    driver: ({ plan, index, home, githubToken, deployKey, providerKey, onStderr, getLiveAuth }) => new ClaudeSessionDriver({ configDirectory: home, stateDirectory: '/data/factory', privateDirectory: '/data/factory-private', fixedModel: plan.modelProvider?.model, partialMessages: plan.traceDeltas === true, onStderr,
       // Read for every turn, so a refreshed subscription token reaches the next process.
       environment: () => claudeEnvironment({ plan, index, home, commandWrapper: CLAUDE_COMMAND_WRAPPER, githubToken, deployKey, providerKey, oauthToken: getLiveAuth()?.accessToken }) }),
     version: ({ run }) => run('claude', ['--version']),
@@ -107,7 +109,7 @@ function rotatingLog(file, partBytes = 32 * 1024 * 1024) {
 }
 
 export async function runCloudLiteMachine(config) {
-  const { plan, index, credentials, operatorToken, initialAuth = {}, githubToken, evidenceTokens, providerKey, deployKey } = config;
+  const { plan, index, credentials, operatorToken, initialAuth = {}, githubToken, evidenceTokens, providerKey, deployKey, mcpSecrets = {} } = config;
   // Optional: a self-hosted model provider instead of the subscription login, read-only
   // deploy-key repository access, a prepare hook for agent workspaces, operator-driven turns.
   const providerMode = Boolean(plan.modelProvider);
@@ -115,7 +117,7 @@ export async function runCloudLiteMachine(config) {
   const program = WORKER_PROGRAMS[programName];
   const evidenceRoots = { sessionsPath: program.sessions, ...(program.sessionsExclude ? { sessionsExclude: program.sessionsExclude } : {}) };
   const operatorSupervised = plan.supervision === 'operator';
-  const extraSecrets = [providerKey, deployKey].filter(value => typeof value === 'string' && value.length >= 8);
+  const extraSecrets = [providerKey, deployKey, ...Object.values(mcpSecrets)].filter(value => typeof value === 'string' && value.length >= 8);
   mkdirSync('/data/factory', { recursive: true, mode: 0o700 });
   let coordinator, evidenceProcess, evidenceSealing=false, evidenceFinal=false, deadlineRequested=false, sealRequested=false;
   const stopIds=new Map();
@@ -276,7 +278,7 @@ export async function runCloudLiteMachine(config) {
       else mkdirSync(directory,{recursive:true,mode:0o700});
     }
     const sessionFile = `/data/factory/${agent.id}.session.json`;
-    const { sandbox, config: configOverride } = nativeAgentConfig({ plan, slot, directory,
+    const { sandbox, config: configOverride } = nativeAgentConfig({ plan, slot, directory, mcpSecrets,
       board: { command: process.execPath, args: [proxy], env: { FACTORY_BOARD_URL: boardUrl, FACTORY_BOARD_TOKEN: agent.token } } });
     const instructions = slot?.instructions ?? plan.agentInstructions ?? `You are ${agent.id}, ${agent.role}, on machine ${machine}. Your orchestrator is ${rootId}. Team: ${bootstrap.agents.map(x => x.id).join(', ')}.\nUse FACTORY identity/status/claim/message/inbox/checkpoint tools. Claim a stable task:<name> before work (issue:/pr: are available for repository work). One team owns each item. Orchestrators coordinate across teams; workers communicate within their team.\n${agent.role === 'orchestrator' ? 'Actively decompose and complete the original goal. Delegate useful work, resolve dependencies, and integrate the outputs into one coherent final deliverable. Keep unmet acceptance requirements open.' : 'Produce or independently review your assigned deliverable and report evidence and remaining requirements.'}\nRetain native tools. Respect task-specific instructions and validation/publication policy. Work can be research, analysis, documents, data, operations or software; do not invent a repository or software checks for unrelated tasks. Save deliverables under your workspace or /data/results. Record progress and evidence. Credentials must never enter deliverables, messages or traces.\nThe original user goal follows unchanged.`;
     let result; let recovering = existsSync(sessionFile); let unavailableSession;
@@ -473,11 +475,16 @@ export function codexEnvironment({ plan, home, githubToken, deployKey, providerK
     ...(plan.modelProvider ? { [plan.modelProvider.envKey]: providerKey } : {}) };
 }
 
-/** Sandbox and per-thread configuration override for one native agent session. */
-export function nativeAgentConfig({ plan, slot, directory, board }) {
+/**
+ * Sandbox and per-thread configuration override for one native agent session. The plan's extra MCP
+ * servers come after the board, with their keys filled in; the board's name stays reserved.
+ */
+export function nativeAgentConfig({ plan, slot, directory, board, mcpSecrets }) {
   const sandbox = plan.sandbox ?? 'danger-full-access';
+  const servers = { ...resolveMcpServers(plan.mcpServers, mcpSecrets),
+    ...(plan.boardTools === false ? {} : { factory: { ...board, env: { ...board.env, FACTORY_WORKTREE: directory }, required: true } }) };
   const config = {
-    ...(plan.boardTools === false ? {} : { mcp_servers: { factory: { ...board, env: { ...board.env, FACTORY_WORKTREE: directory }, required: true } } }),
+    ...(Object.keys(servers).length ? { mcp_servers: servers } : {}),
     'features.apps': false, 'features.plugins': false, 'features.multi_agent': false,
     'model_reasoning_effort': plan.reasoningEffort,
     // Agent commands may write only their workspace and the listed roots, with no network.

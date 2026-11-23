@@ -30,7 +30,7 @@
 ## Try it in a minute
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.10.0/flujo-factory-0.10.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.11.0/flujo-factory-0.11.0.tgz
 ```
 
 ```js
@@ -197,6 +197,8 @@ await fleet.deploy({
 - **Check your AI plan's terms** before running lots of agents on one subscription.
 - **Not on npm yet.** Install from [GitHub Releases](https://github.com/flujo-app/FACTORY/releases), as shown above.
 - **In the cloud you can lock agents down** with `sandbox: 'workspace-write'`. [See the guide.](PUBLIC_SDK.md#claude-code-as-the-worker-program)
+- **Give every agent more tools** with `mcpServers` in a fleet plan: MCP servers in each container or on the network, with their keys kept out of logs. [See the guide.](PUBLIC_SDK.md#extra-mcp-servers-for-every-agent)
+- **Your own instructions replace the built-in ones,** including how to use the shared job board. [See the guide.](PUBLIC_SDK.md#agent-instructions-and-the-job-board)
 
 <br>
 

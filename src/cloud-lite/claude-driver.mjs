@@ -54,9 +54,12 @@ export function claudeSandboxPolicy({ sandbox = 'danger-full-access', directory,
   throw new TypeError(`Unsupported sandbox ${sandbox}.`);
 }
 
-/** The command line for one turn of one session. Nothing secret goes into arguments. */
-export function claudeSessionArguments({ threadId, resume, model, effort, instructions, policy, mcpConfigFile, settingsFile, boardTools, partialMessages }) {
-  const allowed = [...policy.allowed, ...(boardTools ? ['mcp__factory__*'] : [])];
+/**
+ * The command line for one turn of one session. Nothing secret goes into arguments. `mcpServers` names
+ * the servers in the session's MCP file (the board is `factory`); their tools are allowed in every sandbox.
+ */
+export function claudeSessionArguments({ threadId, resume, model, effort, instructions, policy, mcpConfigFile, settingsFile, boardTools, mcpServers = boardTools ? ['factory'] : [], partialMessages }) {
+  const allowed = [...policy.allowed, ...mcpServers.map(name => `mcp__${name}__*`)];
   return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
     '--strict-mcp-config', '--setting-sources', 'user', '--disable-slash-commands', '--permission-prompts', 'none',
     '--tools', policy.tools.join(','), ...policy.args,
@@ -76,12 +79,13 @@ export function claudeSessionArguments({ threadId, resume, model, effort, instru
  * with turn and item notifications. An idle session holds no process, so idle is simple to prove.
  */
 export class ClaudeSessionDriver extends EventEmitter {
-  constructor({ command = 'claude', args = [], environment, configDirectory, stateDirectory, fixedModel, partialMessages = false, onStderr,
+  constructor({ command = 'claude', args = [], environment, configDirectory, stateDirectory, privateDirectory = stateDirectory, fixedModel, partialMessages = false, onStderr,
     interruptGraceMs = 10000, killGraceMs = 3000, exitGraceMs = 5000, steerGraceMs = 30000 } = {}) {
     super();
-    Object.assign(this, { command, baseArgs: args, environment, configDirectory, stateDirectory, fixedModel, partialMessages, onStderr, interruptGraceMs, killGraceMs, exitGraceMs, steerGraceMs });
+    Object.assign(this, { command, baseArgs: args, environment, configDirectory, stateDirectory, privateDirectory, fixedModel, partialMessages, onStderr, interruptGraceMs, killGraceMs, exitGraceMs, steerGraceMs });
     this.threads = new Map();
     mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(privateDirectory, { recursive: true, mode: 0o700 });
   }
 
   async initialize() {}
@@ -105,21 +109,27 @@ export class ClaudeSessionDriver extends EventEmitter {
     return readdirSync(projects).some(name => existsSync(join(projects, name, `${id}.jsonl`)));
   }
 
-  /** Session files carry the board credential, so they are private and outside the arguments. */
+  /**
+   * The MCP file carries the board credential and any MCP keys, so it is private, in the private directory
+   * and outside the arguments. Entries arrive in Codex's form (`http_headers`) and are written in Claude Code's.
+   */
   addThread(id, { cwd, config, sandbox, model, developerInstructions, lastTurn = null }) {
-    const server = config?.mcp_servers?.factory;
-    const directory = this.stateDirectory;
+    const servers = config?.mcp_servers ?? {};
     const policy = claudeSandboxPolicy({ sandbox, directory: cwd, writableRoots: config?.['sandbox_workspace_write.writable_roots'] ?? [] });
     let mcpConfigFile, settingsFile;
-    if (server) {
-      mcpConfigFile = join(directory, `${id}.claude-mcp.json`);
-      writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: { factory: { command: server.command, args: server.args, env: server.env } } }), { mode: 0o600 });
+    if (Object.keys(servers).length) {
+      mcpConfigFile = join(this.privateDirectory, `${id}.claude-mcp.json`);
+      writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(servers).map(([name, server]) => [name, server.url
+        ? { type: 'http', url: server.url, ...(server.http_headers ? { headers: server.http_headers } : {}) }
+        : { command: server.command, args: server.args, env: server.env }])) }), { mode: 0o600 });
     }
     if (policy.settings) {
-      settingsFile = join(directory, `${id}.claude-settings.json`);
+      settingsFile = join(this.stateDirectory, `${id}.claude-settings.json`);
       writeFileSync(settingsFile, JSON.stringify(policy.settings), { mode: 0o600 });
     }
-    const thread = { id, cwd, policy, mcpConfigFile, settingsFile, boardTools: Boolean(server), model: this.fixedModel ?? model, instructions: developerInstructions, lastTurn, turn: null, child: null, totals: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 } };
+    // The board is always required; another server only when the plan says so.
+    const mcpServers = Object.entries(servers).map(([name, server]) => ({ name, required: name === 'factory' || server.required === true }));
+    const thread = { id, cwd, policy, mcpConfigFile, settingsFile, mcpServers, model: this.fixedModel ?? model, instructions: developerInstructions, lastTurn, turn: null, child: null, totals: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 } };
     this.threads.set(id, thread);
     this.save(thread);
     return thread;
@@ -170,7 +180,7 @@ export class ClaudeSessionDriver extends EventEmitter {
     if (thread.child) throw invalid('This thread already has a running turn.');
     const turn = { id: randomUUID(), written: 0, replayed: 0 };
     const args = [...this.baseArgs, ...claudeSessionArguments({ threadId, resume: this.transcriptExists(threadId), model: thread.model, effort, instructions: thread.instructions,
-      policy: thread.policy, mcpConfigFile: thread.mcpConfigFile, settingsFile: thread.settingsFile, boardTools: thread.boardTools, partialMessages: this.partialMessages })];
+      policy: thread.policy, mcpConfigFile: thread.mcpConfigFile, settingsFile: thread.settingsFile, mcpServers: thread.mcpServers.map(server => server.name), partialMessages: this.partialMessages })];
     thread.lastTurn = { id: turn.id, status: 'inProgress' };
     this.save(thread);
     const child = spawn(this.command, args, { cwd: thread.cwd, env: this.environment(), stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
@@ -224,10 +234,16 @@ export class ClaudeSessionDriver extends EventEmitter {
     const threadId = thread.id, turnId = turn.id;
     const item = body => this.notify('item/completed', { threadId, turnId, item: body });
     if (value.type === 'system' && value.subtype === 'init') {
-      // The same promise Codex gets from a required MCP server: a worker never runs without its board.
-      const boardFailed = thread.boardTools && value.mcp_servers?.some(server => server.name === 'factory' && server.status === 'failed');
-      if (value.session_id !== threadId || boardFailed) {
-        this.onStderr?.(boardFailed ? 'The board MCP server did not connect; ending the turn.' : 'Claude Code opened a different session than requested; ending the turn.');
+      // Which model the session runs on and whether each MCP server connected, for the trace.
+      const observed = new Map((value.mcp_servers ?? []).map(server => [server.name, server.status]));
+      const mcpServers = thread.mcpServers.map(({ name, required }) => ({ name, required, status: typeof observed.get(name) === 'string' ? observed.get(name) : 'unknown' }));
+      this.notify('session/configured', { threadId, turnId, ...(typeof value.model === 'string' ? { model: value.model } : {}), mcpServers });
+      // The same promise Codex gets from a required MCP server: a worker never runs without its board,
+      // nor without another server the plan marked as required.
+      const failed = mcpServers.find(server => server.required && server.status === 'failed');
+      if (value.session_id !== threadId || failed) {
+        this.onStderr?.(!failed ? 'Claude Code opened a different session than requested; ending the turn.'
+          : failed.name === 'factory' ? 'The board MCP server did not connect; ending the turn.' : `The required MCP server ${failed.name} did not connect; ending the turn.`);
         turn.outcome = { status: 'failed' }; this.kill(thread, turn);
       }
     } else if (value.type === 'system' && value.subtype === 'api_retry') {

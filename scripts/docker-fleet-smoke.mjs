@@ -7,7 +7,8 @@
  *     [--program codex|claude|flujo] [--codex-auth <auth.json>] [--claude-token <file>]
  *     [--model-url <http(s) address ending in /v1> --model <name> [--model-api responses|chat|anthropic] [--context <tokens>]]
  *     [--machines 2] [--agents 2] [--cpus 1] [--memory 2048] [--image <name>] [--prebuild]
- *     [--turn] [--sandbox workspace-write|read-only] [--reply] [--teams] [--quick] [--keep]
+ *     [--lead-model <name>] [--worker-model <name>] [--effort low|medium|high|xhigh|max]
+ *     [--turn] [--sandbox workspace-write|read-only] [--reply] [--teams] [--mcp] [--quick] [--keep]
  *
  * --turn      one agent on the last machine gets a short message and must record a claim on the shared
  *             board; after the restart it gets a second one.
@@ -17,6 +18,11 @@
  * --reply     one agent gets a short message and only has to answer: for a model too small to use tools.
  * --teams     every agent takes one real turn, two machines at a time: each worker records a claim and
  *             messages its lead, then each lead reads its inbox and records how many messages it found.
+ * --mcp       every agent gets an extra MCP server (a small test server in each container) whose key comes
+ *             from mcpSecrets. One agent calls its tool, whose answer depends on the key, and records the
+ *             answer as a claim. The check then looks for the key wherever it must not be.
+ * --lead-model, --worker-model, --effort: the plan's model, subagentModel and reasoningEffort (default low).
+ *             For Claude Code the session records then show which model answered each agent.
  * --model-url the workers use this model server instead of a subscription login. For a server on this
  *             computer use http://host.docker.internal:<port>/v1. Its key is read from LOCAL_MODEL_KEY.
  * --prebuild  the set-up runs once, in an image, instead of in every container.
@@ -35,7 +41,7 @@ import { FactoryDockerLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBrok
 const flags = {};
 for (let index = 2; index < process.argv.length; index++) {
   const name = process.argv[index];
-  if (['--turn', '--reply', '--teams', '--keep', '--quick', '--prebuild'].includes(name)) flags[name] = true;
+  if (['--turn', '--reply', '--teams', '--mcp', '--keep', '--quick', '--prebuild'].includes(name)) flags[name] = true;
   else flags[name] = process.argv[++index];
 }
 const directory = flags['--directory'], evidenceFile = flags['--evidence'];
@@ -45,7 +51,7 @@ const machines = Number(flags['--machines'] ?? 2), agentsPerMachine = Number(fla
 const image = flags['--image'] ?? DOCKER_WORKER_IMAGE;
 const modelUrl = flags['--model-url'], model = flags['--model'];
 if (modelUrl && !model) throw new Error('Name the served model with --model.');
-const realTurns = Boolean(flags['--turn'] || flags['--reply'] || flags['--teams'] || flags['--sandbox']);
+const realTurns = Boolean(flags['--turn'] || flags['--reply'] || flags['--teams'] || flags['--sandbox'] || flags['--mcp']);
 if (program === 'flujo' && realTurns && !modelUrl) throw new Error('A FLUJO turn needs a real model server; give one with --model-url.');
 const placeholder = program === 'flujo' && !modelUrl;
 const auth = modelUrl || program === 'flujo' ? undefined : program === 'claude' ? new ClaudeSubscriptionBroker({ tokenFile: flags['--claude-token'] })
@@ -66,9 +72,34 @@ const check = (name, details = {}) => { checks.push({ name, atMs: Date.now() - s
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 const journal = join(directory, 'fleet.json'), traceFile = join(directory, 'traces.jsonl');
 const stamp = existsSync(journal) ? JSON.parse(readFileSync(journal, 'utf8')).plan.runId.split('-').at(-1) : Date.now().toString(36);
+/**
+ * --mcp: a minimal MCP server (stdio, one tool) that the prepare hook writes into each container. Its one
+ * answer is derived from the key it gets through mcpSecrets, so a right answer proves the key arrived.
+ */
+const PROBE_FILE = '/data/factory-probe-mcp.mjs';
+const PROBE_SOURCE = `import { createInterface } from 'node:readline'; import { createHash } from 'node:crypto';
+const send = value => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\\n');
+createInterface({ input: process.stdin }).on('line', line => {
+  let message; try { message = JSON.parse(line); } catch { return; }
+  if (message.id === undefined) return;
+  if (message.method === 'initialize') return send({ id: message.id, result: { protocolVersion: message.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'factory-probe', version: '1.0.0' } } });
+  if (message.method === 'tools/list') return send({ id: message.id, result: { tools: [{ name: 'probe_word', description: 'Returns the probe word of this FACTORY fleet check.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }] } });
+  if (message.method === 'tools/call') return send({ id: message.id, result: { content: [{ type: 'text', text: 'probe-' + createHash('sha256').update(process.env.PROBE_SECRET ?? '').digest('hex').slice(0, 10) }] } });
+  if (message.method === 'ping') return send({ id: message.id, result: {} });
+  send({ id: message.id, error: { code: -32601, message: 'Method not found' } });
+});
+`;
+const PREPARE_SOURCE = `const fs = require('node:fs'); const spec = JSON.parse(fs.readFileSync(process.env.FACTORY_PREPARE_SPEC, 'utf8'));
+fs.writeFileSync(spec.file, spec.source, { mode: 0o644 });
+console.log(JSON.stringify({ agents: Array.from({ length: spec.agents }, (_, slot) => ({ cwd: '/data/worktrees/m' + process.env.FACTORY_MACHINE_INDEX + '-a' + slot })) }));`;
+const probeSecret = flags['--mcp'] ? `probe-key-${createHash('sha256').update(String(Math.random()) + Date.now()).digest('hex').slice(0, 24)}` : undefined;
+const probeWord = probeSecret ? 'probe-' + createHash('sha256').update(probeSecret).digest('hex').slice(0, 10) : undefined;
 const plan = { runId: `docker-smoke-${stamp}`, app: `factory-docker-${stamp}`, workerProgram: program, machines, agentsPerMachine,
-  cpus: Number(flags['--cpus'] ?? 1), memoryMb: Number(flags['--memory'] ?? 2048), supervision: 'operator', monitorIntervalMs: 4000, reasoningEffort: 'low', ...provider,
+  cpus: Number(flags['--cpus'] ?? 1), memoryMb: Number(flags['--memory'] ?? 2048), supervision: 'operator', monitorIntervalMs: 4000, reasoningEffort: flags['--effort'] ?? 'low', ...provider,
+  ...(flags['--lead-model'] ? { model: flags['--lead-model'] } : {}), ...(flags['--worker-model'] ? { subagentModel: flags['--worker-model'] } : {}),
   ...(flags['--sandbox'] ? { sandbox: flags['--sandbox'] } : {}),
+  ...(flags['--mcp'] ? { prepare: { argv: ['node', '-e', PREPARE_SOURCE], spec: { file: PROBE_FILE, source: PROBE_SOURCE, agents: agentsPerMachine } },
+    mcpServers: { probe: { command: 'node', args: [PROBE_FILE], env: { PROBE_SECRET: { secret: 'PROBE_SECRET' } }, required: true } } } : {}),
   goal: 'Acceptance check of a FACTORY fleet on local Docker. Wait for operator messages.' };
 const agents = agentInventory(plan);
 const fleet = new FactoryDockerLiteFleet({ directory, auth, nestedSandbox: Boolean(flags['--sandbox']), onEvent: event => events.push({ type: event.type, key: event.body?.key, atMs: Date.now() - started }) });
@@ -123,7 +154,8 @@ const claimJob = (agent, name) => { const resource = `task:docker-smoke-${stamp}
 
 let failure = null;
 try {
-  const deployed = await fleet.deploy(plan, { image, ...(providerKey ? { providerKey } : {}), ...(flags['--prebuild'] ? { prebuild: true } : {}) });
+  const deployed = await fleet.deploy(plan, { image, ...(providerKey ? { providerKey } : {}), ...(flags['--prebuild'] ? { prebuild: true } : {}),
+    ...(probeSecret ? { mcpSecrets: { PROBE_SECRET: probeSecret } } : {}) });
   assert.equal(deployed.machines.length, machines);
   const built = events.find(event => event.type === 'image.ready');
   check('deploy: one container per machine', { image: deployed.image, ...(built ? { imageReadyAtMs: built.atMs } : {}),
@@ -208,6 +240,43 @@ try {
     check('teams: memory in use per container after the turns', { containers: usage });
   }
 
+  if (flags['--mcp']) {
+    const resource = `task:docker-smoke-${stamp}-${probeWord}`;
+    const [result] = await claims([{ agent: turnAgent, id: `smoke-${stamp}-mcp`, matches: value => value === resource,
+      message: `Call the tool probe_word of the MCP server named probe, once; it answers with one word. Then call the FACTORY board tool factory_claim once, with resource "task:docker-smoke-${stamp}-" followed directly by that word. Then answer with the single word DONE. Do nothing else.` }]);
+    const configured = traces().filter(event => event.source === turnAgent && event.kind === 'session/configured').at(-1)?.body;
+    if (program === 'claude') assert.equal(configured?.mcpServers?.find(server => server.name === 'probe')?.status, 'connected');
+    check('mcp: an agent called the extra MCP server, whose answer proves its key arrived, and recorded that answer as a claim', { ...result, ...(configured ? { servers: configured.mcpServers } : {}) });
+    // The key may sit in the private session settings and the staged secrets, and nowhere else.
+    const containers = await inspectAll(), holders = [];
+    for (const value of containers) holders.push(...lines(await docker(['exec', value.Name.replace(/^\//, ''), '/bin/sh', '-c', `grep -rlF -- '${probeSecret}' /data --exclude-dir=factory-private 2>/dev/null; true`])));
+    const hostFiles = ['traces.jsonl', 'fleet.json', 'observation.json'].filter(name => existsSync(join(directory, name)) && readFileSync(join(directory, name), 'utf8').includes(probeSecret));
+    assert.deepEqual([...holders, ...hostFiles], [], 'the MCP key turned up outside the private settings');
+    check('mcp: the key is in no file under /data outside the private settings, nor in the fleet journal, observation or traces', { containersSearched: containers.length });
+  }
+
+  if (program === 'claude' && realTurns && (flags['--lead-model'] || flags['--worker-model'])) {
+    // The session records say which model really answered each agent.
+    const agentOf = Object.fromEntries(traces().filter(event => event.kind === 'agent.enrolled').map(event => [event.body.threadId, event.body.agentId]));
+    const answered = {};
+    for (const value of await inspectAll()) {
+      for (const line of lines(await docker(['exec', value.Name.replace(/^\//, ''), '/bin/sh', '-c', 'cat /data/claude/projects/*/*.jsonl 2>/dev/null; true']))) {
+        let record; try { record = JSON.parse(line); } catch { continue; }
+        if (record.type === 'assistant' && record.message?.model && agentOf[record.sessionId]) (answered[agentOf[record.sessionId]] ??= new Set()).add(record.message.model);
+      }
+    }
+    const models = Object.fromEntries(Object.entries(answered).map(([agent, used]) => [agent, [...used]]));
+    assert.ok(Object.keys(models).length > 0, 'no session record names a model');
+    for (const [agent, used] of Object.entries(models)) {
+      const wanted = agent.endsWith('-a0') ? flags['--lead-model'] : flags['--worker-model'];
+      if (wanted) assert.deepEqual(used, [wanted], `${agent} was answered by ${used.join(', ')}`);
+    }
+    const unrecognized = traces().filter(event => event.kind === 'claude.stderr' && /unrecognized_model/.test(String(event.body.text)));
+    assert.equal(unrecognized.length, 0, 'Claude Code reported an unrecognized model');
+    check('models: the session records show the planned model answering each agent, and Claude Code knew each model', {
+      lead: flags['--lead-model'], workers: flags['--worker-model'], effort: plan.reasoningEffort, answered: models });
+  }
+
   if (!flags['--quick']) {
     let mark = lastTrace();
     await fleet.stop();
@@ -256,10 +325,12 @@ try {
   await fleet.disconnect().catch(() => {});
   const info = JSON.parse(await docker(['version', '--format', '{{json .}}']).catch(() => '{}'));
   writeFileSync(evidenceFile, JSON.stringify({ format: 'factory-docker-fleet-acceptance', schemaVersion: 2, accepted: failure === null, failure,
-    plan: { runId: plan.runId, app: plan.app, workerProgram: program, machines, agentsPerMachine, cpus: plan.cpus, memoryMb: plan.memoryMb, supervision: plan.supervision },
+    plan: { runId: plan.runId, app: plan.app, workerProgram: program, machines, agentsPerMachine, cpus: plan.cpus, memoryMb: plan.memoryMb, supervision: plan.supervision,
+      ...(plan.model ? { model: plan.model } : {}), ...(plan.subagentModel ? { subagentModel: plan.subagentModel } : {}), reasoningEffort: plan.reasoningEffort,
+      ...(plan.mcpServers ? { mcpServers: Object.keys(plan.mcpServers) } : {}) },
     image, prebuild: Boolean(flags['--prebuild']), sandbox: flags['--sandbox'] ?? 'danger-full-access', nestedSandbox: Boolean(flags['--sandbox']), login: modelUrl ? 'model server' : placeholder ? 'placeholder' : 'subscription',
     ...(modelUrl ? { modelServer: { address: modelUrl, model, api } } : {}),
-    realModelTurns: (flags['--teams'] ? agents.length : 0) + (flags['--turn'] ? (flags['--quick'] ? 1 : 2) : 0) + (flags['--reply'] ? 1 : 0) + (flags['--sandbox'] ? 1 : 0), quick: Boolean(flags['--quick']),
+    realModelTurns: (flags['--teams'] ? agents.length : 0) + (flags['--turn'] ? (flags['--quick'] ? 1 : 2) : 0) + (flags['--reply'] ? 1 : 0) + (flags['--sandbox'] ? 1 : 0) + (flags['--mcp'] ? 1 : 0), quick: Boolean(flags['--quick']),
     host: { platform: process.platform, node: process.version, dockerServer: info.Server?.Version, dockerClient: info.Client?.Version },
     checks, providerOperations: events.filter(event => event.type === 'provider.succeeded').map(event => event.key),
     durationMs: Date.now() - started, completedAt: new Date().toISOString(),

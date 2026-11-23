@@ -1,6 +1,7 @@
 /** Bootstrap on the pinned upstream Node image when a custom registry is unavailable. */
-const CLAUDE_CODE_VERSION = '2.1.311';
-const CLAUDE_CODE_LINUX_X64_SHA256 = '86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada';
+// 2.1.311 ran Claude Fable 5.2 but reported it as an unrecognized model; 2.1.323 (stable on 2026-11-23) knows it.
+const CLAUDE_CODE_VERSION = '2.1.323';
+const CLAUDE_CODE_LINUX_X64_SHA256 = '604d29a6869409106b6a1110bdadcc8b72e8654a5a865d23258f938a696e348e';
 const FLUJO_VERSION = '3.48.3';
 const FLUJO_SHA256 = '09e954ec5b15e30748c28576b2c0bbe3d4f5cdc34afbbbc139d92759474b6b98';
 const programInstall = {

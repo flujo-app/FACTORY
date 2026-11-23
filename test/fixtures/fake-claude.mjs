@@ -3,7 +3,7 @@
 // each message: LONG waits to be interrupted, DEAF ignores the interrupt, TOOL uses a tool, CRASH
 // exits at once, REFUSED reports a refused key. QUEUE keeps later messages for after the turn, and
 // BRIEF ends such a turn by itself shortly after. DROP loses later messages.
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
@@ -23,8 +23,11 @@ if (resumed && !existsSync(transcript)) {
 }
 mkdirSync(join(process.env.CLAUDE_CONFIG_DIR, 'projects', '-fake'), { recursive: true });
 writeFileSync(transcript, '{}\n', { flag: 'a' });
-send({ type: 'system', subtype: 'init', session_id: flag('--session-id') && args.includes('--fake-other') ? randomUUID() : session, tools: [],
-  mcp_servers: args.includes('--fake-board-failed') ? [{ name: 'factory', status: 'failed' }] : [{ name: 'factory', status: 'connected' }] });
+// Every server of the MCP file connects, except the board with --fake-board-failed and those named by --fake-mcp-failed.
+const configured = flag('--mcp-config') ? Object.keys(JSON.parse(readFileSync(flag('--mcp-config'), 'utf8')).mcpServers) : ['factory'];
+const failing = [...(flag('--fake-mcp-failed') ?? '').split(',').filter(Boolean), ...(args.includes('--fake-board-failed') ? ['factory'] : [])];
+send({ type: 'system', subtype: 'init', session_id: flag('--session-id') && args.includes('--fake-other') ? randomUUID() : session, tools: [], model: flag('--model') ?? 'fake-default-model',
+  mcp_servers: configured.map(name => ({ name, status: failing.includes(name) ? 'failed' : 'connected' })) });
 emit('command_lifecycle');
 
 const queue = []; let running = null; let inputEnded = false;

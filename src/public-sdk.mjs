@@ -103,6 +103,7 @@ export { FlujoProgram, FlujoSessionDriver, flujoEnvironment } from './cloud-lite
 export { FactoryCloudLiteFleet, CodexSubscriptionBroker, ClaudeSubscriptionBroker } from './cloud-lite/fleet.mjs';
 export { FactoryDockerLiteFleet, createDockerInfrastructure, DOCKER_WORKER_IMAGE } from './cloud-lite/docker.mjs';
 export { validateCloudLitePlan, agentInventory, machineConfig as cloudLiteMachineConfig } from './cloud-lite/protocol.mjs';
+export { validateMcpServers, MCP_SERVER_LIMIT } from './cloud-lite/mcp-servers.mjs';
 export { cloudLiteBootstrap, cloudLiteImageSetup } from './cloud-lite/bootstrap.mjs';
 export { packFactorySdk } from './cloud-lite/bundle.mjs';
 export * from './workflows/index.mjs';
