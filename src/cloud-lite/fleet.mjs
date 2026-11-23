@@ -11,6 +11,7 @@ import { statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { createEvidenceClient } from '../evidence.mjs';
 import { plainHttpHosts } from '../model-provider.mjs';
+import { mcpPlainHttpHosts, validateMcpSecrets } from './mcp-servers.mjs';
 
 const TRACE_PAGE_SIZE = 100;
 const DEFAULT_OBSERVATION_PAGES = 5;
@@ -200,13 +201,13 @@ export class FactoryCloudLiteFleet {
   async prepare(input) {
     if (existsSync(this.journalPath)) this.state = JSON.parse(readFileSync(this.journalPath, 'utf8'));
     const plan = validateCloudLitePlan(input);
-    // A plain-http model address is a server on the deploying computer. Machines can use it only where the
+    // A plain-http model or MCP address is a server on the deploying computer. Machines can use it only where the
     // provider says under which name they reach that computer; Fly machines cannot reach it at all.
-    const localHosts = plan.modelProvider ? plainHttpHosts(plan.modelProvider) : [];
-    if (localHosts.length) {
+    for (const [what, localHosts] of [['a model server', plan.modelProvider ? plainHttpHosts(plan.modelProvider) : []], ['an MCP server', mcpPlainHttpHosts(plan.mcpServers)]]) {
+      if (!localHosts.length) continue;
       const reachableAs = this.infrastructure?.localModelHost;
-      if (!reachableAs) throw new TypeError('A model server on this computer (plain http) cannot be reached from Fly machines; give them an https address.');
-      if (localHosts.some(host => host !== reachableAs)) throw new TypeError(`Inside a container, localhost is the container itself; reach a model server on this computer as http://${reachableAs}:<port>.`);
+      if (!reachableAs) throw new TypeError(`${what[0].toUpperCase()}${what.slice(1)} on this computer (plain http) cannot be reached from Fly machines; give them an https address.`);
+      if (localHosts.some(host => host !== reachableAs)) throw new TypeError(`Inside a container, localhost is the container itself; reach ${what} on this computer as http://${reachableAs}:<port>.`);
     }
     if (this.state) {
       if (JSON.stringify(this.state.plan) !== JSON.stringify(plan)) throw new Error('Existing fleet binding differs.');
@@ -218,7 +219,7 @@ export class FactoryCloudLiteFleet {
     await this.stage('app.create', async () => { await this.fly(['apps', 'create', plan.app, '--org', plan.org ?? 'personal', ...(plan.network ? ['--network', plan.network] : [])]); return { app: plan.app }; });
     return this.snapshot();
   }
-  async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens, deployKey, providerKey } = {}) {
+  async deploy(input, { image, imageSource, channel, githubToken, bundlePath, evidenceTokens, deployKey, providerKey, mcpSecrets } = {}) {
     // A self-hosted model provider replaces the subscription broker; a read-only
     // SSH deploy key can replace the GitHub token for repository access.
     const providerMode = Boolean(input?.modelProvider);
@@ -226,6 +227,8 @@ export class FactoryCloudLiteFleet {
     if (providerMode && (typeof providerKey !== 'string' || providerKey.length < 8)) throw new TypeError('A model provider needs its API key.');
     if (!providerMode && this.auth.program && this.auth.program !== (input.workerProgram ?? 'codex')) throw new TypeError(`A ${this.auth.program} subscription broker cannot serve ${input.workerProgram ?? 'codex'} workers.`);
     if (deployKey !== undefined && (!input.repository || typeof deployKey !== 'string' || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(deployKey))) throw new TypeError('A deploy key must be a private SSH key for the plan repository.');
+    // Keys for the plan's MCP servers: exactly the ones it refers to, checked before anything is created.
+    mcpSecrets = validateMcpSecrets(validateCloudLitePlan(input).mcpServers, mcpSecrets);
     if (imageSource) image = (await (await this.upstream()).resolveWorkerImage({ source: imageSource, image, channel })).image;
     if (!image) throw new TypeError('Select an immutable worker image or its upstream FLUJO compatibility advertisement.');
     await this.prepare(input); const plan = this.state.plan;
@@ -253,9 +256,9 @@ export class FactoryCloudLiteFleet {
       bootstrapPath = join(this.directory, 'bootstrap.sh'); writeFileSync(bootstrapPath, cloudLiteBootstrap(bundleDigest, { workerProgram: plan.workerProgram }), { mode: 0o600 });
     }
     const { credentials, operatorToken } = JSON.parse(readFileSync(join(this.directory, 'credentials.json')));
-    const initialAuth = providerMode ? {} : this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, deployKey, providerKey, ...Object.values(credentials),...Object.values(evidenceTokens??{})];
+    const initialAuth = providerMode ? {} : this.auth.read(); this.knownSecrets = [githubToken, initialAuth.accessToken, operatorToken, deployKey, providerKey, ...Object.values(mcpSecrets), ...Object.values(credentials),...Object.values(evidenceTokens??{})];
     await this.stage('app.credentials', async () => {
-      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken, evidenceTokens, deployKey, providerKey })).toString('base64');
+      const config = Buffer.from(JSON.stringify({ plan, credentials, operatorToken, initialAuth, githubToken, evidenceTokens, deployKey, providerKey, ...(Object.keys(mcpSecrets).length ? { mcpSecrets } : {}) })).toString('base64');
       this.knownSecrets.push(config);
       await this.fly(['secrets', 'import', '--app', plan.app, '--stage'], { input: `FACTORY_CLOUD_BOOTSTRAP_B64=${config}\n` });
       return { staged: true };

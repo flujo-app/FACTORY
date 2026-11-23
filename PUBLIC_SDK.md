@@ -1,10 +1,10 @@
 # Public local Factory SDK, CLI, and MCP
 
-Version 0.10.0 is distributed as a versioned package in
-[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.10.0):
+Version 0.11.0 is distributed as a versioned package in
+[GitHub Releases](https://github.com/flujo-app/FACTORY/releases/tag/v0.11.0):
 
 ```sh
-npm install https://github.com/flujo-app/FACTORY/releases/download/v0.10.0/flujo-factory-0.10.0.tgz
+npm install https://github.com/flujo-app/FACTORY/releases/download/v0.11.0/flujo-factory-0.11.0.tgz
 ```
 
 FACTORY can serve an open-weight model on your own Modal GPUs and run workers on it.
@@ -302,7 +302,8 @@ await selfHostedFleet.deploy({ ...plan, workerProgram: 'claude', model: provider
   { image: immutableWorkerImage, bundlePath: '/absolute/private/flujo-factory.tgz', providerKey: await model.key() });
 ```
 
-- **Install:** the bootstrap installs one pinned Claude Code release, checked against
+- **Install:** the bootstrap installs one pinned Claude Code release (2.1.323, which
+  knows Claude Fable 5.2 and Claude Opus 5.5), checked against
   its SHA-256, plus `bubblewrap` and `socat` for its sandbox. A custom image must
   provide `claude` on the path, and `/bin/bash`.
 - **Sessions:** each agent slot keeps one session, with history in
@@ -331,7 +332,8 @@ await selfHostedFleet.deploy({ ...plan, workerProgram: 'claude', model: provider
   removes the file-writing tools. Both narrow modes refuse to run commands without
   the sandbox, so the worker image must allow bubblewrap. Network tools, automatic
   subagents, schedules, background tasks, skills, auto memory and repository settings
-  files are off in every mode.
+  files are off in every mode. The only MCP servers are the job board and the plan's
+  [`mcpServers`](#extra-mcp-servers-for-every-agent).
 - **Traces:** assistant text, thinking, tool calls and results become `item/completed`
   records (`agentMessage`, `reasoning`, `toolCall`, `toolResult`), token use becomes
   `thread/tokenUsage/updated`, and model retries become `model/retry`. Streaming deltas
@@ -401,6 +403,68 @@ await fleet.deploy({ runId: 'my-flujo-run', app: 'my-flujo-app', goal: ownerGoal
   and `lane` for children. Token use becomes `thread/tokenUsage/updated`, retries become
   `model/retry`, and errors become `flujo/error`. Evidence holds the conversations from
   `/data/flujo/workspaces`, not its keys, server settings or tool copies.
+
+#### Extra MCP servers for every agent
+
+Every agent has FACTORY's job board as an MCP server. `mcpServers` in the plan adds
+more, the same for every agent of the fleet, with Codex or Claude Code as the worker
+program:
+
+```js
+await fleet.deploy({ ...plan,
+  mcpServers: {
+    // Runs inside each worker container: the worker image must have the command.
+    lean: { command: 'lean-lsp-mcp', env: { LEAN_PROJECT_PATH: '/data/repository' }, required: true },
+    // Reached over the network. A key is written { secret: 'NAME' } and given to deploy.
+    docs: { url: 'https://mcp.example.com/mcp', headers: { Authorization: { secret: 'DOCS_AUTH' } } },
+  },
+}, { ...options, mcpSecrets: { DOCS_AUTH: `Bearer ${docsToken}` } });
+```
+
+- **A server in each container**: `command`, with optional `args` and `env`. It
+  runs next to the worker program, as the same user, so the worker image must
+  provide it; on Docker, put it in the base `image` you pass with `prebuild: true`.
+- **A server over the network**: `url` and optional `headers`. The address must be
+  `https`; plain `http` only for a server on the deploying computer, which a Docker
+  fleet reaches as `http://host.docker.internal:<port>` and a Fly fleet cannot reach.
+- **Keys**: a value in `env` or `headers` written `{ secret: 'NAME' }` is filled in
+  inside the container from `deploy(plan, { mcpSecrets: { NAME: '...' } })`. Every
+  key the servers refer to must be given, and no other; each has at least 8
+  characters. Keys travel like the logins, as a staged secret, and stay out of the
+  plan, the fleet journal, traces and collected evidence: the session settings that
+  hold them are in `/data/factory-private`, which evidence never collects. Give the
+  keys again when `deploy` resumes a fleet; to change one, start a new fleet.
+- **`required: true`**: an agent never works without that server. Its Codex
+  session does not start, or its Claude Code turn ends as failed, when the server
+  did not connect. Without it, the agent works on and the trace shows the server
+  as failed. The job board is always required.
+- **What connected**: each Claude Code turn records `session/configured` in the
+  trace: the model that answers and the status of every MCP server.
+- **Permissions**: Claude Code may use the servers' tools in every sandbox. Codex
+  asks for approval before an MCP tool call under `workspace-write` and
+  `read-only`, and the fleet never approves, so use them with Codex under
+  `danger-full-access`.
+- Server names use lowercase letters, digits, `-` and `_`; `factory` is the job
+  board's. Up to 16 servers. `validateMcpServers(servers)` checks a list and
+  returns the key names it refers to. FLUJO workers do not take `mcpServers` yet;
+  they use `flujo.servers`. Servers per team or per seat are on the
+  [roadmap](https://github.com/flujo-app/FACTORY/issues/46).
+
+#### Agent instructions and the job board
+
+Each agent gets FACTORY's built-in instructions, added to its system prompt, and
+the goal as its first message: a lead gets the goal as it is, the others are told
+to work on it under their lead. The built-in instructions are also where an agent
+learns how FACTORY works: use the board tools, claim an item before working on it,
+one team per item, who may message whom, read the inbox.
+
+> [!IMPORTANT]
+> `agentInstructions`, and a seat's `instructions` from a `prepare` hook,
+> **replace** the built-in instructions; they are not added to them. Copy the
+> job-board part into your own text (the built-in text is in
+> `src/cloud-lite/runtime.mjs`, where each agent's instructions are set), or the
+> agents will not know how to use the board. Keeping that part always in is on the
+> [roadmap](https://github.com/flujo-app/FACTORY/issues/46).
 
 #### Self-hosted models and operator-driven jobs
 
@@ -653,6 +717,8 @@ await fleet.deploy({
   Ollama: `OLLAMA_HOST=0.0.0.0`).
 - The model must be able to call tools for agents to use the board. A model too
   small for that still answers, which is enough to check the connection.
+- The same rules hold for an [extra MCP server](#extra-mcp-servers-for-every-agent)
+  on this computer: `url: 'http://host.docker.internal:<port>/...'`.
 
 **The stricter sandboxes need `nestedSandbox: true`.** With the plan's default
 sandbox (`danger-full-access`) an agent's commands may do anything inside its

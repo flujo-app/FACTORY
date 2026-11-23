@@ -427,3 +427,24 @@ test('containers may use a model server on this computer, but only under the nam
     assert.equal(loopback.recorded, false); assert.equal(loopback.docker.state.networks.size, 0);
   }
 });
+
+test('extra MCP servers: one on this computer is reached as host.docker.internal, and their keys travel only as staged secrets', async () => {
+  const key = `Bearer ${secret()}`;
+  const attempt = async url => {
+    const docker = fakeDocker(), directory = fresh();
+    const outcome = await new FactoryDockerLiteFleet({ directory, dockerExecute: docker.execute, auth: auth() })
+      .deploy(plan({ machines: 1, workerProgram: 'claude', mcpServers: { tools: { url, headers: { Authorization: { secret: 'TOOLS_AUTH' } } } } }),
+        { bundlePath: bundle(directory), mcpSecrets: { TOOLS_AUTH: key } }).then(() => null, error => error);
+    return { outcome, docker, directory };
+  };
+  const reachable = await attempt('http://host.docker.internal:8931/mcp');
+  assert.equal(reachable.outcome, null);
+  const container = reachable.docker.state.containers[0];
+  const config = JSON.parse(Buffer.from(container.files.get('run/factory/secrets/FACTORY_CLOUD_BOOTSTRAP_B64').bytes.toString(), 'base64').toString());
+  assert.deepEqual(config.mcpSecrets, { TOOLS_AUTH: key });
+  assert.equal(JSON.stringify(container.Config).includes(key) || JSON.stringify(container.HostConfig).includes(key), false, 'not visible to docker inspect');
+  assert.equal(readFileSync(join(reachable.directory, 'fleet.json'), 'utf8').includes(key), false);
+  const loopback = await attempt('http://localhost:8931/mcp');
+  assert.match(loopback.outcome.message, /localhost is the container itself; reach an MCP server on this computer as http:\/\/host\.docker\.internal:<port>/);
+  assert.equal(existsSync(join(loopback.directory, 'fleet.json')), false); assert.equal(loopback.docker.state.networks.size, 0);
+});

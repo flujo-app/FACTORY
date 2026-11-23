@@ -1,0 +1,401 @@
+{
+  "format": "factory-docker-fleet-acceptance",
+  "schemaVersion": 2,
+  "accepted": true,
+  "command": "node scripts/docker-fleet-smoke.mjs --directory <folder> --evidence <file> --prebuild --image node:24.22.1-bookworm-slim --machines 1 --agents 2 --cpus 2 --memory 4096 (--program claude --claude-token <file> --lead-model claude-fable-5-2 --worker-model claude-opus-5-5 --effort xhigh --teams --mcp | --program codex --mcp --quick)",
+  "scope": "Real Docker containers, volumes, networks and images on one host (Docker Desktop 29.6.1 on Windows 10, 8 CPUs and 19.5 GB for Docker), the real worker programs on subscription logins, and the real shared board. No Fly resource.",
+  "sources": "Run 1 used the code of main at 9d362fe153607bbfd95254e1726fc17adbfd0fbf (Claude Code 2.1.311) and a one-off check script, not docker-fleet-smoke. Run 2 used the code of commit c59cd6d7df949b40a9a7461a38835cd5c2c63392. Run 3 used the code of commit b64feea8f3e990c422a6760d1062322081fdab86 (Claude Code 2.1.323).",
+  "notes": [
+    "A first run of run 3 on commit c59cd6d passed every step up to the key search, which then failed because of a flaw in the check itself: the option that skips /data/factory-private came after --, so grep read it as a file name. The only files it found were the two private MCP files of the two agents, where the key belongs. The check was fixed (the skip option before --, and for Claude Code the key must also be found in the private files) and run 3 repeated on b64feea; the left-over fleet of the failed check was retired.",
+    "In run 2 that same flaw made the search cover all of /data, /data/factory-private included. It found the key nowhere: Codex receives the MCP settings over its app-server connection and wrote them to no file.",
+    "The probe MCP server is a minimal stdio server written into each container by the plan's prepare hook. Its one tool answers with a word derived from the key it gets through mcpSecrets; the agent records that word as a claim, so a right claim proves the key reached the server."
+  ],
+  "notAsserted": [
+    "An MCP server reached over the network (url, headers): covered by unit tests, not by a real run.",
+    "Extra MCP servers on a Fly fleet.",
+    "Codex with an MCP server under the workspace-write or read-only sandbox (refused by design: Codex asks for an approval the fleet never gives).",
+    "More than one machine with extra MCP servers.",
+    "Whether Claude Code 2.1.311 applied the xhigh effort to the unrecognized Claude Fable 5.2 model."
+  ],
+  "runs": [
+    {
+      "name": "claude-code-2.1.311-models",
+      "about": "The pinned Claude Code 2.1.311 with a Claude Fable 5.2 lead and a Claude Opus 5.5 worker, both on xhigh, one team of two. Both turns completed and the session records show the planned model answering each agent, but Claude Code reported the Fable model as unrecognized. This led to pinning 2.1.323.",
+      "sourceCommit": "9d362fe153607bbfd95254e1726fc17adbfd0fbf",
+      "accepted": true,
+      "failure": null,
+      "plan": {
+        "workerProgram": "claude",
+        "machines": 1,
+        "agentsPerMachine": 2,
+        "model": "claude-fable-5-2",
+        "subagentModel": "claude-opus-5-5",
+        "reasoningEffort": "xhigh",
+        "supervision": "operator"
+      },
+      "finding": "[claude-code:unrecognized_model] {\"model\":\"claude-fable-5-2\",\"query_source\":\"sdk\"} on the lead's stderr",
+      "checks": [
+        {
+          "name": "deploy",
+          "atMs": 207190,
+          "image": "factory-worker:claude-09fc2c5c3afc1846"
+        },
+        {
+          "name": "both agents enrolled",
+          "atMs": 210494,
+          "threads": {
+            "m0-a0": "3c1febbf-5640-4fa1-955a-21c25e969310",
+            "m0-a1": "bbe65134-f785-4919-8881-3b1efa371ddf"
+          }
+        },
+        {
+          "name": "worker program",
+          "atMs": 210494,
+          "claude": "2.1.311 (Claude Code)"
+        },
+        {
+          "name": "worker (Opus 5.5) turn",
+          "atMs": 216881,
+          "turn": {
+            "id": "8717e839-979e-49c3-8261-5bd84ab6dafc",
+            "status": "completed"
+          },
+          "claimed": true,
+          "retries": [],
+          "stderr": []
+        },
+        {
+          "name": "lead (Fable 5.2) turn",
+          "atMs": 223247,
+          "turn": {
+            "id": "b51de3f3-06eb-4423-aa57-f51e6cda2d79",
+            "status": "completed"
+          },
+          "claim": "task:model-test-mwtgmqfk-lead-inbox-1",
+          "retries": [],
+          "stderr": [
+            "[claude-code:unrecognized_model] {\"model\":\"claude-fable-5-2\",\"query_source\":\"sdk\"}\n"
+          ]
+        },
+        {
+          "name": "models answering each session (from transcripts)",
+          "atMs": 223348,
+          "transcriptModels": {
+            "m0-a0": [
+              "claude-fable-5-2"
+            ],
+            "m0-a1": [
+              "claude-opus-5-5"
+            ]
+          }
+        },
+        {
+          "name": "claude command lines seen during the turns",
+          "atMs": 223348,
+          "args": [
+            "claude -p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --strict-mcp-config --setting-sources user --disable-slash-commands --permission-prompts none --tools Bash,Edit,Write,Read,NotebookEdit,Glob,Grep --dangerously-skip-permissions --allowedTools mcp__factory__* --mcp-config /data/factory/bbe65134-f785-4919-8881-3b1efa371ddf.claude-mcp.json --model claude-opus-5-5 --effort xhigh --append-system-prompt <instructions> --session-id bbe65134-f785-4919-8881-3b1efa371ddf",
+            "claude -p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --strict-mcp-config --setting-sources user --disable-slash-commands --permission-prompts none --tools Bash,Edit,Write,Read,NotebookEdit,Glob,Grep --dangerously-skip-permissions --allowedTools mcp__factory__* --mcp-config /data/factory/3c1febbf-5640-4fa1-955a-21c25e969310.claude-mcp.json --model claude-fable-5-2 --effort xhigh --append-system-prompt <instructions> --session-id 3c1febbf-5640-4fa1-955a-21c25e969310"
+          ]
+        },
+        {
+          "name": "retired",
+          "atMs": 224313
+        }
+      ],
+      "durationMs": 224313,
+      "completedAt": "2026-11-23T16:12:02.824Z"
+    },
+    {
+      "name": "codex-mcp",
+      "about": "Codex 0.162.1, one team of two, with the probe MCP server and its key from mcpSecrets.",
+      "sourceCommit": "c59cd6d7df949b40a9a7461a38835cd5c2c63392",
+      "accepted": true,
+      "failure": null,
+      "plan": {
+        "runId": "docker-smoke-mwthase8",
+        "app": "factory-docker-mwthase8",
+        "workerProgram": "codex",
+        "machines": 1,
+        "agentsPerMachine": 2,
+        "cpus": 2,
+        "memoryMb": 4096,
+        "supervision": "operator",
+        "reasoningEffort": "low",
+        "mcpServers": [
+          "probe"
+        ]
+      },
+      "image": "node:24.22.1-bookworm-slim",
+      "prebuild": true,
+      "sandbox": "danger-full-access",
+      "nestedSandbox": false,
+      "login": "subscription",
+      "realModelTurns": 1,
+      "quick": true,
+      "host": {
+        "platform": "win32",
+        "node": "v24.22.1",
+        "dockerServer": "29.6.1",
+        "dockerClient": "29.6.1"
+      },
+      "providerOperations": [
+        "app.create",
+        "app.credentials",
+        "m0.volume",
+        "m0.machine-create",
+        "app.retire"
+      ],
+      "durationMs": 298462,
+      "completedAt": "2026-11-23T16:31:59.261Z",
+      "scope": "Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only for the turns counted in realModelTurns; otherwise agents enrol and wait.",
+      "checks": [
+        {
+          "name": "deploy: one container per machine",
+          "atMs": 278443,
+          "image": "factory-worker:codex-53f4894816042024",
+          "imageReadyAtMs": 277346
+        },
+        {
+          "name": "network: only the board of the first machine is published, on loopback only",
+          "atMs": 278555,
+          "published": [
+            {
+              "name": "/factory-docker-smoke-mwthase8-m0",
+              "port": "4200/tcp",
+              "host": "127.0.0.1"
+            }
+          ]
+        },
+        {
+          "name": "secrets: none in container settings",
+          "atMs": 278556,
+          "checkedSecrets": 5
+        },
+        {
+          "name": "board: every agent on every machine enrolled through the shared board",
+          "atMs": 281883,
+          "agents": 2,
+          "machinesReady": [
+            {
+              "machine": "m0",
+              "node": "v24.22.1",
+              "codex": "codex-cli 0.162.1"
+            }
+          ]
+        },
+        {
+          "name": "mcp: an agent called the extra MCP server, whose answer proves its key arrived, and recorded that answer as a claim",
+          "atMs": 297007,
+          "agent": "m0-a1",
+          "turn": "completed",
+          "resource": "task:docker-smoke-mwthase8-probe-5db12b535e",
+          "machine": "m0"
+        },
+        {
+          "name": "mcp: the key is in no file under /data outside the private settings, nor in the fleet journal, observation or traces",
+          "atMs": 297240,
+          "containersSearched": 1
+        },
+        {
+          "name": "retire: containers, volumes, network and staged secrets are gone",
+          "atMs": 298371
+        }
+      ]
+    },
+    {
+      "name": "claude-mcp-models",
+      "about": "Claude Code 2.1.323, one team of two: a Claude Fable 5.2 lead and a Claude Opus 5.5 worker on xhigh, with the probe MCP server and its key from mcpSecrets, then stop, start, runtime update, collection and retirement.",
+      "sourceCommit": "b64feea8f3e990c422a6760d1062322081fdab86",
+      "accepted": true,
+      "failure": null,
+      "plan": {
+        "runId": "docker-smoke-mwthjlcp",
+        "app": "factory-docker-mwthjlcp",
+        "workerProgram": "claude",
+        "machines": 1,
+        "agentsPerMachine": 2,
+        "cpus": 2,
+        "memoryMb": 4096,
+        "supervision": "operator",
+        "model": "claude-fable-5-2",
+        "subagentModel": "claude-opus-5-5",
+        "reasoningEffort": "xhigh",
+        "mcpServers": [
+          "probe"
+        ]
+      },
+      "image": "node:24.22.1-bookworm-slim",
+      "prebuild": true,
+      "sandbox": "danger-full-access",
+      "nestedSandbox": false,
+      "login": "subscription",
+      "realModelTurns": 3,
+      "quick": false,
+      "host": {
+        "platform": "win32",
+        "node": "v24.22.1",
+        "dockerServer": "29.6.1",
+        "dockerClient": "29.6.1"
+      },
+      "providerOperations": [
+        "app.create",
+        "app.credentials",
+        "m0.volume",
+        "m0.machine-create",
+        "2fde885df5ca74.stop",
+        "2fde885df5ca74.start.smoke-mwthjlcp",
+        "2fde885df5ca74.runtime.dd4f428fdaf07aea3b6366b97f1add9092fbe6fd4a5a04433236871cd68a29a2",
+        "app.retire"
+      ],
+      "durationMs": 302742,
+      "completedAt": "2026-11-23T16:38:54.318Z",
+      "scope": "Real local Docker containers, volumes and network, the real worker program and the real shared board. No Fly resource. A model is called only for the turns counted in realModelTurns; otherwise agents enrol and wait.",
+      "checks": [
+        {
+          "name": "deploy: one container per machine",
+          "atMs": 264186,
+          "image": "factory-worker:claude-2919d7aa418cd260",
+          "imageReadyAtMs": 263089
+        },
+        {
+          "name": "network: only the board of the first machine is published, on loopback only",
+          "atMs": 264314,
+          "published": [
+            {
+              "name": "/factory-docker-smoke-mwthjlcp-m0",
+              "port": "4200/tcp",
+              "host": "127.0.0.1"
+            }
+          ]
+        },
+        {
+          "name": "secrets: none in container settings",
+          "atMs": 264315,
+          "checkedSecrets": 5
+        },
+        {
+          "name": "board: every agent on every machine enrolled through the shared board",
+          "atMs": 267638,
+          "agents": 2,
+          "machinesReady": [
+            {
+              "machine": "m0",
+              "node": "v24.22.1",
+              "claude": "2.1.323 (Claude Code)"
+            }
+          ]
+        },
+        {
+          "name": "teams: every worker took a real turn, recorded its own claim and messaged its lead",
+          "atMs": 273693,
+          "workers": 1,
+          "waves": [
+            {
+              "machines": [
+                "m0"
+              ],
+              "agents": 1,
+              "seconds": 6
+            }
+          ]
+        },
+        {
+          "name": "teams: every lead read its inbox and found one message from each of its workers",
+          "atMs": 282766,
+          "leads": 1,
+          "messagesFound": {
+            "m0-a0": "1"
+          },
+          "claims": 2
+        },
+        {
+          "name": "teams: memory in use per container after the turns",
+          "atMs": 283827,
+          "containers": [
+            "factory-docker-smoke-mwthjlcp-m0 39.91MiB / 4GiB 0.07%"
+          ]
+        },
+        {
+          "name": "mcp: an agent called the extra MCP server, whose answer proves its key arrived, and recorded that answer as a claim",
+          "atMs": 289924,
+          "agent": "m0-a1",
+          "turn": "completed",
+          "resource": "task:docker-smoke-mwthjlcp-probe-014912dc8e",
+          "machine": "m0",
+          "servers": [
+            {
+              "name": "probe",
+              "required": true,
+              "status": "connected"
+            },
+            {
+              "name": "factory",
+              "required": true,
+              "status": "connected"
+            }
+          ]
+        },
+        {
+          "name": "mcp: the key is in no file under /data outside the private settings, nor in the fleet journal, observation or traces",
+          "atMs": 290262,
+          "containersSearched": 1,
+          "privateFilesWithKey": 2
+        },
+        {
+          "name": "models: the session records show the planned model answering each agent, and Claude Code knew each model",
+          "atMs": 290501,
+          "lead": "claude-fable-5-2",
+          "workers": "claude-opus-5-5",
+          "effort": "xhigh",
+          "answered": {
+            "m0-a0": [
+              "claude-fable-5-2"
+            ],
+            "m0-a1": [
+              "claude-opus-5-5"
+            ]
+          }
+        },
+        {
+          "name": "stop: every container stopped",
+          "atMs": 291151,
+          "exitCodes": [
+            0
+          ]
+        },
+        {
+          "name": "start: the same containers came back and every agent found its earlier session",
+          "atMs": 295220,
+          "sessions": {
+            "m0-a0": "resumed",
+            "m0-a1": "resumed"
+          }
+        },
+        {
+          "name": "runtime update: new containers on the same volumes, every agent found its earlier session",
+          "atMs": 299857,
+          "digest": "dd4f428fdaf07aea3b6366b97f1add9092fbe6fd4a5a04433236871cd68a29a2",
+          "sessions": {
+            "m0-a0": "resumed",
+            "m0-a1": "resumed"
+          }
+        },
+        {
+          "name": "collect: one verified archive per machine",
+          "atMs": 301541,
+          "artifacts": [
+            {
+              "machineId": "2fde885df5ca74",
+              "bytes": 71295,
+              "sha256": "dfffb0d2007258f6c62deb1cbabcf1ef14ccd0bc2274df95737e6c3ea2cf982a"
+            }
+          ]
+        },
+        {
+          "name": "retire: containers, volumes, network and staged secrets are gone",
+          "atMs": 302651
+        }
+      ]
+    }
+  ]
+}

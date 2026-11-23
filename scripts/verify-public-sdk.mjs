@@ -25,6 +25,7 @@ for (const name of [
   'cloudLiteImageSetup',
   'CodexSubscriptionBroker',
   'validateCloudLitePlan',
+  'validateMcpServers',
   'cloudLiteMachineConfig',
   'FactoryWorkflow',
   'FactoryArtifactStore',

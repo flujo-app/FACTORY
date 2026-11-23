@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { validateModelProvider, requireFleetApi, WORKER_PROGRAM_APIS } from '../model-provider.mjs';
+import { validateMcpServers } from './mcp-servers.mjs';
 
 export { validateModelProvider };
 
@@ -48,6 +49,10 @@ export function validateCloudLitePlan(input) {
   if (plan.workflow && (plan.supervision === 'operator' || plan.boardTools === false)) throw new TypeError('Verified workflows need automatic wakes and the board tools.');
   if (plan.monitorIntervalMs !== undefined && (!Number.isSafeInteger(plan.monitorIntervalMs) || plan.monitorIntervalMs < 1000)) throw new TypeError('monitorIntervalMs must be at least 1000.');
   if (plan.agentInstructions !== undefined && (typeof plan.agentInstructions !== 'string' || !plan.agentInstructions.trim())) throw new TypeError('agentInstructions must be non-empty text.');
+  if (plan.mcpServers !== undefined) {
+    if (plan.workerProgram === 'flujo') throw new TypeError('mcpServers is not available for FLUJO workers yet; they use flujo.servers.');
+    validateMcpServers(plan.mcpServers);
+  }
   if (plan.prepare !== undefined) {
     const prepare = plan.prepare;
     if (!prepare || typeof prepare !== 'object' || !Array.isArray(prepare.argv) || !prepare.argv.length || prepare.argv.some(arg => typeof arg !== 'string' || !arg))
