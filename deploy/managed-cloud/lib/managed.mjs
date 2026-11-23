@@ -177,7 +177,7 @@ export class ManagedCloud {
   async preflight(input) {
     const { options, source, resolved, selected } = await this.prepare(input);
     return { source: source.source, workspace: options.workspace, flows: selected, org: options.org,
-      region: options.region, image: resolved, readyToDeploy: true };
+      region: options.region, cpuKind: options.cpuKind, image: resolved, readyToDeploy: true };
   }
 
   paths(id) {
@@ -259,7 +259,7 @@ export class ManagedCloud {
       const attemptId = randomUUID();
       const token = randomBytes(32).toString('base64url');
       let metadata = { format: 'flujo-managed-deployment', version: 1, id: options.app, attemptId, phase: 'preparing',
-        source: source.source, workspace: options.workspace, org: options.org, region: options.region,
+        source: source.source, workspace: options.workspace, org: options.org, region: options.region, cpuKind: options.cpuKind,
         image: resolved.image, createdAt: new Date().toISOString() };
       await this.writeJson(files.metadata, metadata, { exclusive: true });
       await this.writeJson(files.credentials, { format: 'flujo-worker-credential', version: 1, id: options.app, attemptId, token }, { exclusive: true });
@@ -283,7 +283,7 @@ export class ManagedCloud {
       if (result.state !== 'ready' || !await this.bindJournal(files, metadata, 'ready')) {
         throw new Error('Worker provisioning outcome is incomplete. Keep the attempt files and reconcile its journal.');
       }
-      return { ...result, worker: options.app, flows: selected, region: options.region, org: options.org,
+      return { ...result, worker: options.app, flows: selected, region: options.region, org: options.org, cpuKind: options.cpuKind,
         image: resolved.mode === 'official' ? { version: resolved.applicationVersion, revision: resolved.revision } : { mode: 'explicit' } };
     }, { create: true });
   }
@@ -333,6 +333,7 @@ export class ManagedCloud {
       try { journal = (await this.deployment(id, { allowUnboundJournal: true })).journal; }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       results.push({ worker: id, workspace: metadata.workspace, org: metadata.org, region: metadata.region,
+        ...(metadata.cpuKind === undefined ? {} : { cpuKind: metadata.cpuKind }),
         state: metadata.phase === 'destroyed' ? 'destroyed' : journal?.state || metadata.phase,
         phase: metadata.phase, machineId: journal?.machineId || null, stateSource: journal ? 'local-journal' : 'local-attempt' });
     }

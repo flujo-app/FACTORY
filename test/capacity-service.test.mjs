@@ -80,11 +80,12 @@ async function fixture(t) {
   return { p,profile,worker,source,run,hashes };
 }
 
-test('vendored ManagedCloud files match the pinned clean builtin-only source and import without provider operations',async t => {
+test('vendored ManagedCloud files match the pinned source with documented local modifications and import without provider operations',async t => {
   const bytes = await fs.readFile(path.join(VENDOR,'provenance.json'));
-  assert.equal(sha(bytes),'c2c4db31be0ceb7d2f53fcb2920553bbd41d6012e26f8e330b5a90b06ed88490');
+  assert.equal(sha(bytes),'6bdf27ec48a67c88ac329793d84da59bf664e3bbcca7cbd5001396c3152cb163');
   const record = JSON.parse(bytes);
   assert.equal(record.sourceCommit,'c36ceef69d6563b4839b605a377b3757ee8e4958'); assert.equal(record.sourceClean,true);
+  assert.equal(record.localModifications.length,3);
   assert.equal(record.files.length,12);
   for (const file of record.files) {
     assert.ok(/^(package\.json|lib\/[a-z-]+\.mjs)$/.test(file.path));

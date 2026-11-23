@@ -5,6 +5,7 @@ export function safeReceipt(input={}) {
   const output={};
   for(const key of ['worker','app']) if(typeof input[key]==='string' && /^[a-z][a-z0-9-]{2,62}$/.test(input[key]))output[key]=input[key];
   for(const key of ['workspace','org']) if(typeof input[key]==='string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(input[key]))output[key]=input[key];
+  if(['performance','shared'].includes(input.cpuKind))output.cpuKind=input.cpuKind;
   if(typeof input.region==='string' && /^[a-z]{3}$/.test(input.region))output.region=input.region;
   if(typeof input.machineId==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(input.machineId))output.machineId=input.machineId;
   for(const key of ['head','previousHead','sha256','outputSha256']) if(typeof input[key]==='string' && new RegExp('^[a-f0-9]{'+(key.endsWith('Sha256')||key==='sha256'?64:40)+'}$').test(input[key]))output[key]=input[key];

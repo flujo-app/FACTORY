@@ -21,6 +21,30 @@ function object(value, label) {
   return value;
 }
 
+// What Fly accepts as memory (MB) for a worker's two CPUs: 2048 to 8192 per performance CPU
+// in steps of 2048, up to 2048 per shared CPU in steps of 256. A worker needs at least 1024.
+const WORKER_MEMORY = {
+  performance: { min: 4096, max: 16384, step: 2048 },
+  shared: { min: 1024, max: 4096, step: 256 },
+};
+
+function provisioningInput(input, label) {
+  const value = object(input, label);
+  const cpuKind = value.cpuKind === undefined ? 'performance' : value.cpuKind;
+  if (!['performance', 'shared'].includes(cpuKind)) throw inputError('cpuKind must be performance or shared.');
+  // Refused here, with the reason: a refusal by the service itself reaches the caller without one.
+  if (value.memoryMb !== undefined && value.memoryMb !== null) {
+    const memory = WORKER_MEMORY[cpuKind];
+    const size = Number(value.memoryMb);
+    if (!Number.isSafeInteger(size) || size < memory.min || size > memory.max || size % memory.step) {
+      const other = cpuKind === 'performance' ? 'shared' : 'performance';
+      throw inputError(`memoryMb must be ${memory.min} to ${memory.max} in steps of ${memory.step} with cpuKind ${cpuKind}; `
+        + `cpuKind ${other} takes ${WORKER_MEMORY[other].min} to ${WORKER_MEMORY[other].max}.`);
+    }
+  }
+  return { ...value, cpuKind };
+}
+
 function workerId(value) {
   if (typeof value !== 'string' || !/^[a-z][a-z0-9-]{2,62}$/.test(value)) {
     throw inputError('Provide a valid managed worker ID.');
@@ -95,7 +119,7 @@ function imageReceipt(image) {
 function deploymentReceipt(value) {
   object(value, 'Managed result');
   const receipt = selected(value, [
-    'app', 'worker', 'workspace', 'org', 'region', 'machineId', 'state', 'phase', 'localOnly', 'stateSource',
+    'app', 'worker', 'workspace', 'org', 'region', 'cpuKind', 'machineId', 'state', 'phase', 'localOnly', 'stateSource',
   ]);
   if (value.source !== undefined) receipt.source = origin(value.source);
   if (value.flows !== undefined) receipt.flows = flowReceipt(value.flows);
@@ -179,7 +203,7 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
       });
     },
     async preflight(input) {
-      const value = object(input, 'Preflight input');
+      const value = provisioningInput(input, 'Preflight input');
       const admitted = binding ? binding.input(value) : value;
       if (binding) {
         try { await binding.discover({ source: admitted.source }); }
@@ -188,7 +212,7 @@ export async function createManagedCloudAdapter({ modulePath, options = {}, serv
       return invoke('preflight', 'preflight', [admitted], deploymentReceipt);
     },
     async provision(input) {
-      const value = object(input, 'Provision input');
+      const value = provisioningInput(input, 'Provision input');
       const admitted = binding ? binding.input(value) : value;
       if (binding) {
         try { await binding.discover({ source: admitted.source }); }
