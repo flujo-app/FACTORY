@@ -135,8 +135,11 @@ export async function runCloudLiteMachine(config) {
     return {sealed:true,stop:async()=>coordinator?.close()};
   }
   const boardMachine = process.env.FACTORY_BOARD_MACHINE_ID;
-  const boardUrl = index === 0 ? `http://127.0.0.1:${boardPort}` : boardMachine
-    ? `http://${boardMachine}.vm.${plan.app}.internal:${boardPort}` : `https://${plan.app}.fly.dev`;
+  // A provider without a private network (Sprites) gives worker machines the board's public https address instead.
+  const boardOrigin = process.env.FACTORY_BOARD_ORIGIN;
+  if (boardOrigin !== undefined && !/^https:\/\/[^/?#]+$/.test(boardOrigin)) throw new Error('FACTORY_BOARD_ORIGIN must be an https origin.');
+  const boardUrl = index === 0 ? `http://127.0.0.1:${boardPort}` : boardOrigin ?? (boardMachine
+    ? `http://${boardMachine}.vm.${plan.app}.internal:${boardPort}` : `https://${plan.app}.fly.dev`);
   const machine = `m${index}`; const rootId = `${machine}-a0`; const rootToken = credentials[rootId];
   const request = async (route, body, token = rootToken) => {
     // These control reads/checkpoints and stable-id commands are replay safe.
