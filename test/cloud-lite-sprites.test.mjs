@@ -188,6 +188,8 @@ test('stop and start act on the same Sprites through their service', async () =>
   const status = () => [...sprites.state.sprites.values()].map(sprite => sprite.services.get('factory').state.status);
   await fleet.stop();
   assert.deepEqual(status(), ['stopped', 'stopped']);
+  // A real Sprite recorded a worker that ended on the stop signal as failed (exit 143): that still counts as stopped.
+  for (const sprite of sprites.state.sprites.values()) Object.assign(sprite.services.get('factory').state, { status: 'failed', error: 'exited with code 143' });
   await fleet.start({ attempt: 'after-stop' });
   assert.deepEqual(status(), ['running', 'running']);
   assert.deepEqual([...sprites.state.sprites.keys()], [`${APP}-m0`, `${APP}-m1`]);
@@ -296,7 +298,8 @@ test('the start script is valid bash, keeps the Sprite awake only while the work
   assert.match(SPRITE_START_SCRIPT, /--unix-socket \/\.sprite\/api\.sock/);
   // The keeper renews the task only while the start script itself is alive, and the task is released when the worker ends.
   assert.match(SPRITE_START_SCRIPT, /while kill -0 \$\$ 2>\/dev\/null; do task PUT '\{"expire":"5m"\}'; sleep 60; done/);
-  assert.match(SPRITE_START_SCRIPT, /\ntask DELETE\nexit "\$code"\n$/);
+  // A requested stop ends cleanly (a Sprite would record the signal exit as a crash); otherwise the worker's own exit code is passed on.
+  assert.match(SPRITE_START_SCRIPT, /\ntask DELETE\n#[^\n]*\n\[ -n "\$\{stopping:-\}" \] && exit 0\nexit "\$code"\n$/);
   assert.deepEqual(readExecOutput(Buffer.concat([Buffer.from([1]), Buffer.from('hello\n'), Buffer.from([2]), Buffer.from('warn\n'), Buffer.from([3, 7])])), { exit: 7, text: 'hello\nwarn\n' });
   assert.deepEqual(readExecOutput(Buffer.from([1, 0x6f, 0x6b])), { exit: null, text: 'ok' });
 });

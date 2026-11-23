@@ -27,6 +27,8 @@ const INLINE_LIMIT = 4 * 1024 * 1024;
 const SCRIPT_IN_ADDRESS = 2048;
 const STOP_SECONDS = 30;
 const STATES = { running: 'started', starting: 'starting', stopping: 'stopping', stopped: 'stopped', failed: 'failed' };
+// A service that ended on a stop signal (128 + SIGTERM or SIGINT) was stopped, not crashed.
+const STOPPED_BY_SIGNAL = /exit(?:ed)?(?: with)? (?:code|status) (?:143|130)\b/;
 const VALUE_FLAGS = new Set(['--app', '--org', '--network', '--region', '--size', '--machine-config', '--file-local', '--timeout', '--machine']);
 
 const checked = (value, pattern, what) => { if (typeof value !== 'string' || !pattern.test(value)) throw new TypeError(`Invalid ${what}.`); return value; };
@@ -46,11 +48,13 @@ task() { curl -s -o /dev/null --max-time 10 --unix-socket /.sprite/api.sock -X "
 keeper=$!
 "$@" &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null' TERM INT
+trap 'stopping=1; kill -TERM "$child" 2>/dev/null' TERM INT
 wait "$child"; code=$?
 while kill -0 "$child" 2>/dev/null; do wait "$child"; code=$?; done
 kill "$keeper" 2>/dev/null
 task DELETE
+# A stop that was asked for is a clean end: the Sprite would otherwise record the worker's signal exit as a crash.
+[ -n "\${stopping:-}" ] && exit 0
 exit "$code"
 `;
 
@@ -191,7 +195,11 @@ export function createSpritesInfrastructure({ directory, token, tokenFile, api =
     await call('PUT', `/sprites/${name}/services/${SERVICE}?duration=0`, { json: { cmd: '/usr/bin/sudo', args: ['-n', '/bin/bash', START, ...words], needs: [], dir: '/', http_port: port }, timeoutMs: 120000 });
   }
   async function serviceState(name) {
-    try { const body = await json('GET', `/sprites/${name}/services/${SERVICE}`); return STATES[body?.state?.status] ?? (body?.state ? 'unknown' : 'created'); }
+    try {
+      const body = await json('GET', `/sprites/${name}/services/${SERVICE}`);
+      if (body?.state?.status === 'failed' && STOPPED_BY_SIGNAL.test(body.state.error ?? '')) return 'stopped';
+      return STATES[body?.state?.status] ?? (body?.state ? 'unknown' : 'created');
+    }
     catch (error) { if (error.status === 404) return 'created'; throw error; }
   }
   async function machines(app) {
